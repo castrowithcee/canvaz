@@ -58,7 +58,7 @@ afterAll(async () => {
 })
 
 beforeEach(async () => {
-  await pool.query('truncate users cascade')
+  await pool.query('truncate users, workspaces cascade')
   provider.resetBehaviour()
   app.clearLogs()
   app.setNow(null)

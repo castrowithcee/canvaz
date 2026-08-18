@@ -74,9 +74,86 @@ einen Systemadmin ergeben. Es gibt keine fest codierten Zugangsdaten.
 | POST | `/api/admin/users/status` | angemeldet + Systemadmin + CSRF-Token |
 | GET (Upgrade) | `/api/realtime` | angemeldet; WebSocket-Einstieg fuer die spaetere Realtime-Strecke |
 
+Die Endpunkte der Arbeitsbereiche stehen im Abschnitt [Arbeitsbereiche und Rollen](#arbeitsbereiche-und-rollen).
+
 Logout und Deaktivierung widerrufen Sitzungen serverseitig und schliessen offene WebSocket-Verbindungen
 sofort; ein Upgrade danach wird abgelehnt. Auch der Ablauf der Sitzung schliesst eine offene Verbindung.
 Ein Upgrade mit fremdem `Origin` wird abgewiesen, weil der CSRF-Header beim Handshake nicht greift.
+
+## Arbeitsbereiche und Rollen
+
+Ein **Arbeitsbereich** ist die aeussere Datengrenze der Instanz: jeder fachliche Datensatz traegt seinen
+Workspacebezug, und ein Nutzer sieht ausschliesslich Arbeitsbereiche, denen er angehoert.
+
+Bestaetigte Rollen sind `owner`, `admin` und `member`. Boardrollen und Gastrollen sind eine eigene Ebene und
+folgen in einem spaeteren Paket.
+
+### Eine Stelle entscheidet
+
+`src/domain/workspace/policy.ts` ist die einzige Stelle, die ueber eine Workspaceberechtigung entscheidet -
+eine reine Funktion ohne IO, standardmaessig verweigernd. In den Routen steht kein Rollenvergleich, sondern
+nur der Aufruf und die Uebersetzung der Ablehnung. Was die Oberflaeche ausblendet, ist Bequemlichkeit und
+keine Grenze.
+
+| Aktion | owner | admin | member | Nichtmitglied | Systemadmin ohne Mitgliedschaft | deaktiviert |
+| --- | --- | --- | --- | --- | --- | --- |
+| lesen (Stammdaten, Mitglieder) | ja | ja | ja | nein | ja | nein |
+| umbenennen | ja | ja | nein | nein | ja | nein |
+| archivieren, entarchivieren | ja | nein | nein | nein | ja | nein |
+| Mitglied als `member`/`admin` aufnehmen | ja | ja | nein | nein | ja | nein |
+| Mitglied als `owner` aufnehmen | ja | nein | nein | nein | ja | nein |
+| Rolle aendern oder Mitglied entfernen, sofern kein `owner` beteiligt ist | ja | ja | nein | nein | ja | nein |
+| Rolle aendern oder Mitglied entfernen, wenn ein `owner` beteiligt ist | ja | nein | nein | nein | ja | nein |
+
+In einem **archivierten** Arbeitsbereich ist nur noch das Entarchivieren moeglich; alles andere bleibt
+lesbar und wird abgelehnt. Ein **deaktivierter** Nutzer verliert jeden Zugriff, unabhaengig von jeder
+Mitgliedschaft - die Sitzung selbst wird bereits von `authenticate()` verweigert, und die Policy lehnt
+zusaetzlich ab.
+
+Ein **Systemadmin ist nicht automatisch Mitglied**. Er verwaltet jeden Arbeitsbereich, damit keiner
+unadministrierbar wird, aber seine eigene Liste bleibt leer, und der spaetere Inhaltszugriff auf Boards
+haengt an der Mitgliedschaft, nicht an dieser Stufe.
+
+### Invarianten
+
+- Der Ersteller wird Owner; Arbeitsbereich und Ownermitgliedschaft entstehen in einer Transaktion.
+- Ein Arbeitsbereich hat immer mindestens einen Owner. Der letzte Owner kann weder entfernt noch
+  herabgestuft werden.
+- Jede Aenderung sperrt zuerst die Workspacezeile (`select ... for update`). Dadurch sind gleichzeitige
+  Mitgliedschaftsaenderungen serialisiert, und die Ownerzaehlung entscheidet nie auf einem veralteten Stand.
+
+### Endpunkte
+
+Alle verlangen eine Sitzung; alle zustandsaendernden zusaetzlich das CSRF-Token im Header `x-canvaz-csrf`.
+
+| Methode | Pfad | Berechtigung | Antwort ohne Berechtigung |
+| --- | --- | --- | --- |
+| GET | `/api/workspaces` | eigene Mitgliedschaften | 401 ohne Sitzung |
+| POST | `/api/workspaces` | jeder aktive Nutzer | 401 ohne Sitzung |
+| POST | `/api/workspaces/rename` | `workspace:rename` | 404 unsichtbar, sonst 403 |
+| POST | `/api/workspaces/status` | `workspace:archive` / `workspace:unarchive` | 404 unsichtbar, sonst 403 |
+| GET | `/api/workspaces/members?workspaceId=` | `workspace:read` | 404 |
+| GET | `/api/workspaces/members/candidates?workspaceId=` | `member:add` | 404 unsichtbar, sonst 403 |
+| POST | `/api/workspaces/members/add` | `member:add` | 404 unsichtbar, sonst 403 |
+| POST | `/api/workspaces/members/role` | `member:change-role` | 404 unsichtbar, sonst 403 |
+| POST | `/api/workspaces/members/remove` | `member:remove` | 404 unsichtbar, sonst 403 |
+
+**404 statt 403, wo die Existenz sonst durchscheinen wuerde.** Wer einen Arbeitsbereich nicht sehen darf,
+bekommt dieselbe Antwort wie fuer eine frei erfundene Kennung; erst wer ihn sehen darf, bekommt mit 403 eine
+ehrliche Auskunft ueber die fehlende Berechtigung. Der letzte Owner und eine bereits bestehende
+Mitgliedschaft ergeben 409.
+
+Mitglieder werden aus den vorhandenen internen Nutzern ausgewaehlt. Es gibt keine Einladung per E-Mail und
+keine externen Konten.
+
+### Nachweis
+
+Jede Erstellung, Umbenennung, Archivierung sowie jede Rollen- und Mitgliedschaftsaenderung schreibt ein
+Ereignis nach `audit_events` - Akteur, Aktion, Zieltyp und -kennung, Workspacebezug, Zeitpunkt und
+strukturierte Metadaten. Aenderung und Nachweis entstehen in derselben Transaktion. Tokenmaterial und
+Boardinhalte stehen dort nie. Eine Leseansicht gibt es bewusst noch nicht; die Ereignisse sind ueber
+`WorkspaceStore.audit` und SQL abfragbar.
+
 
 ## Identity Provider einrichten (Beispiel Authentik)
 

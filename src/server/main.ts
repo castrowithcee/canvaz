@@ -9,6 +9,7 @@ import { createServer } from 'node:http'
 
 import { createIdentityStore } from '../persistence/identity-store.js'
 import { createPool } from '../persistence/pool.js'
+import { createWorkspaceStore } from '../persistence/workspace-store.js'
 import { createRoutes } from './app.js'
 import { ConfigError, loadConfig } from './config.js'
 import type { AppContext } from './context.js'
@@ -32,11 +33,19 @@ function loadConfigOrExit(): ReturnType<typeof loadConfig> {
 const config = loadConfigOrExit()
 const pool = createPool(config.databaseUrl)
 const identity = createIdentityStore(pool)
-const realtime = createRealtimeGateway({ config, identity, logger: consoleLogger, now: () => new Date() })
+const workspaces = createWorkspaceStore(pool)
+const realtime = createRealtimeGateway({
+  config,
+  identity,
+  workspaces,
+  logger: consoleLogger,
+  now: () => new Date(),
+})
 const context: AppContext = {
   config,
   pool,
   identity,
+  workspaces,
   oidc: createOidcClient(config),
   realtime,
   logger: consoleLogger,

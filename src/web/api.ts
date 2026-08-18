@@ -6,13 +6,38 @@
  * ausschliesslich im HttpOnly-Cookie und wird nie in `localStorage` oder `sessionStorage` abgelegt.
  */
 
-import type { AdminUsersResponse, LogoutResponse, MeResponse, SetUserStatusRequest, UserView } from '../contracts/api.js'
+import type {
+  AddWorkspaceMemberRequest,
+  AdminUsersResponse,
+  ChangeWorkspaceMemberRoleRequest,
+  LogoutResponse,
+  MeResponse,
+  RemoveWorkspaceMemberRequest,
+  RenameWorkspaceRequest,
+  SetUserStatusRequest,
+  SetWorkspaceStatusRequest,
+  UserView,
+  WorkspaceCandidatesResponse,
+  WorkspaceMemberChangeResponse,
+  WorkspaceMembersResponse,
+  WorkspaceView,
+  WorkspacesResponse,
+} from '../contracts/api.js'
 import {
   ADMIN_USER_STATUS_PATH,
   ADMIN_USERS_PATH,
   AUTH_LOGOUT_PATH,
   CSRF_HEADER,
   ME_PATH,
+  WORKSPACE_ID_PARAM,
+  WORKSPACE_MEMBER_ADD_PATH,
+  WORKSPACE_MEMBER_CANDIDATES_PATH,
+  WORKSPACE_MEMBER_REMOVE_PATH,
+  WORKSPACE_MEMBER_ROLE_PATH,
+  WORKSPACE_MEMBERS_PATH,
+  WORKSPACE_RENAME_PATH,
+  WORKSPACE_STATUS_PATH,
+  WORKSPACES_PATH,
 } from '../contracts/api.js'
 
 export class ApiError extends Error {
@@ -68,4 +93,53 @@ export async function fetchAdminUsers(): Promise<AdminUsersResponse> {
 
 export async function setUserStatus(csrfToken: string, change: SetUserStatusRequest): Promise<UserView> {
   return request<UserView>(ADMIN_USER_STATUS_PATH, mutation(csrfToken, change))
+}
+
+function withWorkspace(path: string, workspaceId: string): string {
+  return `${path}?${new URLSearchParams({ [WORKSPACE_ID_PARAM]: workspaceId }).toString()}`
+}
+
+export async function fetchWorkspaces(): Promise<WorkspacesResponse> {
+  return request<WorkspacesResponse>(WORKSPACES_PATH)
+}
+
+export async function createWorkspace(csrfToken: string, name: string): Promise<WorkspaceView> {
+  return request<WorkspaceView>(WORKSPACES_PATH, mutation(csrfToken, { name }))
+}
+
+export async function renameWorkspace(csrfToken: string, change: RenameWorkspaceRequest): Promise<WorkspaceView> {
+  return request<WorkspaceView>(WORKSPACE_RENAME_PATH, mutation(csrfToken, change))
+}
+
+export async function setWorkspaceStatus(
+  csrfToken: string,
+  change: SetWorkspaceStatusRequest,
+): Promise<WorkspaceView> {
+  return request<WorkspaceView>(WORKSPACE_STATUS_PATH, mutation(csrfToken, change))
+}
+
+export async function fetchWorkspaceMembers(workspaceId: string): Promise<WorkspaceMembersResponse> {
+  return request<WorkspaceMembersResponse>(withWorkspace(WORKSPACE_MEMBERS_PATH, workspaceId))
+}
+
+export async function fetchMemberCandidates(workspaceId: string): Promise<WorkspaceCandidatesResponse> {
+  return request<WorkspaceCandidatesResponse>(withWorkspace(WORKSPACE_MEMBER_CANDIDATES_PATH, workspaceId))
+}
+
+export async function addWorkspaceMember(csrfToken: string, change: AddWorkspaceMemberRequest): Promise<void> {
+  await request<unknown>(WORKSPACE_MEMBER_ADD_PATH, mutation(csrfToken, change))
+}
+
+export async function changeWorkspaceMemberRole(
+  csrfToken: string,
+  change: ChangeWorkspaceMemberRoleRequest,
+): Promise<WorkspaceMemberChangeResponse> {
+  return request<WorkspaceMemberChangeResponse>(WORKSPACE_MEMBER_ROLE_PATH, mutation(csrfToken, change))
+}
+
+export async function removeWorkspaceMember(
+  csrfToken: string,
+  change: RemoveWorkspaceMemberRequest,
+): Promise<WorkspaceMemberChangeResponse> {
+  return request<WorkspaceMemberChangeResponse>(WORKSPACE_MEMBER_REMOVE_PATH, mutation(csrfToken, change))
 }

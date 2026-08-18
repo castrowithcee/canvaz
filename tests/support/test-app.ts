@@ -13,7 +13,9 @@ import type { AddressInfo } from 'node:net'
 import type { Pool } from 'pg'
 
 import type { IdentityStore } from '../../src/domain/identity/repositories.js'
+import type { WorkspaceStore } from '../../src/domain/workspace/repositories.js'
 import { createIdentityStore } from '../../src/persistence/identity-store.js'
+import { createWorkspaceStore } from '../../src/persistence/workspace-store.js'
 import { createRoutes } from '../../src/server/app.js'
 import { loadConfig } from '../../src/server/config.js'
 import type { AppContext } from '../../src/server/context.js'
@@ -21,7 +23,7 @@ import { createRequestListener } from '../../src/server/http.js'
 import type { LogFields, LogLevel } from '../../src/server/log.js'
 import { createOidcClient } from '../../src/server/oidc.js'
 import { createRealtimeGateway } from '../../src/server/realtime.js'
-import type { RealtimeGateway } from '../../src/server/realtime.js'
+import type { RealtimeGateway, RealtimeOptions } from '../../src/server/realtime.js'
 import type { TestProvider } from './oidc-provider.js'
 
 export type LogEntry = { readonly level: LogLevel; readonly event: string; readonly fields: LogFields }
@@ -30,6 +32,7 @@ export type TestApp = {
   readonly baseUrl: string
   readonly context: AppContext
   readonly store: IdentityStore
+  readonly workspaces: WorkspaceStore
   readonly realtime: RealtimeGateway
   readonly logs: readonly LogEntry[]
   clearLogs(): void
@@ -45,6 +48,8 @@ export async function startTestApp(options: {
   readonly pool: Pool
   readonly databaseUrl: string
   readonly sessionTtlHours?: number
+  /** Haken der spaeteren Realtime-Strecke; der Test nutzt ihn, um den Andockpunkt zu pruefen. */
+  readonly onConnection?: RealtimeOptions['onConnection']
 }): Promise<TestApp> {
   const server: Server = createServer()
   await new Promise<void>((resolve) => {
@@ -74,12 +79,22 @@ export async function startTestApp(options: {
   const now = () => frozenNow ?? new Date()
 
   const store = createIdentityStore(options.pool)
+  const workspaces = createWorkspaceStore(options.pool)
   // Kurzer Abstand der Ablaufpruefung: der Test soll auf das Schliessen nicht eine Minute warten.
-  const realtime = createRealtimeGateway({ config, identity: store, logger, now, expiryCheckIntervalMs: 25 })
+  const realtime = createRealtimeGateway({
+    config,
+    identity: store,
+    workspaces,
+    logger,
+    now,
+    expiryCheckIntervalMs: 25,
+    ...(options.onConnection === undefined ? {} : { onConnection: options.onConnection }),
+  })
   const context: AppContext = {
     config,
     pool: options.pool,
     identity: store,
+    workspaces,
     oidc: createOidcClient(config),
     realtime,
     logger,
@@ -92,6 +107,7 @@ export async function startTestApp(options: {
     baseUrl,
     context,
     store,
+    workspaces,
     realtime,
     logs,
     clearLogs(): void {

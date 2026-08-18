@@ -12,6 +12,7 @@ import { createAuthRoutes } from './auth-routes.js'
 import type { AppContext } from './context.js'
 import type { Route } from './http.js'
 import { sendJson } from './http.js'
+import { createWorkspaceRoutes } from './workspace-routes.js'
 
 export type { AppContext }
 
@@ -29,5 +30,6 @@ export function createRoutes(context: AppContext): readonly Route[] {
     },
     ...createAuthRoutes(context),
     ...createAdminRoutes(context),
+    ...createWorkspaceRoutes(context),
   ]
 }

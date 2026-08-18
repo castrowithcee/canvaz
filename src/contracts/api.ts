@@ -14,6 +14,18 @@ export const ADMIN_USERS_PATH = `${API_BASE_PATH}/admin/users`
 export const ADMIN_USER_STATUS_PATH = `${API_BASE_PATH}/admin/users/status`
 export const REALTIME_PATH = `${API_BASE_PATH}/realtime`
 
+export const WORKSPACES_PATH = `${API_BASE_PATH}/workspaces`
+export const WORKSPACE_RENAME_PATH = `${API_BASE_PATH}/workspaces/rename`
+export const WORKSPACE_STATUS_PATH = `${API_BASE_PATH}/workspaces/status`
+export const WORKSPACE_MEMBERS_PATH = `${API_BASE_PATH}/workspaces/members`
+export const WORKSPACE_MEMBER_ADD_PATH = `${API_BASE_PATH}/workspaces/members/add`
+export const WORKSPACE_MEMBER_ROLE_PATH = `${API_BASE_PATH}/workspaces/members/role`
+export const WORKSPACE_MEMBER_REMOVE_PATH = `${API_BASE_PATH}/workspaces/members/remove`
+export const WORKSPACE_MEMBER_CANDIDATES_PATH = `${API_BASE_PATH}/workspaces/members/candidates`
+
+/** Kennung des Workspace als Query-Parameter der lesenden Workspaceendpunkte. */
+export const WORKSPACE_ID_PARAM = 'workspaceId'
+
 /**
  * Header des CSRF-Tokens. Ein Angreifer von einer fremden Herkunft kann ihn nicht setzen, ohne dass der
  * Browser vorher einen Preflight gegen diese Instanz stellt.
@@ -82,4 +94,80 @@ export type SetUserStatusRequest = {
 export type LogoutResponse = {
   /** Abmeldung beim Provider, falls der Issuer sie anbietet. Sonst `null`. */
   readonly endSessionUrl: string | null
+}
+
+export type WorkspaceStatusView = 'active' | 'archived'
+export type WorkspaceRoleView = 'owner' | 'admin' | 'member'
+
+export type WorkspaceView = {
+  readonly id: string
+  readonly name: string
+  readonly status: WorkspaceStatusView
+  /** Eigene Rolle. `null` heisst: sichtbar aus Systemadministration, aber keine Mitgliedschaft. */
+  readonly role: WorkspaceRoleView | null
+  /** ISO-8601. */
+  readonly createdAt: string
+  readonly updatedAt: string
+}
+
+export type WorkspaceMemberView = {
+  readonly userId: string
+  readonly displayName: string
+  readonly email: string | null
+  readonly role: WorkspaceRoleView
+  /** ISO-8601, Beitritt. */
+  readonly joinedAt: string
+}
+
+/** Minimalprofil fuer die Mitgliederauswahl: nur, was die Auswahl braucht. */
+export type DirectoryUserView = {
+  readonly id: string
+  readonly displayName: string
+  readonly email: string | null
+}
+
+export type WorkspacesResponse = {
+  readonly workspaces: readonly WorkspaceView[]
+}
+
+export type WorkspaceMembersResponse = {
+  readonly workspace: WorkspaceView
+  readonly members: readonly WorkspaceMemberView[]
+}
+
+export type WorkspaceCandidatesResponse = {
+  readonly users: readonly DirectoryUserView[]
+}
+
+export type CreateWorkspaceRequest = {
+  readonly name: string
+}
+
+export type RenameWorkspaceRequest = {
+  readonly workspaceId: string
+  readonly name: string
+}
+
+export type SetWorkspaceStatusRequest = {
+  readonly workspaceId: string
+  readonly status: WorkspaceStatusView
+}
+
+export type AddWorkspaceMemberRequest = {
+  readonly workspaceId: string
+  readonly userId: string
+  readonly role: WorkspaceRoleView
+}
+
+export type ChangeWorkspaceMemberRoleRequest = AddWorkspaceMemberRequest
+
+export type RemoveWorkspaceMemberRequest = {
+  readonly workspaceId: string
+  readonly userId: string
+}
+
+/** Antwort auf eine Rollenaenderung oder ein Entfernen. `role === null` heisst: nicht mehr Mitglied. */
+export type WorkspaceMemberChangeResponse = {
+  readonly userId: string
+  readonly role: WorkspaceRoleView | null
 }

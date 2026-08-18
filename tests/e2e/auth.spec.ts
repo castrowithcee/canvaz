@@ -19,7 +19,7 @@ test.afterAll(async () => {
 })
 
 test.beforeEach(async () => {
-  await pool.query('truncate users cascade')
+  await pool.query('truncate users, workspaces cascade')
   await fetch(`${E2E_PROVIDER_URL}/__control`, { method: 'POST', body: '{}' })
 })
 
