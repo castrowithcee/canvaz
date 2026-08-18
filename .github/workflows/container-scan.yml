@@ -1,0 +1,49 @@
+name: Container Scan
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - compose*.yml
+      - docker/**
+  push:
+    branches:
+      - main
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - compose*.yml
+      - docker/**
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  scan:
+    name: container-scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Explain skipped scan
+        if: ${{ hashFiles('Dockerfile') == '' }}
+        run: echo 'No Dockerfile yet; container scan becomes active with the first image definition.'
+
+      - name: Build image for scanning
+        if: ${{ hashFiles('Dockerfile') != '' }}
+        run: docker build --pull --tag canvaz:ci .
+
+      - name: Scan image
+        uses: docker/scout-action@bacf462e8d090c09660de30a6ccc718035f961e3 # v1.24.0
+        if: ${{ hashFiles('Dockerfile') != '' }}
+        with:
+          command: cves
+          image: local://canvaz:ci
+          only-severities: critical,high
+          exit-code: 'true'

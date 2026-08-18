@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test -f Dockerfile
+
+      - name: Verify tag is based on main
+        run: |
+          git fetch origin main --no-tags
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+      - name: Log in to GitHub Container Registry
+        env:
+          CR_PAT: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$CR_PAT" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build image
+        env:
+          IMAGE_NAME: ghcr.io/${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          IMAGE_NAME="${IMAGE_NAME,,}"
+          docker build --pull \
+            --tag "$IMAGE_NAME:$RELEASE_TAG" \
+            --tag "$IMAGE_NAME:$GITHUB_SHA" \
+            .
+
+      - name: Scan image
+        uses: docker/scout-action@bacf462e8d090c09660de30a6ccc718035f961e3 # v1.24.0
+        with:
+          command: cves
+          image: local://ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          only-severities: critical,high
+          exit-code: 'true'
+
+      - name: Push image
+        env:
+          IMAGE_NAME: ghcr.io/${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          IMAGE_NAME="${IMAGE_NAME,,}"
+          docker push "$IMAGE_NAME:$RELEASE_TAG"
+          docker push "$IMAGE_NAME:$GITHUB_SHA"
