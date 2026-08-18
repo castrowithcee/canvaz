@@ -74,7 +74,8 @@ einen Systemadmin ergeben. Es gibt keine fest codierten Zugangsdaten.
 | POST | `/api/admin/users/status` | angemeldet + Systemadmin + CSRF-Token |
 | GET (Upgrade) | `/api/realtime` | angemeldet; WebSocket-Einstieg fuer die spaetere Realtime-Strecke |
 
-Die Endpunkte der Arbeitsbereiche stehen im Abschnitt [Arbeitsbereiche und Rollen](#arbeitsbereiche-und-rollen).
+Die Endpunkte der Arbeitsbereiche stehen im Abschnitt [Arbeitsbereiche und Rollen](#arbeitsbereiche-und-rollen),
+die der Boards im Abschnitt [Boards und Szenen](#boards-und-szenen).
 
 Logout und Deaktivierung widerrufen Sitzungen serverseitig und schliessen offene WebSocket-Verbindungen
 sofort; ein Upgrade danach wird abgelehnt. Auch der Ablauf der Sitzung schliesst eine offene Verbindung.
@@ -172,6 +173,127 @@ strukturierte Metadaten. Aenderung und Nachweis entstehen in derselben Transakti
 Boardinhalte stehen dort nie. Eine Leseansicht gibt es bewusst noch nicht; die Ereignisse sind ueber
 `WorkspaceStore.audit` und SQL abfragbar.
 
+
+## Boards und Szenen
+
+Ein **Board** ist eine Zeichenflaeche innerhalb genau eines Arbeitsbereichs und hat genau einen fachlichen
+Owner. Jede Szenenversion und jeder Assetdatensatz traegt seinen Boardbezug; der Assetdatensatz zusaetzlich
+den Workspacebezug.
+
+### Wer darf was
+
+`src/domain/board/policy.ts` entscheidet jede Boardaktion - eine reine Funktion ohne IO, standardmaessig
+verweigernd. Sie baut auf der Workspace-Policy auf, statt sie umzubauen: `decideWorkspaceAccess(...,
+{ kind: 'workspace:read' })` ist die Vorbedingung jeder Boardaktion. `src/domain/workspace/policy.ts` kennt
+weiterhin keine Boards.
+
+In diesem Paket entscheidet die **Workspace-Mitgliedschaft**: `owner`, `admin` und `member` duerfen im
+aktiven Arbeitsbereich jedes Board lesen, anlegen, umbenennen, archivieren und seine Szene speichern. Die
+feingranularen Boardrollen (`owner`, `editor`, `viewer`) und Gastlinks setzen spaeter genau hier an, nicht in
+der Workspace-Policy.
+
+Ein **Systemadmin ohne Mitgliedschaft** hat keinen Inhaltszugriff. Er verwaltet Arbeitsbereiche, damit keiner
+unadministrierbar wird; ein Board sieht fuer ihn aus wie eine erfundene Kennung. Ein **deaktivierter** Nutzer
+verliert jeden Zugriff bereits in `authenticate()`.
+
+**Archiviert heisst lesbar, aber unveraenderlich** - auf beiden Ebenen. In einem archivierten Arbeitsbereich
+laesst sich kein Board mehr anlegen, umbenennen, archivieren oder speichern. Bei einem archivierten Board
+bleibt nur das Entarchivieren.
+
+### Endpunkte
+
+Alle verlangen eine Sitzung; alle zustandsaendernden zusaetzlich das CSRF-Token im Header `x-canvaz-csrf`.
+Die Antwort entsteht in der Transaktion und wird erst nach dem Commit gesendet.
+
+| Methode | Pfad | Berechtigung | Ohne Berechtigung | Konflikt |
+| --- | --- | --- | --- | --- |
+| GET | `/api/boards?workspaceId=&status=&q=` | Mitglied im Arbeitsbereich | 404 | — |
+| POST | `/api/boards` | `board:create` | 404 unsichtbar, sonst 403 | — |
+| POST | `/api/boards/rename` | `board:rename` | 404 unsichtbar, sonst 403 | — |
+| POST | `/api/boards/status` | `board:archive` / `board:unarchive` | 404 unsichtbar, sonst 403 | — |
+| GET | `/api/boards/scene?boardId=` | `board:read` | 404 | — |
+| POST | `/api/boards/scene` | `scene:write` | 404 unsichtbar, sonst 403 | 409 |
+
+`status` trennt die aktive Liste von der Archivansicht (Standard `active`), `q` filtert nach einem Teilstring
+im Titel - ohne Platzhalterdeutung, damit `%` und `_` keine Wirkung haben.
+
+**404 statt 403, wo die Existenz sonst durchscheinen wuerde**, genau wie bei den Arbeitsbereichen.
+
+### Optimistische Versionspruefung
+
+Jede Speicherung nennt in `baseVersion` die Version, auf der sie aufsetzt. Stimmt sie nicht mehr mit
+`boards.current_scene_version` ueberein, antwortet der Server mit **409** und der aktuellen Version; es wird
+**nichts** ueberschrieben. Die Pruefung laeuft in einer Transaktion, die die Boardzeile sperrt
+(`select ... for no key update`), und der zusammengesetzte Primaerschluessel `(board_id, version)` ist die
+zweite Absicherung. Zwei gleichzeitige Speicherungen auf derselben Ausgangsversion ergeben deshalb genau eine
+neue Version und genau eine 409.
+
+Die Oberflaeche speichert verzoegert nach der letzten Aenderung und auf Knopfdruck. Nach einem Konflikt hoert
+sie auf, automatisch zu speichern: mit der neuen Ausgangsversion weiterzumachen waere genau das stille
+Ueberschreiben, das die Pruefung verhindern soll. Die Zeichnung bleibt im Browser, und der Mensch entscheidet.
+Mehrbenutzerbetrieb in Echtzeit kommt in einem eigenen Paket; zwei offene Browser sehen sich hier noch nicht,
+koennen sich aber auch nicht gegenseitig ueberschreiben.
+
+### Versionierung und Serialisierung
+
+**Jede angenommene Speicherung legt eine neue Zeile in `scene_versions` an.** Das ist keine Zutat, sondern die
+Pruefung selbst: der Primaerschluessel `(board_id, version)` macht zwei Schreibvorgaenge auf derselben
+Ausgangsversion unmoeglich. Verdichtet wird bewusst nicht, damit die Daten fuer die spaetere Versionshistorie
+sauber entstehen. Damit die Historie nicht unbegrenzt waechst, bleiben die juengsten **100** Versionen je
+Board erhalten (`SCENE_VERSION_RETENTION`); aeltere fallen bei der naechsten Speicherung heraus.
+
+Serialisiert wird der Vertrag aus `src/contracts/scene.ts`: Elemente, die persistierte Teilmenge des AppState
+und die Referenzen auf Bilddateien. Unbekannte Elementfelder werden unveraendert durchgereicht, damit ein
+Upstream-Sprung keine Daten verliert; Tombstones (`isDeleted`) bleiben erhalten, weil eine Loeschung selbst
+Information ist. Kamera und Auswahl sind clientlokal und werden bewusst nicht gespeichert. Damit bleibt alles
+erhalten, was ein `.excalidraw`-Export braucht.
+
+Ein **beschaedigter Datensatz wird als Fehler gemeldet und nie als leeres Board geoeffnet** - sonst wuerde die
+naechste Speicherung die Zeichnung endgueltig ueberschreiben. Ein Board ohne jede Speicherung hat Version `0`
+und liefert den leeren Ausgangsstand; das ist sein tatsaechlicher Inhalt und kein Ersatz fuer einen Fehler.
+
+Die Groesse eines Snapshots ist mit `CANVAZ_MAX_SCENE_BYTES` begrenzt (Standard 5 MiB). Die Grenze gilt schon
+fuer den Anfragekoerper, sodass ein zu grosser Koerper nie vollstaendig im Speicher landet. PostgreSQL kann in
+`jsonb` kein NUL-Zeichen speichern; eine Szene mit einem solchen Zeichen wird mit 400 abgelehnt, statt beim
+Schreiben zu scheitern.
+
+### Editor und Content-Security-Policy
+
+Excalidraw ist exakt auf `0.18.1` gepinnt und erscheint ausschliesslich in
+`src/web/board/excalidraw-adapter.ts` - Komponente wie Typen. Server, Protokoll und Persistenz kennen nur den
+eigenen strukturellen Elementvertrag.
+
+**Die Content-Security-Policy wurde dafuer nicht gelockert.** Damit das gilt, liegen die Schriften des Editors
+im eigenen Build: `vite.config.ts` kopiert sie nach `dist/web/excalidraw-assets/fonts`, und
+`src/web/board/excalidraw-assets.ts` setzt `window.EXCALIDRAW_ASSET_PATH` darauf. Excalidraw haengt an jede
+Schriftquelle zusaetzlich einen fest verdrahteten CDN-Rueckfall an; er steht hinter der eigenen Quelle, wird
+nie benutzt und wird von der Policy blockiert. Der Browsertest belegt beides: keine Anfrage erreicht eine
+fremde Herkunft, und die Schriften kommen nachweislich aus dem eigenen Build.
+
+Der Editor wird erst beim Oeffnen eines Boards nachgeladen. Das haelt den Einstieg klein (rund 215 kB, 67 kB
+gzip) und stellt sicher, dass der eigene Assetpfad vor dem Schriftregister von Excalidraw steht.
+
+### Assets
+
+Die Tabelle `board_assets` und der Port `BoardAssetRepository` stehen bereits - damit Board- und
+Workspacebezug von Anfang an Teil des Vertrags sind. Storage-Port, Upload und Abruf der Bytes liefert ein
+eigenes Paket; eine PostgreSQL-Umsetzung des Ports gibt es deshalb bewusst noch nicht.
+
+### Bekannte Grenzen
+
+- `boards.owner_user_id` traegt `on delete restrict`: ein Board ohne Owner waere ein Datensatz ohne
+  Verantwortlichen, deshalb verweigert die Datenbank das direkte Loeschen eines Nutzers, dem noch Boards
+  gehoeren. Ueber die Anwendung gibt es kein Loeschen, nur Deaktivierung.
+- `boards.workspace_id` und `scene_versions.board_id` tragen `on delete cascade`: ein direktes Loeschen in
+  der Datenbank nimmt Boards und ihre Szenen mit. Ueber die Anwendung gibt es nur Archivierung.
+- Ein Board wird beim Archivieren des Arbeitsbereichs nicht selbst archiviert; es wird durch den Zustand des
+  Arbeitsbereichs unveraenderlich. Das haelt die Rueckkehr aus dem Archiv verlustfrei.
+
+### Nachweis
+
+Anlage, Umbenennung, Archivierung und Entarchivierung eines Boards schreiben ein Ereignis nach
+`audit_events` (`targetType: 'board'`). Einzelne Speicherungen tun das nicht: sie sind Inhalt, nicht
+Verwaltung, und `audit_events` enthaelt nie Boardinhalte. Die Historie der Inhalte steht in `scene_versions`.
 
 ## Identity Provider einrichten (Beispiel Authentik)
 

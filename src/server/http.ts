@@ -70,29 +70,59 @@ export function sendRedirect(response: ServerResponse, location: string): void {
 
 const MAX_JSON_BODY_BYTES = 16_384
 
-/** Liest einen begrenzten JSON-Koerper. `null` bedeutet: zu gross, kein JSON oder kein Objekt. */
-export async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown> | null> {
+/**
+ * Ergebnis des Koerperlesens. Zu gross und ungueltig sind getrennt, weil sie verschiedene Antworten
+ * verdienen: 413 nennt eine ueberschreitbare Grenze, 400 einen kaputten Koerper.
+ */
+export type JsonBody =
+  | { readonly ok: true; readonly body: Record<string, unknown> }
+  | { readonly ok: false; readonly reason: 'too-large' | 'invalid' }
+
+/**
+ * Liest einen JSON-Koerper mit harter Obergrenze. Ein zu grosser Koerper landet nie vollstaendig im
+ * Speicher: ab der Grenze wird nichts mehr aufgehoben.
+ */
+export async function readJsonBodyLimited(request: IncomingMessage, maxBytes: number): Promise<JsonBody> {
+  // Angekuendigte Groesse zuerst: ein zu grosser Koerper wird gar nicht erst gelesen.
+  const declared = Number(request.headers['content-length'])
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    return { ok: false, reason: 'too-large' }
+  }
   const chunks: Buffer[] = []
   let size = 0
+  let tooLarge = false
   for await (const chunk of request) {
     const buffer = chunk as Buffer
     size += buffer.length
-    if (size > MAX_JSON_BODY_BYTES) {
-      return null
+    if (size > maxBytes) {
+      // Ab hier wird nichts mehr aufgehoben, aber weiter gelesen: der Verbindungsabbruch mitten in der
+      // Anfrage wuerde dem Client statt der 413 einen Netzwerkfehler liefern. Der Speicher bleibt begrenzt.
+      tooLarge = true
+      chunks.length = 0
+      continue
     }
     chunks.push(buffer)
   }
+  if (tooLarge) {
+    return { ok: false, reason: 'too-large' }
+  }
   if (size === 0) {
-    return {}
+    return { ok: true, body: {} }
   }
   try {
     const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
     return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null
+      ? { ok: true, body: parsed as Record<string, unknown> }
+      : { ok: false, reason: 'invalid' }
   } catch {
-    return null
+    return { ok: false, reason: 'invalid' }
   }
+}
+
+/** Liest einen kleinen JSON-Koerper. `null` bedeutet: zu gross, kein JSON oder kein Objekt. */
+export async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown> | null> {
+  const result = await readJsonBodyLimited(request, MAX_JSON_BODY_BYTES)
+  return result.ok ? result.body : null
 }
 
 const CONTENT_TYPES: Readonly<Record<string, string>> = {

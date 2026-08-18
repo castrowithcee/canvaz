@@ -9,6 +9,11 @@
 import type {
   AddWorkspaceMemberRequest,
   AdminUsersResponse,
+  BoardSceneResponse,
+  BoardStatusView,
+  BoardView,
+  BoardsResponse,
+  SaveSceneResponse,
   ChangeWorkspaceMemberRoleRequest,
   LogoutResponse,
   MeResponse,
@@ -27,6 +32,13 @@ import {
   ADMIN_USER_STATUS_PATH,
   ADMIN_USERS_PATH,
   AUTH_LOGOUT_PATH,
+  BOARD_ID_PARAM,
+  BOARD_QUERY_PARAM,
+  BOARD_RENAME_PATH,
+  BOARD_SCENE_PATH,
+  BOARD_STATUS_PARAM,
+  BOARD_STATUS_PATH,
+  BOARDS_PATH,
   CSRF_HEADER,
   ME_PATH,
   WORKSPACE_ID_PARAM,
@@ -40,6 +52,8 @@ import {
   WORKSPACE_STATUS_PATH,
   WORKSPACES_PATH,
 } from '../contracts/api.js'
+
+import type { SceneSnapshot } from '../contracts/scene.js'
 
 export class ApiError extends Error {
   readonly status: number
@@ -151,4 +165,55 @@ export async function removeWorkspaceMember(
   change: RemoveWorkspaceMemberRequest,
 ): Promise<WorkspaceMemberChangeResponse> {
   return request<WorkspaceMemberChangeResponse>(WORKSPACE_MEMBER_REMOVE_PATH, mutation(csrfToken, change))
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+/* Boards und Szenen                                                                                     */
+/* ---------------------------------------------------------------------------------------------------- */
+
+/** Boards eines Arbeitsbereichs. `status` trennt die aktive Liste von der Archivansicht. */
+export async function fetchBoards(
+  workspaceId: string,
+  options: { readonly status: BoardStatusView; readonly query: string },
+): Promise<BoardsResponse> {
+  const params = new URLSearchParams({
+    [WORKSPACE_ID_PARAM]: workspaceId,
+    [BOARD_STATUS_PARAM]: options.status,
+  })
+  if (options.query !== '') {
+    params.set(BOARD_QUERY_PARAM, options.query)
+  }
+  return request<BoardsResponse>(`${BOARDS_PATH}?${params.toString()}`)
+}
+
+export async function createBoard(csrfToken: string, workspaceId: string, title: string): Promise<BoardView> {
+  return request<BoardView>(BOARDS_PATH, mutation(csrfToken, { workspaceId, title }))
+}
+
+export async function renameBoard(csrfToken: string, boardId: string, title: string): Promise<BoardView> {
+  return request<BoardView>(BOARD_RENAME_PATH, mutation(csrfToken, { boardId, title }))
+}
+
+export async function setBoardStatus(
+  csrfToken: string,
+  boardId: string,
+  status: BoardStatusView,
+): Promise<BoardView> {
+  return request<BoardView>(BOARD_STATUS_PATH, mutation(csrfToken, { boardId, status }))
+}
+
+export async function fetchBoardScene(boardId: string): Promise<BoardSceneResponse> {
+  const params = new URLSearchParams({ [BOARD_ID_PARAM]: boardId })
+  return request<BoardSceneResponse>(`${BOARD_SCENE_PATH}?${params.toString()}`)
+}
+
+/**
+ * Speichert die Szene auf der genannten Ausgangsversion. Ein 409 kommt als `ApiError` an und darf nie
+ * stillschweigend wiederholt werden - er bedeutet, dass jemand anderes bereits geschrieben hat.
+ */
+export async function saveBoardScene(
+  csrfToken: string,
+  payload: { readonly boardId: string; readonly baseVersion: number; readonly scene: SceneSnapshot },
+): Promise<SaveSceneResponse> {
+  return request<SaveSceneResponse>(BOARD_SCENE_PATH, mutation(csrfToken, payload))
 }

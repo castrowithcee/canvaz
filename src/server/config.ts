@@ -26,6 +26,11 @@ export type AppConfig = {
   readonly storage: {
     readonly adapter: AssetStorageAdapter
   }
+  /**
+   * Obergrenze eines serialisierten Szenen-Snapshots in Bytes. Sie begrenzt zugleich den Anfragekoerper der
+   * Speicherung; ein groesserer Koerper wird gar nicht erst vollstaendig gelesen.
+   */
+  readonly maxSceneBytes: number
   /** Verzeichnis mit der gebauten SPA. */
   readonly webRoot: string
 }
@@ -103,6 +108,11 @@ function readStorageAdapter(env: Env, problems: string[]): AssetStorageAdapter {
 
 const SECONDS_PER_HOUR = 3600
 
+/** 5 MiB. Deutlich mehr als jede beobachtete Szene und klein genug, um Speicher und Datenbank zu schuetzen. */
+const DEFAULT_MAX_SCENE_BYTES = 5 * 1024 * 1024
+const MIN_MAX_SCENE_BYTES = 64 * 1024
+const MAX_MAX_SCENE_BYTES = 64 * 1024 * 1024
+
 export function loadConfig(env: Env = process.env): AppConfig {
   const problems: string[] = []
 
@@ -128,6 +138,14 @@ export function loadConfig(env: Env = process.env): AppConfig {
       redirectUri: readUrl(env, 'CANVAZ_OIDC_REDIRECT_URI', problems, ['http:', 'https:']),
     },
     storage: { adapter: readStorageAdapter(env, problems) },
+    maxSceneBytes: readInteger(
+      env,
+      'CANVAZ_MAX_SCENE_BYTES',
+      DEFAULT_MAX_SCENE_BYTES,
+      MIN_MAX_SCENE_BYTES,
+      MAX_MAX_SCENE_BYTES,
+      problems,
+    ),
     webRoot: env['CANVAZ_WEB_ROOT']?.trim() ?? 'dist/web',
   }
 

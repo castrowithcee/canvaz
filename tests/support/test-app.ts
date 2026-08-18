@@ -12,8 +12,10 @@ import type { AddressInfo } from 'node:net'
 
 import type { Pool } from 'pg'
 
+import type { BoardStore } from '../../src/domain/board/repositories.js'
 import type { IdentityStore } from '../../src/domain/identity/repositories.js'
 import type { WorkspaceStore } from '../../src/domain/workspace/repositories.js'
+import { createBoardStore } from '../../src/persistence/board-store.js'
 import { createIdentityStore } from '../../src/persistence/identity-store.js'
 import { createWorkspaceStore } from '../../src/persistence/workspace-store.js'
 import { createRoutes } from '../../src/server/app.js'
@@ -33,6 +35,7 @@ export type TestApp = {
   readonly context: AppContext
   readonly store: IdentityStore
   readonly workspaces: WorkspaceStore
+  readonly boards: BoardStore
   readonly realtime: RealtimeGateway
   readonly logs: readonly LogEntry[]
   clearLogs(): void
@@ -80,6 +83,7 @@ export async function startTestApp(options: {
 
   const store = createIdentityStore(options.pool)
   const workspaces = createWorkspaceStore(options.pool)
+  const boards = createBoardStore(options.pool)
   // Kurzer Abstand der Ablaufpruefung: der Test soll auf das Schliessen nicht eine Minute warten.
   const realtime = createRealtimeGateway({
     config,
@@ -95,6 +99,7 @@ export async function startTestApp(options: {
     pool: options.pool,
     identity: store,
     workspaces,
+    boards,
     oidc: createOidcClient(config),
     realtime,
     logger,
@@ -108,6 +113,7 @@ export async function startTestApp(options: {
     context,
     store,
     workspaces,
+    boards,
     realtime,
     logs,
     clearLogs(): void {

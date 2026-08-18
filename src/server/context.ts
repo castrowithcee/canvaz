@@ -7,6 +7,7 @@
 
 import type { Pool } from 'pg'
 
+import type { BoardStore } from '../domain/board/repositories.js'
 import type { IdentityStore } from '../domain/identity/repositories.js'
 import type { WorkspaceStore } from '../domain/workspace/repositories.js'
 import type { AppConfig } from './config.js'
@@ -19,6 +20,7 @@ export type AppContext = {
   readonly pool: Pool
   readonly identity: IdentityStore
   readonly workspaces: WorkspaceStore
+  readonly boards: BoardStore
   readonly oidc: OidcClient
   readonly realtime: RealtimeGateway
   readonly logger: Logger

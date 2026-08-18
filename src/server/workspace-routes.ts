@@ -17,13 +17,15 @@
  *   einer erfundenen zu unterscheiden; die Existenz wird nicht preisgegeben.
  * - Wer ihn sehen, die Aktion aber nicht ausfuehren darf, bekommt **403**. Hier ist die Existenz ohnehin
  *   bekannt, und eine 404 waere eine irrefuehrende Fehlermeldung.
+ *
+ * Die Bausteine der Antwort (`Reply`, `guardMutation`, `readUuid`) stehen in `reply.ts` und gelten
+ * gleichermassen fuer die Boardrouten.
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import type {
   DirectoryUserView,
-  ErrorResponse,
   WorkspaceCandidatesResponse,
   WorkspaceMemberChangeResponse,
   WorkspaceMemberView,
@@ -59,30 +61,11 @@ import { decideWorkspaceAccess } from '../domain/workspace/policy.js'
 import type { WorkspaceMember, WorkspaceStore } from '../domain/workspace/repositories.js'
 import { MembershipConflictError } from '../domain/workspace/repositories.js'
 import type { AppContext } from './context.js'
-import { requireCsrfToken, requireSession } from './guard.js'
+import { requireSession } from './guard.js'
 import type { Route } from './http.js'
-import { readJsonBody, sendError, sendJson } from './http.js'
-
-/** Fertige, noch nicht gesendete Antwort. */
-type Reply = { readonly status: number; readonly body: unknown }
-
-function ok(status: number, body: unknown): Reply {
-  return { status, body }
-}
-
-function fail(status: number, message: string): Reply {
-  const body: ErrorResponse = { error: message }
-  return { status, body }
-}
-
-function send(response: ServerResponse, reply: Reply): void {
-  sendJson(response, reply.status, reply.body)
-}
-
-/** Beide Ergebnisse von `loadVisible` sind Objekte; nur die Antwort traegt einen Status. */
-function isReply(value: Reply | WorkspaceAccess): value is Reply {
-  return 'status' in value
-}
+import { sendError } from './http.js'
+import type { Reply } from './reply.js'
+import { fail, guardMutation, isReply, ok, readUuid, send } from './reply.js'
 
 function toWorkspaceView(workspace: Workspace, role: WorkspaceRole | null): WorkspaceView {
   return {
@@ -115,39 +98,6 @@ const DENIALS: Readonly<Record<DenialReason, { readonly status: number; readonly
   'user-deactivated': { status: 404, message: 'Arbeitsbereich nicht gefunden' },
   'insufficient-role': { status: 403, message: 'Keine Berechtigung fuer diese Aktion' },
   'workspace-archived': { status: 403, message: 'Der Arbeitsbereich ist archiviert und kann nicht geaendert werden' },
-}
-
-type Guarded = {
-  readonly auth: AuthenticatedSession
-  readonly body: Record<string, unknown>
-}
-
-/** Sitzung, CSRF-Token und JSON-Koerper fuer eine zustandsaendernde Route. */
-async function guardMutation(
-  context: AppContext,
-  request: IncomingMessage,
-  response: ServerResponse,
-): Promise<Guarded | null> {
-  const auth = await requireSession(context, request, response)
-  if (auth === null || !requireCsrfToken(context, request, response, auth)) {
-    return null
-  }
-  const body = await readJsonBody(request)
-  if (body === null) {
-    sendError(response, 400, 'Ungueltiger Anfragekoerper')
-    return null
-  }
-  return { auth, body }
-}
-
-/**
- * Postgres lehnt eine erfundene Kennung, die keine UUID ist, mit einem Typfehler ab. Fachlich ist sie
- * schlicht unbekannt - und muss dieselbe Antwort bekommen wie eine gueltig geformte fremde Kennung.
- */
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
-function readUuid(value: unknown): string | null {
-  return typeof value === 'string' && UUID_PATTERN.test(value) ? value : null
 }
 
 /** Laenger als jede zulaessige Adresse; alles darueber kann kein genauer Treffer sein. */

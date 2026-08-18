@@ -21,6 +21,14 @@ describe('Konfiguration', () => {
     expect(config.sessionTtlSeconds).toBe(12 * 3600)
     expect(config.secureCookies).toBe(true)
     expect(config.oidc.clientId).toBe('canvaz')
+    expect(config.maxSceneBytes).toBe(5 * 1024 * 1024)
+  })
+
+  it('nimmt eine eigene Szenengrenze nur innerhalb der zulaessigen Spanne an', () => {
+    expect(loadConfig({ ...validEnv, CANVAZ_MAX_SCENE_BYTES: '1048576' }).maxSceneBytes).toBe(1_048_576)
+    expect(() => loadConfig({ ...validEnv, CANVAZ_MAX_SCENE_BYTES: '1024' })).toThrow(ConfigError)
+    expect(() => loadConfig({ ...validEnv, CANVAZ_MAX_SCENE_BYTES: '999999999' })).toThrow(ConfigError)
+    expect(() => loadConfig({ ...validEnv, CANVAZ_MAX_SCENE_BYTES: 'viel' })).toThrow(ConfigError)
   })
 
   it('meldet alle fehlenden Pflichtwerte auf einmal statt still zu ersetzen', () => {

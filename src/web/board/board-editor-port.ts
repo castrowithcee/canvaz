@@ -5,8 +5,9 @@
  * seiner Adapterimplementierung; ein Editorwechsel oder ein Upstream-Bruch bleibt damit auf eine Datei
  * begrenzt.
  *
- * Aus dem Spike uebernommen und noch unverdrahtet: die Board- und Realtime-Strecke folgt in einem eigenen
- * Issue. Bis dahin haelt der Port fest, was ein Editor koennen muss.
+ * Presence (`showPeers`) und die Uebernahme entfernter Aenderungen sind bereits Teil des Ports; die
+ * Realtime-Strecke, die sie fuellt, folgt in einem eigenen Issue. Die Boardansicht nutzt heute Laden,
+ * Speichern und die lokale Aenderungsmeldung.
  */
 
 import type { BinaryFileRef, PersistedAppState, SyncElement } from '../../contracts/scene.js'
@@ -32,6 +33,10 @@ export type LocalChange = {
 export interface BoardEditorPort {
   /** Vollstaendiger geteilter Zustand inklusive Tombstones. */
   getElements(): readonly SyncElement[]
+  /** Persistierte Teilmenge des Editorzustands. */
+  getAppState(): PersistedAppState
+  /** Referenzen aller bekannten Binaerdateien; Bytes laufen ueber den Storage-Port. */
+  getFileRefs(): readonly BinaryFileRef[]
   /** Uebernimmt entfernte Elemente ohne die lokale Undo-Historie zu verschmutzen. */
   applyRemoteElements(elements: readonly SyncElement[]): void
   applyRemoteAppState(appState: PersistedAppState): void

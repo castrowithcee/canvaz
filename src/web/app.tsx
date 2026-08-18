@@ -6,12 +6,27 @@
  * braucht eine Anmeldeseite, eine Huelle und eine Nutzerliste.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
 
-import type { LoginErrorCode, MeResponse, UserView } from '../contracts/api.js'
+import type { BoardView, LoginErrorCode, MeResponse, UserView, WorkspaceView } from '../contracts/api.js'
 import { AUTH_LOGIN_PATH, LOGIN_ERROR_PARAM } from '../contracts/api.js'
 import { ApiError, fetchAdminUsers, fetchMe, logout, setUserStatus } from './api.js'
 import { Workspaces } from './workspaces.js'
+
+/**
+ * Der Editor wird erst beim Oeffnen eines Boards geladen.
+ *
+ * Zwei Gruende, und beide sind zwingend: Excalidraw bringt den mit Abstand groessten Teil des Bundles mit,
+ * und sein Schriftregister baut seine URLs beim Laden auf - der eigene Assetpfad muss deshalb *vorher*
+ * stehen. Ein statischer Import koennte das nicht leisten, weil der Bundler den Excalidraw-Chunk dann vor
+ * jedem Modulrumpf ausfuehrt.
+ */
+const BoardEditor = lazy(async () => {
+  const { setExcalidrawAssetPath } = await import('./board/excalidraw-assets.js')
+  setExcalidrawAssetPath()
+  const editor = await import('./board/board-view.js')
+  return { default: editor.BoardEditor }
+})
 
 const LOGIN_ERROR_TEXTS: Readonly<Record<LoginErrorCode, string>> = {
   abgebrochen: 'Die Anmeldung wurde beim Identity Provider abgebrochen.',
@@ -158,9 +173,41 @@ function AdminUsers({ me }: { readonly me: MeResponse }) {
   )
 }
 
+/** Geoeffnetes Board samt Zustand seines Arbeitsbereichs; letzterer entscheidet ueber die Schreibbarkeit. */
+type OpenBoard = { readonly board: BoardView; readonly workspaceArchived: boolean }
+
 function Shell({ me, onSignedOut }: { readonly me: MeResponse; readonly onSignedOut: () => void }) {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [openBoard, setOpenBoard] = useState<OpenBoard | null>(null)
+
+  function open(board: BoardView, workspace: WorkspaceView): void {
+    setOpenBoard({ board, workspaceArchived: workspace.status === 'archived' })
+  }
+
+  // Der Editor braucht die ganze Flaeche; die Verwaltungsansicht bleibt im Zustand der Anwendung erhalten.
+  if (openBoard !== null) {
+    return (
+      <Suspense
+        fallback={
+          <main className="shell" aria-live="polite">
+            <h1>Canvaz</h1>
+            <p>Editor wird geladen …</p>
+          </main>
+        }
+      >
+        <BoardEditor
+          key={openBoard.board.id}
+          boardId={openBoard.board.id}
+          csrfToken={me.csrfToken}
+          workspaceArchived={openBoard.workspaceArchived}
+          onClose={() => {
+            setOpenBoard(null)
+          }}
+        />
+      </Suspense>
+    )
+  }
 
   function signOut(): void {
     setBusy(true)
@@ -200,7 +247,7 @@ function Shell({ me, onSignedOut }: { readonly me: MeResponse; readonly onSigned
         </p>
       )}
       <main>
-        <Workspaces me={me} />
+        <Workspaces me={me} onOpenBoard={open} />
         {me.user.isSystemAdmin && <AdminUsers me={me} />}
       </main>
     </div>
