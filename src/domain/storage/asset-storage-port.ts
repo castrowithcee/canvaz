@@ -43,14 +43,19 @@ export function assertStorageKey(key: string): string {
 }
 
 /**
- * Schluessel eines Assets: Board plus Pruefsumme des Inhalts.
+ * Schluessel eines Assets: Board, Dateikennung und Pruefsumme des Inhalts.
  *
- * Inhaltsadressiert und deshalb wiederholbar - derselbe Inhalt im selben Board ergibt denselben Schluessel.
+ * Inhaltsadressiert und deshalb wiederholbar - dieselbe Datei im selben Board ergibt denselben Schluessel.
  * Ein abgebrochener Upload kann so nichts Halbes hinterlassen, das ein zweiter Versuch nicht ueberschreibt.
- * Der Boardbezug im Praefix haelt zwei Boards auseinander, auch wenn sie dieselbe Datei tragen.
+ *
+ * **Die Dateikennung gehoert in den Schluessel.** `board_assets` fuehrt einen Datensatz je Dateikennung und
+ * verlangt den Speicherschluessel instanzweit eindeutig; ohne sie wuerden zwei Kennungen mit identischem
+ * Inhalt im selben Board auf denselben Schluessel fallen und einander in die Quere kommen. Zwei Kennungen
+ * mit gleichem Inhalt sind ein gueltiger Fall, kein Konflikt - und ihre Bytes gehoeren jeweils genau einem
+ * Datensatz, sodass keine Aufraeumung fremde Bytes treffen kann.
  */
-export function buildAssetStorageKey(boardId: string, checksumSha256: string): string {
-  return assertStorageKey(`boards/${boardId}/${checksumSha256}`)
+export function buildAssetStorageKey(boardId: string, fileId: string, checksumSha256: string): string {
+  return assertStorageKey(`boards/${boardId}/${fileId}/${checksumSha256}`)
 }
 
 export interface AssetStoragePort {

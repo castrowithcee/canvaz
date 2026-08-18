@@ -119,7 +119,6 @@ export type BoardAsset = {
 export type NewBoardAsset = Omit<BoardAsset, 'id' | 'createdAt'>
 
 export interface BoardAssetRepository {
-  listForBoard(boardId: BoardId): Promise<readonly BoardAsset[]>
   /**
    * Ausschliesslich innerhalb genau dieses Boards. Eine geratene Dateikennung erreicht damit nie ein
    * fremdes Asset, auch wenn sie zufaellig anderswo existiert.

@@ -19,9 +19,19 @@ const CHECKSUM = 'a'.repeat(64)
 
 describe('Speicherschluessel', () => {
   it('nimmt genau die Form an, die der Server selbst bildet', () => {
-    expect(buildAssetStorageKey(BOARD_ID, CHECKSUM)).toBe(`boards/${BOARD_ID}/${CHECKSUM}`)
+    expect(buildAssetStorageKey(BOARD_ID, 'datei-1', CHECKSUM)).toBe(`boards/${BOARD_ID}/datei-1/${CHECKSUM}`)
     expect(assertStorageKey('a')).toBe('a')
     expect(assertStorageKey('boards/x-1/y_2.bin')).toBe('boards/x-1/y_2.bin')
+  })
+
+  it('trennt zwei Dateikennungen mit identischem Inhalt', () => {
+    // `board_assets` fuehrt einen Datensatz je Dateikennung und verlangt den Schluessel eindeutig. Ohne die
+    // Kennung im Schluessel wuerden beide Datensaetze dieselben Bytes meinen und einander loeschen koennen.
+    expect(buildAssetStorageKey(BOARD_ID, 'erste', CHECKSUM)).not.toBe(
+      buildAssetStorageKey(BOARD_ID, 'zweite', CHECKSUM),
+    )
+    // Dieselbe Datei im selben Board bleibt derselbe Schluessel: ein Wiederholungsversuch ueberschreibt sich.
+    expect(buildAssetStorageKey(BOARD_ID, 'erste', CHECKSUM)).toBe(buildAssetStorageKey(BOARD_ID, 'erste', CHECKSUM))
   })
 
   it('weist jeden Ausbruch aus dem Namensraum zurueck', () => {

@@ -11,6 +11,9 @@
  * Attrappe wertlos. Er spricht mit dem MinIO aus `compose.yml`.
  */
 
+import { readFile, rm, symlink } from 'node:fs/promises'
+import { join } from 'node:path'
+
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import type { AssetStoragePort } from '../../src/domain/storage/asset-storage-port.js'
@@ -129,7 +132,6 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  const { rm } = await import('node:fs/promises')
   await rm(dateisystemWurzel, { recursive: true, force: true })
 })
 
@@ -139,4 +141,34 @@ describe('Storage-Port, Adapter filesystem', () => {
 
 describe('Storage-Port, Adapter s3 (MinIO)', () => {
   assetStorageContract(() => createS3AssetStorage(TEST_S3))
+})
+
+/* ---------------------------------------------------------------------------------------------------- */
+/* Was der Dateisystem-Adapter darueber hinaus zusagt - und was nicht                                     */
+/* ---------------------------------------------------------------------------------------------------- */
+
+describe('Dateisystem-Adapter, Grenze des Namensraums', () => {
+  it('setzt die Grenze allein ueber den Schluessel durch und loest Symlinks nicht auf', async () => {
+    const wurzel = await createFilesystemRoot()
+    const daneben = await createFilesystemRoot()
+    try {
+      const storage = createFilesystemAssetStorage(wurzel)
+      // Ein Verzeichnis-Symlink unterhalb der Wurzel. Nur wer bereits Schreibzugriff auf das Volume hat,
+      // kann ihn anlegen - ueber die Anwendung entsteht er nie.
+      await symlink(daneben, join(wurzel, 'boards'), 'dir')
+
+      await storage.put('boards/inhalt.bin', bytes('folgt dem Symlink'))
+
+      // Festgehaltenes Verhalten: der Adapter folgt ihm. Die Wurzel ist eine Konfigurationszusage, keine
+      // Sandbox gegen den Betreiber des Volumes.
+      expect(new TextDecoder().decode(await readFile(join(daneben, 'inhalt.bin')))).toBe('folgt dem Symlink')
+
+      // Die wirksame Grenze ist der Schluessel: ein Ausbruch ist gar nicht erst formulierbar.
+      await expect(storage.get('../daneben/inhalt.bin')).rejects.toBeInstanceOf(InvalidStorageKeyError)
+      await expect(storage.put('/absolut', bytes('x'))).rejects.toBeInstanceOf(InvalidStorageKeyError)
+    } finally {
+      await rm(wurzel, { recursive: true, force: true })
+      await rm(daneben, { recursive: true, force: true })
+    }
+  })
 })

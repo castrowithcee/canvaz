@@ -141,6 +141,24 @@ async function listBoards(
   return ((await response.json()) as BoardsResponse).boards
 }
 
+/**
+ * Marke fuer ein Zahlenliteral, das `JSON.stringify` gar nicht erzeugen kann: `1e400` ist gueltiges JSON und
+ * wird beim Parsen zu `Infinity`. Nur so laesst sich pruefen, was ein Client wirklich schicken kann.
+ */
+const UNENDLICH = '@unendlich@'
+
+function rohesJson(payload: unknown): string {
+  return JSON.stringify(payload).replaceAll(`"${UNENDLICH}"`, '1e400')
+}
+
+function postRoh(account: Account, path: string, body: string): Promise<Response> {
+  return account.jar.fetch(`${app.baseUrl}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', [CSRF_HEADER]: account.profile.csrfToken },
+    body,
+  })
+}
+
 function openBoard(account: Account, boardId: string): Promise<Response> {
   return get(account, BOARD_SCENE_PATH, { [BOARD_ID_PARAM]: boardId })
 }
@@ -561,6 +579,69 @@ describe('Szenenpersistenz', () => {
     expect((await loadScene(ada, board.id)).version).toBe(0)
   })
 
+  it('lehnt eine nicht endliche Zahl ab, statt sie still zu null zu machen', async () => {
+    await signedInAs('root')
+    const ada = await signedInAs('ada')
+    const workspace = await createWorkspace(ada, 'Team Nord')
+    const board = await createBoard(ada, workspace.id, 'Board')
+    const szene = reicheSzene(board.id)
+
+    // 1. Oberste Ebene: `updatedAt` wuerde als null gespeichert und das Board dauerhaft unlesbar machen.
+    const obenauf: Record<string, unknown> = { ...szene, updatedAt: UNENDLICH }
+    const ersteAntwort = await postRoh(
+      ada,
+      BOARD_SCENE_PATH,
+      rohesJson({ boardId: board.id, baseVersion: 0, scene: obenauf }),
+    )
+    expect(ersteAntwort.status).toBe(400)
+
+    // 2. Tief in einem unbekannten Zusatzfeld eines Elements, das der Vertrag bewusst durchreicht.
+    const tief: Record<string, unknown> = {
+      ...szene,
+      elements: [{ id: 'tief', version: 1, versionNonce: 1, x: 1, kuenftigesFeld: { liste: [1, UNENDLICH] } }],
+    }
+    const zweiteAntwort = await postRoh(
+      ada,
+      BOARD_SCENE_PATH,
+      rohesJson({ boardId: board.id, baseVersion: 0, scene: tief }),
+    )
+    expect(zweiteAntwort.status).toBe(400)
+
+    // 3. Im AppState.
+    const imAppState: Record<string, unknown> = {
+      ...szene,
+      appState: { ...szene.appState, gridSize: UNENDLICH },
+    }
+    const dritteAntwort = await postRoh(
+      ada,
+      BOARD_SCENE_PATH,
+      rohesJson({ boardId: board.id, baseVersion: 0, scene: imAppState }),
+    )
+    expect(dritteAntwort.status).toBe(400)
+
+    // Nichts davon wurde angenommen, und das Board bleibt lesbar.
+    const geladen = await loadScene(ada, board.id)
+    expect(geladen.version).toBe(0)
+  })
+
+  it('lehnt ein einsames Surrogat ab, statt daran zu scheitern', async () => {
+    await signedInAs('root')
+    const ada = await signedInAs('ada')
+    const workspace = await createWorkspace(ada, 'Team Nord')
+    const board = await createBoard(ada, workspace.id, 'Board')
+    const mitSurrogat: SceneSnapshot = {
+      ...reicheSzene(board.id),
+      elements: [{ id: 'text-surrogat', version: 1, versionNonce: 1, text: 'halb \ud800 offen' }],
+    }
+
+    const response = await saveScene(ada, board.id, 0, mitSurrogat)
+
+    // Dieselbe bewusste Entscheidung wie beim NUL-Zeichen: benennen statt daran scheitern.
+    expect(response.status).toBe(400)
+    expect(await response.text()).toContain('Surrogat')
+    expect((await loadScene(ada, board.id)).version).toBe(0)
+  })
+
   it('weist eine zu grosse Szene ab', async () => {
     await signedInAs('root')
     const ada = await signedInAs('ada')
@@ -597,6 +678,22 @@ describe('Optimistische Versionspruefung', () => {
     expect(((await response.json()) as SceneConflictResponse).currentVersion).toBe(1)
     // Der gespeicherte Stand ist unveraendert; nichts wurde still ueberschrieben.
     expect((await loadScene(ada, board.id)).scene).toEqual(erste)
+  })
+
+  it('weist auch eine Ausgangsversion in der Zukunft ab', async () => {
+    await signedInAs('root')
+    const ada = await signedInAs('ada')
+    const workspace = await createWorkspace(ada, 'Team Nord')
+    const board = await createBoard(ada, workspace.id, 'Board')
+
+    // Nicht nur die veraltete Richtung zaehlt: eine Ausgangsversion, die es nie gab, ist genauso ein
+    // Konflikt. Der Primaerschluessel faengt diese Richtung nicht, allein der Versionsvergleich tut es.
+    const response = await saveScene(ada, board.id, 5, reicheSzene(board.id))
+
+    expect(response.status).toBe(409)
+    expect(((await response.json()) as SceneConflictResponse).currentVersion).toBe(0)
+    expect((await loadScene(ada, board.id)).version).toBe(0)
+    expect((await pool.query('select 1 from scene_versions where board_id = $1', [board.id])).rowCount).toBe(0)
   })
 
   it('laesst unter echter Parallelitaet genau eine von zwei Speicherungen gewinnen', async () => {
@@ -735,6 +832,43 @@ describe('Board-Persistenz', () => {
     await expect(
       app.boards.transaction((tx) => tx.boards.findForUpdate(FREMDE_KENNUNG, FREMDE_KENNUNG)),
     ).resolves.toBeNull()
+  })
+
+  it('haelt die Boardzeile gesperrt, bis die Transaktion endet', async () => {
+    await signedInAs('root')
+    const ada = await signedInAs('ada')
+    const workspace = await createWorkspace(ada, 'Team Nord')
+    const board = await createBoard(ada, workspace.id, 'Board')
+
+    let sperreSteht: () => void = () => undefined
+    const gesperrt = new Promise<void>((resolve) => {
+      sperreSteht = resolve
+    })
+    let freigeben: () => void = () => undefined
+    const freigabe = new Promise<void>((resolve) => {
+      freigeben = resolve
+    })
+    let zweiteHatGelesen = false
+
+    const erste = app.boards.transaction(async (tx) => {
+      await tx.boards.findForUpdate(board.id, ada.profile.user.id)
+      sperreSteht()
+      await freigabe
+    })
+    await gesperrt
+
+    const zweite = app.boards.transaction(async (tx) => {
+      await tx.boards.findForUpdate(board.id, ada.profile.user.id)
+      zweiteHatGelesen = true
+    })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+
+    // Solange die erste Transaktion die Zeile haelt, kommt die zweite nicht an ihr vorbei.
+    expect(zweiteHatGelesen).toBe(false)
+
+    freigeben()
+    await Promise.all([erste, zweite])
+    expect(zweiteHatGelesen).toBe(true)
   })
 
   it('raeumt Boards und Szenen mit dem Arbeitsbereich ab', async () => {

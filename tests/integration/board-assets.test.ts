@@ -538,7 +538,11 @@ describe('Archivierung und Bestand', () => {
     // oder ein Blick in die Historie muesste es sonst ins Leere laufen lassen.
     expect(await assetCount(board.id)).toBe(1)
     expect((await download(ada, board.id, 'datei-1')).status).toBe(200)
-    expect((await app.boards.assets.listForBoard(board.id)).map((asset) => asset.fileId)).toEqual(['datei-1'])
+    const kennungen = await pool.query<{ file_id: string }>(
+      'select file_id from board_assets where board_id = $1',
+      [board.id],
+    )
+    expect(kennungen.rows.map((row) => row.file_id)).toEqual(['datei-1'])
   })
 
   it('nimmt Assetdatensaetze mit dem Board aus der Datenbank, wenn dort geloescht wird', async () => {
@@ -559,6 +563,69 @@ describe('Archivierung und Bestand', () => {
 /* ---------------------------------------------------------------------------------------------------- */
 /* Neustart, fuer beide Adapter                                                                          */
 /* ---------------------------------------------------------------------------------------------------- */
+
+/* ---------------------------------------------------------------------------------------------------- */
+/* Gleicher Inhalt unter zwei Kennungen, fuer beide Adapter                                               */
+/* ---------------------------------------------------------------------------------------------------- */
+
+describe('Derselbe Inhalt unter zwei Dateikennungen', () => {
+  /** Meldet einen Nutzer an und legt Arbeitsbereich und Board auf der angegebenen Instanz an. */
+  async function boardAuf(instanz: TestApp): Promise<{ readonly account: Account; readonly boardId: string }> {
+    await signedInAs('root', instanz)
+    const account = await signedInAs('ada', instanz)
+    const workspaceAntwort = await account.jar.fetch(`${instanz.baseUrl}${WORKSPACES_PATH}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', [CSRF_HEADER]: account.profile.csrfToken },
+      body: JSON.stringify({ name: 'Team Nord' }),
+    })
+    expect(workspaceAntwort.status).toBe(201)
+    const workspace = (await workspaceAntwort.json()) as WorkspaceView
+    const boardAntwort = await account.jar.fetch(`${instanz.baseUrl}${BOARDS_PATH}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', [CSRF_HEADER]: account.profile.csrfToken },
+      body: JSON.stringify({ workspaceId: workspace.id, title: 'Bildboard' }),
+    })
+    expect(boardAntwort.status).toBe(201)
+    return { account, boardId: ((await boardAntwort.json()) as BoardView).id }
+  }
+
+  /**
+   * Zwei Dateikennungen mit identischem Inhalt im selben Board sind ein gueltiger Fall. Der zweite Upload
+   * darf weder scheitern noch die Bytes des ersten anruehren - der erste bleibt vollstaendig abrufbar.
+   */
+  async function zweiKennungen(storage: Readonly<Record<string, string>>): Promise<void> {
+    const instanz = await startTestApp({ provider, pool, databaseUrl: DATABASE_URL, storage })
+    try {
+      const { account, boardId } = await boardAuf(instanz)
+      const bytes = png(`derselbe Inhalt fuer ${storage['CANVAZ_STORAGE_ADAPTER'] ?? ''}`)
+
+      expect((await upload(account, boardId, 'erste', bytes, { app: instanz })).status).toBe(201)
+      expect((await upload(account, boardId, 'zweite', bytes, { app: instanz })).status).toBe(201)
+
+      for (const kennung of ['erste', 'zweite']) {
+        const geladen = await download(account, boardId, kennung, instanz)
+        expect(geladen.status, kennung).toBe(200)
+        expect(Buffer.from(await geladen.arrayBuffer()).equals(Buffer.from(bytes)), kennung).toBe(true)
+      }
+      expect(await assetCount(boardId)).toBe(2)
+    } finally {
+      await instanz.close()
+    }
+  }
+
+  it('haelt beide Dateien abrufbar: Adapter filesystem', async () => {
+    const eigeneWurzel = await createFilesystemRoot()
+    try {
+      await zweiKennungen(filesystemEnv(eigeneWurzel))
+    } finally {
+      await rm(eigeneWurzel, { recursive: true, force: true })
+    }
+  })
+
+  it('haelt beide Dateien abrufbar: Adapter s3 (MinIO)', async () => {
+    await zweiKennungen(s3Env())
+  })
+})
 
 describe('Neustart der Anwendung', () => {
   /**

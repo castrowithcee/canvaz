@@ -246,8 +246,9 @@ sauber entstehen. Damit die Historie nicht unbegrenzt waechst, bleiben die jueng
 Board erhalten (`SCENE_VERSION_RETENTION`); aeltere fallen bei der naechsten Speicherung heraus.
 
 Serialisiert wird der Vertrag aus `src/contracts/scene.ts`: Elemente, die persistierte Teilmenge des AppState
-und die Referenzen auf Bilddateien. Unbekannte Elementfelder werden unveraendert durchgereicht, damit ein
-Upstream-Sprung keine Daten verliert; Tombstones (`isDeleted`) bleiben erhalten, weil eine Loeschung selbst
+und die Referenzen auf Bilddateien. Unbekannte Zusatzfelder werden **nur in `elements`** unveraendert
+durchgereicht, damit ein Upstream-Sprung keine Daten verliert; in `appState`, in `files[*]` und auf oberster
+Snapshot-Ebene gilt dagegen eine feste Teilmenge, und alles andere wird beim Einlesen verworfen. Tombstones (`isDeleted`) bleiben erhalten, weil eine Loeschung selbst
 Information ist. Kamera und Auswahl sind clientlokal und werden bewusst nicht gespeichert. Damit bleibt alles
 erhalten, was ein `.excalidraw`-Export braucht.
 
@@ -256,9 +257,11 @@ naechste Speicherung die Zeichnung endgueltig ueberschreiben. Ein Board ohne jed
 und liefert den leeren Ausgangsstand; das ist sein tatsaechlicher Inhalt und kein Ersatz fuer einen Fehler.
 
 Die Groesse eines Snapshots ist mit `CANVAZ_MAX_SCENE_BYTES` begrenzt (Standard 5 MiB). Die Grenze gilt schon
-fuer den Anfragekoerper, sodass ein zu grosser Koerper nie vollstaendig im Speicher landet. PostgreSQL kann in
-`jsonb` kein NUL-Zeichen speichern; eine Szene mit einem solchen Zeichen wird mit 400 abgelehnt, statt beim
-Schreiben zu scheitern.
+fuer den Anfragekoerper, sodass ein zu grosser Koerper nie vollstaendig im Speicher landet. **Angenommen wird nur, was sich auch zuruecklesen laesst.** PostgreSQL
+kann in `jsonb` weder ein NUL-Zeichen noch ein einsames Surrogat speichern, und eine nicht endliche Zahl
+(`1e400` ist gueltiges JSON und wird beim Parsen zu `Infinity`) wuerde beim Serialisieren still zu `null`.
+Alle drei werden mit 400 abgelehnt, statt beim Schreiben zu scheitern oder den Wert unbemerkt zu veraendern;
+geprueft wird rekursiv, einschliesslich der durchgereichten Zusatzfelder von Elementen.
 
 ### Editor und Content-Security-Policy
 
@@ -305,9 +308,13 @@ in einer selbst gehosteten Anwendung. Der einzige nicht triviale Teil ist die Si
 vollstaendig spezifiziert und in wenigen Zeilen geschrieben. Belegt wird das gegen ein echtes MinIO, nicht
 gegen eine Attrappe.
 
-Der Speicherschluessel ist **inhaltsadressiert**: `boards/<boardId>/<sha256>`. Derselbe Inhalt im selben
-Board ergibt denselben Schluessel, ein Wiederholungsversuch ueberschreibt sich selbst, und der erlaubte
-Zeichenvorrat (`assertStorageKey`) macht einen Ausbruch aus dem Namensraum gar nicht erst formulierbar.
+Der Speicherschluessel ist **inhaltsadressiert und traegt die Dateikennung**:
+`boards/<boardId>/<fileId>/<sha256>`. Dieselbe Datei im selben Board ergibt denselben Schluessel, ein
+Wiederholungsversuch ueberschreibt sich selbst, und der erlaubte Zeichenvorrat (`assertStorageKey`) macht
+einen Ausbruch aus dem Namensraum gar nicht erst formulierbar. Die Dateikennung gehoert dazu, weil
+`board_assets` einen Datensatz je Kennung fuehrt und den Schluessel instanzweit eindeutig verlangt: zwei
+Kennungen mit identischem Inhalt sind ein gueltiger Fall, und ihre Bytes gehoeren jeweils genau einem
+Datensatz.
 
 **Der Adapterwechsel ist ausschliesslich Laufzeitkonfiguration.** Die Wahl faellt an genau einer Stelle
 (`src/persistence/asset-storage.ts`); Routen, Domain und Datenbank kennen nur `AssetStoragePort`. Fehlende
@@ -354,6 +361,12 @@ Erlaubt sind `image/png`, `image/jpeg`, `image/gif` und `image/webp`. **SVG fehl
 Dokument mit Skript- und Verweisfaehigkeit, kein Rasterbild; es aus einer Instanz auszuliefern, die auch
 Sitzungen fuehrt, waere eine eigene Entscheidung mit eigener Absicherung.
 
+Das ist eine **Signaturpruefung, keine vollstaendige Formatvalidierung**: geprueft werden die Magic Bytes und
+ihre Uebereinstimmung mit dem behaupteten Typ, nicht die Struktur der Datei - eine 8 Byte grosse Datei aus
+reiner PNG-Signatur wird angenommen. Entschaerft wird das beim Abruf: ausgeliefert wird der in der Datenbank
+gespeicherte `content-type`, dazu `nosniff` und `no-store`, sodass der Browser nichts anderes daraus macht.
+Ein Decoderlauf je Upload waere die naechste Stufe und braucht eine eigene Entscheidung.
+
 #### Der Abruf ist nicht erratbar und ueberlebt keinen Entzug
 
 Es gibt **keine oeffentliche und keine vorsignierte Bild-URL**. Jeder Abruf laeuft ueber dieselbe Sitzung
@@ -394,9 +407,12 @@ Wirkung auf die Historie und Nachweis. Bis dahin leben Assets so lange wie ihr B
 `on delete cascade` auf `(board_id, workspace_id)`; das beschreibt, was beim direkten Loeschen in der
 Datenbank geschieht, ueber die Anwendung gibt es diesen Weg nicht.
 
-Der einzige Loeschvorgang im Anwendungscode ist die Aufraeumung eines gescheiterten Uploads: schlaegt die
-Transaktion oder ihr Commit fehl, nachdem die Bytes geschrieben wurden, werden genau diese Bytes wieder
-entfernt. Sonst blieben unerreichbare Bytes ohne Metadatensatz zurueck.
+**Der Anwendungscode loescht ueberhaupt keine Bytes.** Auch nicht als Aufraeumung eines gescheiterten
+Uploads: schlaegt die Transaktion oder ihr Commit fehl, nachdem die Bytes geschrieben wurden, bleiben sie
+liegen und werden als `board.asset.orphan` protokolliert. Eine Kompensationsloeschung koennte Bytes
+erwischen, die ein gleichzeitiger zweiter Versuch derselben Datei gerade unter seinem Datensatz braucht, und
+Datenverlust wiegt schwerer als ein liegen gebliebenes Objekt. Weil der Schluessel inhaltsadressiert ist,
+schreibt ein Wiederholungsversuch genau denselben Schluessel erneut; es waechst also kein Muell mit.
 
 #### Editor
 
@@ -418,9 +434,13 @@ schlichte Zeichenketten heraus und herein.
   der Datenbank nimmt Boards und ihre Szenen mit. Ueber die Anwendung gibt es nur Archivierung.
 - Ein Board wird beim Archivieren des Arbeitsbereichs nicht selbst archiviert; es wird durch den Zustand des
   Arbeitsbereichs unveraenderlich. Das haelt die Rueckkehr aus dem Archiv verlustfrei.
-- Der Storage-Port kennt keine Bereinigung verwaister Bytes. Bytes ohne Metadatensatz koennen nur entstehen,
-  wenn die Aufraeumung eines gescheiterten Uploads selbst scheitert; das wird als `board.asset.orphan`
-  protokolliert. Ein Aufraeumlauf braucht dieselbe gesonderte Entscheidung wie das Hard Delete.
+- Der Storage-Port kennt keine Bereinigung verwaister Bytes. Bytes ohne Metadatensatz entstehen, wenn ein
+  Upload nach dem Schreiben der Bytes scheitert; das wird als `board.asset.orphan` protokolliert. Ein
+  Aufraeumlauf braucht dieselbe gesonderte Entscheidung wie das Hard Delete.
+- Der Dateisystem-Adapter loest Symlinks nicht auf. Die Wurzel ist eine Konfigurationszusage, keine Sandbox
+  gegen den Betreiber des Volumes; was den Pfad in der Wurzel haelt, ist allein die gepruefte Form des
+  Schluessels (`assertStorageKey`), und die entsteht ausschliesslich aus Boardkennung, Dateikennung und
+  Pruefsumme.
 - `SceneSnapshot.files[].storageKey` kommt zwar vom Server, wird beim Abruf aber nicht verwendet: massgeblich
   ist ausschliesslich `board_assets.storage_key`. Ein Client kann ueber die Szene keinen fremden Schluessel
   erreichbar machen.

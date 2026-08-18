@@ -283,14 +283,6 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
     },
 
     assets: {
-      async listForBoard(boardId: BoardId): Promise<readonly BoardAsset[]> {
-        const result = await db.query<BoardAssetRow>(
-          `select ${BOARD_ASSET_COLUMNS} from board_assets where board_id = $1 order by created_at, id`,
-          [boardId],
-        )
-        return result.rows.map(toBoardAsset)
-      },
-
       async findByFileId(boardId: BoardId, fileId: string): Promise<BoardAsset | null> {
         // Board und Dateikennung zusammen; es gibt keine Abfrage allein ueber die Dateikennung.
         const result = await db.query<BoardAssetRow>(

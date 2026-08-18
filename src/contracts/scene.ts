@@ -73,15 +73,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+/** Eine Zahl, die auch wieder zurueckgelesen werden kann: `Infinity` und `NaN` sind keine. */
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
 export function isSyncElement(value: unknown): value is SyncElement {
   return (
     isRecord(value) &&
     typeof value['id'] === 'string' &&
     value['id'].length > 0 &&
-    typeof value['version'] === 'number' &&
-    Number.isFinite(value['version']) &&
-    typeof value['versionNonce'] === 'number' &&
-    Number.isFinite(value['versionNonce']) &&
+    isFiniteNumber(value['version']) &&
+    isFiniteNumber(value['versionNonce']) &&
     (value['isDeleted'] === undefined || typeof value['isDeleted'] === 'boolean')
   )
 }
@@ -108,8 +111,8 @@ function parseBinaryFileRef(value: unknown): BinaryFileRef | null {
   if (
     typeof id !== 'string' ||
     typeof mimeType !== 'string' ||
-    typeof created !== 'number' ||
-    typeof byteSize !== 'number' ||
+    !isFiniteNumber(created) ||
+    !isFiniteNumber(byteSize) ||
     typeof storageKey !== 'string'
   ) {
     return null
@@ -124,7 +127,7 @@ function parseAppState(value: unknown): PersistedAppState | null {
   const { viewBackgroundColor, gridSize, gridModeEnabled, name } = value
   if (
     typeof viewBackgroundColor !== 'string' ||
-    !(gridSize === null || typeof gridSize === 'number') ||
+    !(gridSize === null || isFiniteNumber(gridSize)) ||
     typeof gridModeEnabled !== 'boolean' ||
     typeof name !== 'string'
   ) {
@@ -143,7 +146,7 @@ export function parseSceneSnapshot(value: unknown): SceneSnapshot | null {
   }
   const boardId = value['boardId']
   const updatedAt = value['updatedAt']
-  if (typeof boardId !== 'string' || boardId.length === 0 || typeof updatedAt !== 'number') {
+  if (typeof boardId !== 'string' || boardId.length === 0 || !isFiniteNumber(updatedAt)) {
     return null
   }
   const elements = parseSyncElements(value['elements'])
@@ -164,6 +167,57 @@ export function parseSceneSnapshot(value: unknown): SceneSnapshot | null {
     files[key] = file
   }
   return { schemaVersion: SCENE_SCHEMA_VERSION, boardId, elements, appState, files, updatedAt }
+}
+
+/**
+ * Werte, die JSON zwar transportiert, die aber nicht zurueckgelesen werden koennen, was gespeichert wurde.
+ *
+ * - `nicht-endliche-zahl`: `1e400` ist gueltiges JSON und wird beim Parsen zu `Infinity`. `JSON.stringify`
+ *   macht daraus `null`; die Zahl waere still verschwunden, und auf oberster Ebene liesse sie den Snapshot
+ *   beim Zuruecklesen scheitern.
+ * - `nul-zeichen` und `einsames-surrogat`: beides kann PostgreSQL in `jsonb` nicht speichern.
+ *
+ * Geprueft wird rekursiv, einschliesslich der unbekannten Zusatzfelder von Elementen, die der Vertrag
+ * bewusst unveraendert durchreicht, und einschliesslich der Objektschluessel.
+ */
+export type UnstorableReason = 'nicht-endliche-zahl' | 'nul-zeichen' | 'einsames-surrogat'
+
+/** Ein Codepunkt aus dem Surrogatbereich, also eine Haelfte ohne ihr Gegenstueck. Ein Paar matcht nicht. */
+const LONE_SURROGATE = /\p{Cs}/u
+
+function unstorableInText(value: string): UnstorableReason | null {
+  if (value.includes('\u0000')) {
+    return 'nul-zeichen'
+  }
+  return LONE_SURROGATE.test(value) ? 'einsames-surrogat' : null
+}
+
+/** Der erste Grund, aus dem sich `value` nicht verlustfrei speichern laesst, oder `null`. */
+export function findUnstorableValue(value: unknown): UnstorableReason | null {
+  if (typeof value === 'number') {
+    return isFiniteNumber(value) ? null : 'nicht-endliche-zahl'
+  }
+  if (typeof value === 'string') {
+    return unstorableInText(value)
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const reason = findUnstorableValue(entry)
+      if (reason !== null) {
+        return reason
+      }
+    }
+    return null
+  }
+  if (isRecord(value)) {
+    for (const [key, entry] of Object.entries(value)) {
+      const reason = unstorableInText(key) ?? findUnstorableValue(entry)
+      if (reason !== null) {
+        return reason
+      }
+    }
+  }
+  return null
 }
 
 export function serializeSceneSnapshot(snapshot: SceneSnapshot): string {

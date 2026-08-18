@@ -43,8 +43,13 @@ import {
   MAX_ASSET_FILE_NAME_LENGTH,
   WORKSPACE_ID_PARAM,
 } from '../contracts/api.js'
-import type { BinaryFileRef, SceneSnapshot } from '../contracts/scene.js'
-import { createEmptySnapshot, parseSceneSnapshot, serializeSceneSnapshot } from '../contracts/scene.js'
+import type { BinaryFileRef, SceneSnapshot, UnstorableReason } from '../contracts/scene.js'
+import {
+  createEmptySnapshot,
+  findUnstorableValue,
+  parseSceneSnapshot,
+  serializeSceneSnapshot,
+} from '../contracts/scene.js'
 import type { Board, BoardId, BoardStatus } from '../domain/board/model.js'
 import {
   MAX_BOARD_TITLE_LENGTH,
@@ -81,6 +86,20 @@ const DENIALS: Readonly<Record<BoardDenialReason, { readonly status: number; rea
 }
 
 const NOT_FOUND = DENIALS['not-visible']
+
+/**
+ * Was die Anwendung nicht zuruecklesen kann, nimmt sie nicht an.
+ *
+ * Alle drei Faelle sind gueltiges JSON und kommen trotzdem nicht heil wieder: `1e400` wird beim Parsen zu
+ * `Infinity` und beim Serialisieren zu `null`, NUL-Zeichen und einsame Surrogate kann `jsonb` nicht
+ * speichern. Statt still zu veraendern oder beim Schreiben zu scheitern, wird der Grund benannt - die
+ * Zeichnung bleibt dabei im Browser erhalten.
+ */
+const UNSTORABLE: Readonly<Record<UnstorableReason, string>> = {
+  'nicht-endliche-zahl': 'Die Szene enthaelt eine nicht endliche Zahl, die sich nicht speichern laesst',
+  'nul-zeichen': 'Die Szene enthaelt ein nicht speicherbares Zeichen (NUL)',
+  'einsames-surrogat': 'Die Szene enthaelt ein nicht speicherbares Zeichen (einsames Surrogat)',
+}
 
 /**
  * Zulaessige Dateikennung.
@@ -442,10 +461,11 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
           sendError(response, 413, 'Die Szene ist zu gross')
           return
         }
-        // PostgreSQL kann in `jsonb` kein NUL-Zeichen speichern. Statt es beim Schreiben scheitern zu lassen
-        // oder still zu entfernen, wird es benannt: die Zeichnung bleibt im Browser erhalten.
-        if (serialized.includes('\\u0000')) {
-          sendError(response, 400, 'Die Szene enthaelt ein nicht speicherbares Zeichen (NUL)')
+        // Der geparste Snapshot, nicht der Anfragekoerper: geprueft wird genau das, was gespeichert wuerde -
+        // einschliesslich der unbekannten Zusatzfelder, die der Vertrag unveraendert durchreicht.
+        const unstorable = findUnstorableValue(scene)
+        if (unstorable !== null) {
+          sendError(response, 400, UNSTORABLE[unstorable])
           return
         }
 
@@ -544,7 +564,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
           return
         }
         const checksum = createHash('sha256').update(body.bytes).digest('hex')
-        const storageKey = buildAssetStorageKey(boardId, checksum)
+        const storageKey = buildAssetStorageKey(boardId, fileId, checksum)
         const fileName = normalizeAssetFileName(url.searchParams.get(ASSET_FILE_NAME_PARAM))
 
         let written = false
@@ -588,10 +608,13 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
           send(response, reply)
         } catch (error) {
           if (written) {
-            // Ohne Metadatensatz sind die Bytes unerreichbar; sie stehen zu lassen waere Muell im Speicher.
-            await context.storage.delete(storageKey).catch((cause: unknown) => {
-              context.logger('error', 'board.asset.orphan', { boardId, storageKey, cause: String(cause) })
-            })
+            // **Kein Loeschen als Kompensation.** Ein Schluessel gehoert zwar genau dieser Datei in diesem
+            // Board, aber ein gleichzeitiger zweiter Versuch derselben Datei meint dieselben Bytes; eine
+            // Loeschung koennte sie unter seinem Datensatz wegziehen. Der Schluessel ist inhaltsadressiert,
+            // deshalb schreibt ein Wiederholungsversuch genau ihn erneut und es waechst kein Muell.
+            // callbell-dev: verwaiste Bytes bleiben liegen und werden benannt; ein Aufraeumlauf braucht
+            // dieselbe gesonderte Entscheidung wie das Hard Delete.
+            context.logger('error', 'board.asset.orphan', { boardId, storageKey, cause: String(error) })
           }
           throw error
         }
