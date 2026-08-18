@@ -176,11 +176,26 @@ export function parseSceneSnapshot(value: unknown): SceneSnapshot | null {
  *   macht daraus `null`; die Zahl waere still verschwunden, und auf oberster Ebene liesse sie den Snapshot
  *   beim Zuruecklesen scheitern.
  * - `nul-zeichen` und `einsames-surrogat`: beides kann PostgreSQL in `jsonb` nicht speichern.
+ * - `zu-tiefe-struktur`: `JSON.stringify` bricht bei einigen tausend Ebenen mit einem `RangeError` ab.
+ *   Ohne eigene Grenze wuerde daraus ein unbenannter Serverfehler statt einer benannten Ablehnung.
  *
  * Geprueft wird rekursiv, einschliesslich der unbekannten Zusatzfelder von Elementen, die der Vertrag
  * bewusst unveraendert durchreicht, und einschliesslich der Objektschluessel.
  */
-export type UnstorableReason = 'nicht-endliche-zahl' | 'nul-zeichen' | 'einsames-surrogat'
+export type UnstorableReason =
+  | 'nicht-endliche-zahl'
+  | 'nul-zeichen'
+  | 'einsames-surrogat'
+  | 'zu-tiefe-struktur'
+
+/**
+ * Groesste zulaessige Verschachtelungstiefe eines Szenenwerts.
+ *
+ * Excalidraw-Szenen sind flach: Elemente stehen nebeneinander, tiefer als eine Punktliste in einem Element
+ * wird es nicht. Der Wert liegt weit darueber und weit unter der Grenze, an der `JSON.stringify` oder diese
+ * Rekursion selbst aufgeben.
+ */
+const MAX_SCENE_DEPTH = 256
 
 /** Ein Codepunkt aus dem Surrogatbereich, also eine Haelfte ohne ihr Gegenstueck. Ein Paar matcht nicht. */
 const LONE_SURROGATE = /\p{Cs}/u
@@ -193,7 +208,10 @@ function unstorableInText(value: string): UnstorableReason | null {
 }
 
 /** Der erste Grund, aus dem sich `value` nicht verlustfrei speichern laesst, oder `null`. */
-export function findUnstorableValue(value: unknown): UnstorableReason | null {
+export function findUnstorableValue(value: unknown, depth = 0): UnstorableReason | null {
+  if (depth > MAX_SCENE_DEPTH) {
+    return 'zu-tiefe-struktur'
+  }
   if (typeof value === 'number') {
     return isFiniteNumber(value) ? null : 'nicht-endliche-zahl'
   }
@@ -202,7 +220,7 @@ export function findUnstorableValue(value: unknown): UnstorableReason | null {
   }
   if (Array.isArray(value)) {
     for (const entry of value) {
-      const reason = findUnstorableValue(entry)
+      const reason = findUnstorableValue(entry, depth + 1)
       if (reason !== null) {
         return reason
       }
@@ -211,7 +229,7 @@ export function findUnstorableValue(value: unknown): UnstorableReason | null {
   }
   if (isRecord(value)) {
     for (const [key, entry] of Object.entries(value)) {
-      const reason = unstorableInText(key) ?? findUnstorableValue(entry)
+      const reason = unstorableInText(key) ?? findUnstorableValue(entry, depth + 1)
       if (reason !== null) {
         return reason
       }

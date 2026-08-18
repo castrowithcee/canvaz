@@ -642,6 +642,48 @@ describe('Szenenpersistenz', () => {
     expect((await loadScene(ada, board.id)).version).toBe(0)
   })
 
+  it('lehnt eine zu tief verschachtelte Szene ab, statt daran zu scheitern', async () => {
+    await signedInAs('root')
+    const ada = await signedInAs('ada')
+    const workspace = await createWorkspace(ada, 'Team Nord')
+    const board = await createBoard(ada, workspace.id, 'Board')
+    // Tiefer als jede echte Szene. Der Server lehnt ab, bevor er serialisiert - genau deshalb wird daraus
+    // eine benannte 400 statt des RangeError, an dem `JSON.stringify` bei einigen tausend Ebenen scheitert.
+    let tief: unknown = 1
+    for (let ebene = 0; ebene < 1_000; ebene += 1) {
+      tief = [tief]
+    }
+    const verschachtelt: SceneSnapshot = {
+      ...reicheSzene(board.id),
+      elements: [{ id: 'tief', version: 1, versionNonce: 1, kuenftigesFeld: tief }],
+    }
+
+    const response = await saveScene(ada, board.id, 0, verschachtelt)
+
+    // Benennen statt in einen unbenannten Serverfehler laufen - dieselbe Zusage wie bei NUL und Surrogat.
+    expect(response.status).toBe(400)
+    expect(await response.text()).toContain('verschachtelt')
+    expect((await loadScene(ada, board.id)).version).toBe(0)
+  })
+
+  it('nimmt eine gewoehnlich verschachtelte Szene weiterhin an', async () => {
+    await signedInAs('root')
+    const ada = await signedInAs('ada')
+    const workspace = await createWorkspace(ada, 'Team Nord')
+    const board = await createBoard(ada, workspace.id, 'Board')
+    let massvoll: unknown = 1
+    for (let ebene = 0; ebene < 32; ebene += 1) {
+      massvoll = { ebene, inhalt: [massvoll] }
+    }
+    const verschachtelt: SceneSnapshot = {
+      ...reicheSzene(board.id),
+      elements: [{ id: 'massvoll', version: 1, versionNonce: 1, kuenftigesFeld: massvoll }],
+    }
+
+    expect((await saveScene(ada, board.id, 0, verschachtelt)).status).toBe(200)
+    expect((await loadScene(ada, board.id)).scene?.elements[0]).toEqual(verschachtelt.elements[0])
+  })
+
   it('weist eine zu grosse Szene ab', async () => {
     await signedInAs('root')
     const ada = await signedInAs('ada')

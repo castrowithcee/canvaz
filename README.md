@@ -261,7 +261,10 @@ fuer den Anfragekoerper, sodass ein zu grosser Koerper nie vollstaendig im Speic
 kann in `jsonb` weder ein NUL-Zeichen noch ein einsames Surrogat speichern, und eine nicht endliche Zahl
 (`1e400` ist gueltiges JSON und wird beim Parsen zu `Infinity`) wuerde beim Serialisieren still zu `null`.
 Alle drei werden mit 400 abgelehnt, statt beim Schreiben zu scheitern oder den Wert unbemerkt zu veraendern;
-geprueft wird rekursiv, einschliesslich der durchgereichten Zusatzfelder von Elementen.
+geprueft wird rekursiv, einschliesslich der durchgereichten Zusatzfelder von Elementen. Aus demselben Grund
+ist die Verschachtelungstiefe auf 256 Ebenen begrenzt (`MAX_SCENE_DEPTH`): tiefer bricht `JSON.stringify`
+selbst mit einem `RangeError` ab, und daraus wuerde ein unbenannter Serverfehler statt einer benannten
+Ablehnung. Echte Szenen sind flach; die Grenze liegt weit ueber allem, was der Editor erzeugt.
 
 ### Editor und Content-Security-Policy
 

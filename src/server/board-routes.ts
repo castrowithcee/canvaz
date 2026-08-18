@@ -99,6 +99,7 @@ const UNSTORABLE: Readonly<Record<UnstorableReason, string>> = {
   'nicht-endliche-zahl': 'Die Szene enthaelt eine nicht endliche Zahl, die sich nicht speichern laesst',
   'nul-zeichen': 'Die Szene enthaelt ein nicht speicherbares Zeichen (NUL)',
   'einsames-surrogat': 'Die Szene enthaelt ein nicht speicherbares Zeichen (einsames Surrogat)',
+  'zu-tiefe-struktur': 'Die Szene ist zu tief verschachtelt, um sie zu speichern',
 }
 
 /**
@@ -456,16 +457,18 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
           sendError(response, 400, 'Die Szene entspricht nicht dem erwarteten Format')
           return
         }
-        const serialized = serializeSceneSnapshot(scene)
-        if (Buffer.byteLength(serialized) > context.config.maxSceneBytes) {
-          sendError(response, 413, 'Die Szene ist zu gross')
-          return
-        }
-        // Der geparste Snapshot, nicht der Anfragekoerper: geprueft wird genau das, was gespeichert wuerde -
+        // Vor dem Serialisieren: `JSON.stringify` selbst scheitert an zu tiefer Verschachtelung, und ein
+        // unbenannter Serverfehler waere genau das, was diese Pruefung verhindern soll. Geprueft wird der
+        // geparste Snapshot, nicht der Anfragekoerper - also genau das, was gespeichert wuerde,
         // einschliesslich der unbekannten Zusatzfelder, die der Vertrag unveraendert durchreicht.
         const unstorable = findUnstorableValue(scene)
         if (unstorable !== null) {
           sendError(response, 400, UNSTORABLE[unstorable])
+          return
+        }
+        const serialized = serializeSceneSnapshot(scene)
+        if (Buffer.byteLength(serialized) > context.config.maxSceneBytes) {
+          sendError(response, 413, 'Die Szene ist zu gross')
           return
         }
 
