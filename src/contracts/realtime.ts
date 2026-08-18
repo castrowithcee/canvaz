@@ -193,6 +193,8 @@ export type SceneChangeMessage = {
   readonly elements: readonly SyncElement[]
   readonly appState: PersistedAppState | null
   readonly fileIds: readonly string[]
+  /** Monotone Kennung der lokalen Aenderung; alte Clients duerfen das Feld noch auslassen. */
+  readonly clientChangeSequence?: number
 }
 
 export type PresenceMessage = {
@@ -272,6 +274,8 @@ export type SavedMessage = {
   readonly version: number
   /** ISO-8601. */
   readonly savedAt: string
+  /** Hoechste lokale Aenderungskennung dieser Verbindung, die in diesem Checkpoint enthalten ist. */
+  readonly clientChangeSequence?: number
 }
 
 export type LeftMessage = {
@@ -383,17 +387,36 @@ export function parseClientMessage(raw: string): ParsedClientMessage {
       const rawAppState = parsed['appState']
       const appState = rawAppState === null ? null : parsePersistedAppState(rawAppState)
       const fileIds = parseIdList(parsed['fileIds'], MAX_CHANGE_FILE_IDS)
+      const rawClientChangeSequence = parsed['clientChangeSequence']
       if (typeof boardId !== 'string' || boardId.length === 0 || elements === null || fileIds === null) {
         return INVALID
       }
       if (rawAppState !== null && appState === null) {
         return INVALID
       }
+      if (
+        rawClientChangeSequence !== undefined &&
+        (!isFiniteNumber(rawClientChangeSequence) ||
+          !Number.isInteger(rawClientChangeSequence) ||
+          rawClientChangeSequence < 0)
+      ) {
+        return INVALID
+      }
       if (elements.length > MAX_CHANGE_ELEMENTS) {
         // Bewusst eine Ablehnung statt einer Kappung: eine halbe Elementliste waere stiller Datenverlust.
         return { ok: false, code: 'zu-viele-elemente' }
       }
-      return { ok: true, message: { type: 'scene-change', boardId, elements, appState, fileIds } }
+      return {
+        ok: true,
+        message: {
+          type: 'scene-change',
+          boardId,
+          elements,
+          appState,
+          fileIds,
+          ...(rawClientChangeSequence === undefined ? {} : { clientChangeSequence: rawClientChangeSequence }),
+        },
+      }
     }
     case 'presence': {
       const boardId = parsed['boardId']

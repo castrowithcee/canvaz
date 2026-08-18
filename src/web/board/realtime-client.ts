@@ -98,6 +98,8 @@ export type RealtimeHandlers = {
 export type BoardRealtime = {
   /** Sammelt die Aenderung und verschickt sie mit dem naechsten Buendel. */
   sendChange(elements: readonly SyncElement[], appState: PersistedAppState | null, fileIds: readonly string[]): void
+  /** Hoechste lokale Aenderungskennung, die bereits zum Versand vorgemerkt wurde. */
+  lastChangeSequence(): number
   sendPresence(pointer: { readonly x: number; readonly y: number } | null, selectedElementIds: readonly string[]): void
   /** Bittet um den vollstaendigen Raumzustand. */
   requestSnapshot(): void
@@ -125,6 +127,8 @@ export function connectBoardRealtime(boardId: string, handlers: RealtimeHandlers
   const pendingElements = new Map<string, SyncElement>()
   let pendingAppState: PersistedAppState | null = null
   const pendingFileIds = new Set<string>()
+  let nextChangeSequence = 0
+  let pendingChangeSequence = 0
   type PendingPresence = {
     readonly pointer: { readonly x: number; readonly y: number } | null
     readonly selectedElementIds: readonly string[]
@@ -162,11 +166,20 @@ export function connectBoardRealtime(boardId: string, handlers: RealtimeHandlers
       for (const element of elements) {
         pendingElements.delete(element.id)
       }
-      post({ type: 'scene-change', boardId, elements, appState: pendingAppState, fileIds: [...pendingFileIds] })
+      post({
+        type: 'scene-change',
+        boardId,
+        elements,
+        appState: pendingAppState,
+        fileIds: [...pendingFileIds],
+        clientChangeSequence: pendingChangeSequence,
+      })
       pendingAppState = null
       pendingFileIds.clear()
       if (pendingElements.size > 0) {
         scheduleFlush()
+      } else {
+        pendingChangeSequence = 0
       }
     }
     if (pendingPresence !== null) {
@@ -303,6 +316,8 @@ export function connectBoardRealtime(boardId: string, handlers: RealtimeHandlers
 
   return {
     sendChange(elements, appState, fileIds): void {
+      nextChangeSequence += 1
+      pendingChangeSequence = nextChangeSequence
       for (const element of elements) {
         pendingElements.set(element.id, element)
       }
@@ -313,6 +328,9 @@ export function connectBoardRealtime(boardId: string, handlers: RealtimeHandlers
         pendingFileIds.add(fileId)
       }
       scheduleFlush()
+    },
+    lastChangeSequence(): number {
+      return nextChangeSequence
     },
     sendPresence(pointer, selectedElementIds): void {
       pendingPresence = { pointer, selectedElementIds }

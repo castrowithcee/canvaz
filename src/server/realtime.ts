@@ -115,7 +115,11 @@ export type RealtimeOptions = {
 }
 
 function reject(socket: Duplex, status: number, reason: string): void {
-  socket.write(`HTTP/1.1 ${String(status)} ${reason}\r\nConnection: close\r\n\r\n`)
+  // Die Gegenstelle kann zwischen Pruefung und Antwort laengst weg sein; ein Schreibfehler darf hier nicht
+  // aus der Ablehnung selbst einen Fehler machen.
+  if (socket.writable) {
+    socket.write(`HTTP/1.1 ${String(status)} ${reason}\r\nConnection: close\r\n\r\n`, () => undefined)
+  }
   socket.destroy()
 }
 
@@ -265,6 +269,13 @@ export function createRealtimeGateway(options: RealtimeOptions): RealtimeGateway
   return {
     attach(httpServer: Server): void {
       httpServer.on('upgrade', (request, socket, head) => {
+        // Node entfernt beim Ausloesen von `upgrade` seinen eigenen Fehlerzuhoerer vom Socket. Ohne den
+        // eigenen wuerde ein Verbindungsabbruch waehrend der Sitzungsaufloesung als unbehandeltes
+        // `error`-Ereignis den gesamten Prozess beenden - ausloesbar ohne jedes Konto.
+        socket.on('error', (error: unknown) => {
+          options.logger('warn', 'realtime.upgrade.socket-error', { reason: String(error) })
+          socket.destroy()
+        })
         void upgrade(request, socket, head).catch((error: unknown) => {
           options.logger('error', 'realtime.upgrade.failed', { reason: String(error) })
           reject(socket, 500, 'Internal Server Error')

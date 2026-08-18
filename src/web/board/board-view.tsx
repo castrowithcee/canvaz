@@ -148,6 +148,8 @@ export function BoardEditor({
   const blockedRef = useRef(false)
   /** Laufende Bilduploads. Solange einer offen ist, wird die Szene nicht gespeichert. */
   const uploadsRef = useRef(0)
+  /** Lokale Realtime-Kennung des letzten zum Server vorgemerkten Standes. */
+  const lastSentChangeSequenceRef = useRef(0)
   const clientRef = useRef<BoardRealtime | null>(null)
   /** Eigene fluechtige Kennung im Raum; sie trennt die anderen Teilnehmer vom eigenen Eintrag. */
   const selfRef = useRef<string | null>(null)
@@ -168,6 +170,7 @@ export function BoardEditor({
     setMountKey((current) => current + 1)
     blockedRef.current = false
     uploadsRef.current = 0
+    lastSentChangeSequenceRef.current = 0
     fetchBoardScene(boardId)
       .then((response) => {
         versionRef.current = response.version
@@ -231,7 +234,12 @@ export function BoardEditor({
     saveBoardScene(csrfToken, { boardId, baseVersion: versionRef.current, scene: snapshot })
       .then((response) => {
         versionRef.current = response.version
-        setSave({ kind: 'saved', at: new Date(response.savedAt) })
+        setSave((current) => {
+          if (current.kind === 'dirty' || current.kind === 'failed' || current.kind === 'conflict') {
+            return current
+          }
+          return { kind: 'saved', at: new Date(response.savedAt) }
+        })
       })
       .catch((cause: unknown) => {
         if (cause instanceof ApiError && cause.status === 409) {
@@ -240,9 +248,14 @@ export function BoardEditor({
           setSave({ kind: 'conflict' })
           return
         }
-        setSave({
-          kind: 'failed',
-          message: cause instanceof ApiError ? cause.message : 'Der Server war nicht erreichbar.',
+        setSave((current) => {
+          if (current.kind === 'dirty' || current.kind === 'conflict') {
+            return current
+          }
+          return {
+            kind: 'failed',
+            message: cause instanceof ApiError ? cause.message : 'Der Server war nicht erreichbar.',
+          }
         })
       })
   }, [adapter, boardId, csrfToken])
@@ -295,7 +308,11 @@ export function BoardEditor({
           .then((response) => {
             filesRef.current = { ...filesRef.current, [response.file.id]: response.file }
             // Erst jetzt darf der Raum die Datei kennen: vorher gaebe es zu der Kennung keinen Datensatz.
-            clientRef.current?.sendChange([], null, [response.file.id])
+            const client = clientRef.current
+            client?.sendChange([], null, [response.file.id])
+            if (client !== null) {
+              lastSentChangeSequenceRef.current = client.lastChangeSequence()
+            }
           })
           .catch((cause: unknown) => {
             setAssetProblem(
@@ -310,7 +327,11 @@ export function BoardEditor({
           })
       }
       if (liveRef.current) {
-        clientRef.current?.sendChange(change.changedElements, change.appState, [])
+        const client = clientRef.current
+        client?.sendChange(change.changedElements, change.appState, [])
+        if (client !== null) {
+          lastSentChangeSequenceRef.current = client.lastChangeSequence()
+        }
       }
       setSave((current) => (current.kind === 'conflict' ? current : { kind: 'dirty' }))
     })
@@ -370,6 +391,7 @@ export function BoardEditor({
         // entscheidet danach je Element; ein aelterer Stand kann keinen neueren verdraengen.
         if (message.canWrite && adapter !== null) {
           client.sendChange(adapter.getElements(), adapter.getAppState(), [])
+          lastSentChangeSequenceRef.current = client.lastChangeSequence()
         }
       },
       onSnapshot(message): void {
@@ -382,6 +404,12 @@ export function BoardEditor({
         if (message.appState !== null) {
           adapter?.applyRemoteAppState(message.appState)
         }
+        setSave((current) => {
+          if (current.kind === 'conflict' || current.kind === 'dirty') {
+            return current
+          }
+          return { kind: 'saving' }
+        })
         for (const file of message.files) {
           filesRef.current = { ...filesRef.current, [file.id]: file }
           fetchBoardAssetDataUrl(boardId, file.id)
@@ -402,10 +430,24 @@ export function BoardEditor({
       },
       onAccess(erlaubt): void {
         setCanWrite(erlaubt)
+        if (!erlaubt) {
+          // `saving` kann hier nur der Checkpoint eines Mitbearbeiters sein; eigene Aenderungen stehen als
+          // `dirty` da und bleiben deshalb sichtbar, wenn das Schreibrecht entzogen wird.
+          setSave((current) => (current.kind === 'saving' ? { kind: 'idle' } : current))
+        }
       },
       onSaved(message): void {
         versionRef.current = message.version
-        setSave((current) => (current.kind === 'conflict' ? current : { kind: 'saved', at: new Date(message.savedAt) }))
+        const savedSequence = message.clientChangeSequence ?? 0
+        setSave((current) => {
+          if (savedSequence < lastSentChangeSequenceRef.current) {
+            return current.kind === 'conflict' ? current : { kind: 'dirty' }
+          }
+          if (current.kind === 'conflict') {
+            return current
+          }
+          return { kind: 'saved', at: new Date(message.savedAt) }
+        })
       },
       onError(message): void {
         if (message.code === 'board-nicht-gefunden') {
@@ -415,7 +457,13 @@ export function BoardEditor({
         // Jede Ablehnung ist benannt und wird benannt gezeigt. Nur wo die Zeichnung dadurch **nicht**
         // angekommen ist, wird zusaetzlich der Speicherstatus auf gescheitert gesetzt.
         setRejected(message.message)
-        if (message.code === 'nicht-speicherbar' || message.code === 'raum-zu-gross' || message.code === 'zu-viele-elemente') {
+        if (message.code === 'kein-schreibrecht') {
+          setSave((current) =>
+            current.kind === 'dirty' || current.kind === 'failed'
+              ? { kind: 'failed', message: message.message }
+              : current,
+          )
+        } else if (message.code === 'nicht-speicherbar' || message.code === 'raum-zu-gross' || message.code === 'zu-viele-elemente') {
           setSave({ kind: 'failed', message: message.message })
         }
       },
@@ -472,7 +520,9 @@ export function BoardEditor({
       <header className="board__bar">
         <h2 className="board__title">{state.loaded.board.title}</h2>
         <p className="board__state" role="status">
-          {viewOnly ? 'Nur Lesen: keine Schreibberechtigung.' : saveMessage(save)}
+          {viewOnly && (save.kind === 'idle' || save.kind === 'saved')
+            ? 'Nur Lesen: keine Schreibberechtigung.'
+            : saveMessage(save)}
         </p>
         <p className="board__state" role="status">
           {connectionMessage(connection, attempt, resyncedAt)}

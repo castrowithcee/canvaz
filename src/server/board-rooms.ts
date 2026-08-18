@@ -180,6 +180,8 @@ type Room = {
   /** Zuletzt **persistierte** Version. Der Raum kennt keine eigene Zaehlung. */
   version: number
   dirty: boolean
+  /** Zaehler aller seit dem Laden angenommenen Zustandsaenderungen. */
+  changeSequence: number
   saving: boolean
   /** Zeitpunkt der ersten unpersistierten Aenderung; Grundlage der Obergrenze des Takts. */
   firstDirtyAt: number | null
@@ -207,6 +209,8 @@ type Participant = {
    * bekommt diese Verbindung einen vollstaendigen `snapshot` - nicht die verpassten Teilstuecke.
    */
   needsResync: boolean
+  /** Hoechste lokale Aenderungskennung, die diese Verbindung angenommen bekommen hat. */
+  lastAcceptedChangeSequence: number
   /** Eimer der Nachrichtenrate: verbleibende Marken und Zeitpunkt der letzten Nachfuellung. */
   tokens: number
   refilledAt: number
@@ -405,29 +409,61 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
    * Stand zuerst in den Raum zusammengefuehrt und erst danach die naechste Version geschrieben. Die
    * Reconciliation entscheidet dabei je Element, nicht der Zeitpunkt der Speicherung.
    */
+  /**
+   * Wer den naechsten Checkpoint schreibt.
+   *
+   * Der letzte Beitragende zuerst, danach die uebrigen Teilnehmer mit Schreibrecht. **Der Checkpoint darf
+   * nicht an einer einzelnen Person haengen:** verliert genau der letzte Beitragende sein Recht, waere sonst
+   * die bereits angenommene Arbeit aller anderen mit verloren, obwohl niemand sonst ein Recht eingebuesst
+   * hat. Die Berechtigung jedes Kandidaten wird trotzdem unter der Zeilensperre erneut geprueft.
+   */
+  function checkpointAuthors(room: Room): readonly AuthenticatedSession['user'][] {
+    const authors: AuthenticatedSession['user'][] = []
+    const seen = new Set<string>()
+    for (const candidate of [room.lastAuthor, ...[...room.participants].map((entry) => entry.auth.user)]) {
+      if (candidate !== null && !seen.has(candidate.id)) {
+        seen.add(candidate.id)
+        authors.push(candidate)
+      }
+    }
+    return authors
+  }
+
   async function checkpoint(room: Room): Promise<void> {
     if (!room.dirty || room.saving || room.lastAuthor === null) {
       return
     }
-    const author = room.lastAuthor
+    const authors = checkpointAuthors(room)
+    let reschedule = false
     room.saving = true
     try {
       const result = await store.transaction(async (tx) => {
-        const access = await tx.boards.findForUpdate(room.boardId, author.id)
-        if (access === null) {
-          return { kind: 'denied', reason: 'not-visible' } as const
+        let author: AuthenticatedSession['user'] | null = null
+        let access: Awaited<ReturnType<typeof tx.boards.findForUpdate>> = null
+        let reason = 'not-visible'
+        for (const candidate of authors) {
+          const found = await tx.boards.findForUpdate(room.boardId, candidate.id)
+          if (found === null) {
+            continue
+          }
+          // Dieselbe Entscheidung wie in der HTTP-Route, mit demselben Subjekt aus Nutzer und
+          // Workspacerolle. Die Rolle wird hier frisch unter der Zeilensperre gelesen; eine Deaktivierung
+          // schliesst die Verbindung bereits ueber die Sitzungsebene.
+          const decision = decideBoardAccess(
+            { user: candidate, workspaceRole: found.role },
+            found.workspace,
+            found.board,
+            'scene:write',
+          )
+          if (decision.allowed) {
+            author = candidate
+            access = found
+            break
+          }
+          reason = decision.reason
         }
-        // Dieselbe Entscheidung wie in der HTTP-Route, mit demselben Subjekt aus Nutzer und Workspacerolle.
-        // Die Rolle wird hier frisch unter der Zeilensperre gelesen; eine Deaktivierung schliesst die
-        // Verbindung bereits ueber die Sitzungsebene.
-        const decision = decideBoardAccess(
-          { user: author, workspaceRole: access.role },
-          access.workspace,
-          access.board,
-          'scene:write',
-        )
-        if (!decision.allowed) {
-          return { kind: 'denied', reason: decision.reason } as const
+        if (author === null || access === null) {
+          return { kind: 'denied', reason } as const
         }
         if (access.board.sceneVersion !== room.version) {
           // Zwischen zwei Checkpoints wurde ueber die HTTP-API gespeichert. Der fremde Stand kommt zuerst in
@@ -442,24 +478,49 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
           room.version = access.board.sceneVersion
         }
         const version = room.version + 1
+        const snapshotSequence = room.changeSequence
+        const clientChangeSequences = new Map(
+          [...room.participants].map((participant) => [participant.clientId, participant.lastAcceptedChangeSequence]),
+        )
         const snapshot = snapshotOf(room, now().getTime())
         const saved = await tx.scenes.append(room.boardId, version, snapshot, author.id)
         await tx.boards.setSceneVersion(room.boardId, version)
         await tx.scenes.prune(room.boardId, SCENE_VERSION_RETENTION)
-        return { kind: 'saved', version, savedAt: saved.createdAt } as const
+        return { kind: 'saved', version, savedAt: saved.createdAt, snapshotSequence, clientChangeSequences } as const
       })
       if (result.kind === 'denied') {
-        // Der Zustand bleibt unpersistiert und der Raum bleibt "dirty". Ein neuer Checkpoint entsteht erst
-        // wieder mit der naechsten angenommenen Aenderung - also erst, wenn wieder jemand schreiben darf.
+        // Kein Teilnehmer darf mehr schreiben - etwa weil das Board inzwischen archiviert wurde. Der Zustand
+        // bleibt unpersistiert, aber nicht still: die Teilnehmer erfahren es, statt weiterzuzeichnen und den
+        // Verlust erst beim naechsten Oeffnen zu bemerken.
         logger('warn', 'board.checkpoint.denied', { boardId: room.boardId, reason: result.reason })
+        for (const participant of [...room.participants]) {
+          deliver(participant, {
+            type: 'error',
+            code: 'kein-schreibrecht',
+            message: REALTIME_ERROR_MESSAGES['kein-schreibrecht'],
+          })
+        }
         return
       }
       room.version = result.version
-      room.dirty = false
-      room.firstDirtyAt = null
-      const savedAt = result.savedAt.toISOString()
-      for (const participant of [...room.participants]) {
-        deliver(participant, { type: 'saved', boardId: room.boardId, version: result.version, savedAt })
+      const changedDuringCheckpoint = room.changeSequence !== result.snapshotSequence
+      if (changedDuringCheckpoint) {
+        // Der gespeicherte Snapshot ist korrekt, aber der Raum traegt bereits einen neueren Stand. Ein
+        // `saved` waere fuer diesen Stand irrefuehrend; der naechste Checkpoint muss ihn ebenfalls sichern.
+        reschedule = true
+      } else {
+        room.dirty = false
+        room.firstDirtyAt = null
+        const savedAt = result.savedAt.toISOString()
+        for (const participant of [...room.participants]) {
+          deliver(participant, {
+            type: 'saved',
+            boardId: room.boardId,
+            version: result.version,
+            savedAt,
+            clientChangeSequence: result.clientChangeSequences.get(participant.clientId) ?? 0,
+          })
+        }
       }
       logger('info', 'board.checkpoint.saved', { boardId: room.boardId, version: result.version })
     } catch (error) {
@@ -472,6 +533,9 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
       scheduleCheckpoint(room)
     } finally {
       room.saving = false
+      if (reschedule && room.dirty) {
+        scheduleCheckpoint(room)
+      }
     }
   }
 
@@ -499,6 +563,7 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
       appStateBytes: 0,
       version: latest?.version ?? 0,
       dirty: false,
+      changeSequence: 0,
       saving: false,
       firstDirtyAt: null,
       lastAuthor: null,
@@ -738,11 +803,16 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
       room.appState = message.appState
     }
     const files = await resolveFiles(room, message.fileIds)
+    participant.lastAcceptedChangeSequence = Math.max(
+      participant.lastAcceptedChangeSequence,
+      message.clientChangeSequence ?? 0,
+    )
     if (appliedIds.size === 0 && !appStateChanged && files.length === 0) {
       // Eine verspaetete Nachricht mit aelterer Version aendert nichts und wird auch nicht weitergegeben.
       return
     }
     room.dirty = true
+    room.changeSequence += 1
     room.firstDirtyAt ??= now().getTime()
     room.lastAuthor = participant.auth.user
     scheduleCheckpoint(room)
@@ -837,9 +907,17 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
         leaveRoom(participant)
         deliver(participant, { type: 'left', boardId: room.boardId })
         return
-      case 'resync':
+      case 'resync': {
+        // Ein `resync` liefert den vollstaendigen Boardzustand. Er wird deshalb wie ein Beitritt behandelt
+        // und frisch autorisiert, statt sich auf die Pruefung beim Beitritt zu verlassen.
+        const permission = await resolveAccess(participant.auth, room.boardId)
+        if (!permission.read) {
+          revoke(participant)
+          return
+        }
         sendSnapshot(participant, room)
         return
+      }
       case 'presence':
         // Presence aendert den Boardzustand nicht; sie setzt Raummitgliedschaft voraus, die beim Beitritt
         // geprueft und durch den Wiederholungslauf laufend bestaetigt wird.
@@ -871,6 +949,9 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
           participant.canWrite = permission.write
           deliver(participant, { type: 'access', boardId: room.boardId, canWrite: permission.write })
           schedulePresence(room)
+          if (permission.write && room.dirty) {
+            scheduleCheckpoint(room)
+          }
         }
         // Derselbe Lauf loest den Rueckstau auf: wessen Puffer wieder frei ist, bekommt den vollstaendigen
         // Stand nachgeliefert. Ein eigener Taktgeber dafuer waere ein zweiter Timer fuer dieselbe Runde.
@@ -899,6 +980,7 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
         pointer: null,
         selectedElementIds: [],
         needsResync: false,
+        lastAcceptedChangeSequence: 0,
         tokens: messageBurst,
         refilledAt: now().getTime(),
         dropped: 0,
