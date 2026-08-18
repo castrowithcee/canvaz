@@ -3,15 +3,23 @@ import globals from 'globals'
 import tseslint from 'typescript-eslint'
 
 export default tseslint.config(
-  { ignores: ['dist', 'node_modules', 'playwright-report', 'test-results', 'spike/server/.data'] },
+  { ignores: ['dist', 'node_modules', 'playwright-report', 'test-results'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ['spike/client/**/*.{ts,tsx}'],
+    files: ['src/web/**/*.{ts,tsx}'],
     languageOptions: { globals: globals.browser },
   },
   {
-    files: ['spike/server/**/*.ts', 'spike/tests/**/*.ts', 'spike/e2e/**/*.ts', '*.ts', '*.js'],
+    files: [
+      'src/server/**/*.ts',
+      'src/persistence/**/*.ts',
+      'src/domain/**/*.ts',
+      'src/contracts/**/*.ts',
+      'tests/**/*.ts',
+      '*.ts',
+      '*.js',
+    ],
     languageOptions: { globals: globals.node },
   },
 )
