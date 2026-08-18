@@ -1,18 +1,6 @@
 version: 2
 
 updates:
-  - package-ecosystem: npm
-    directory: /
-    schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 10
-    groups:
-      npm-non-breaking:
-        update-types:
-          - minor
-          - patch
-
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -21,18 +9,6 @@ updates:
     open-pull-requests-limit: 10
     groups:
       github-actions-non-breaking:
-        update-types:
-          - minor
-          - patch
-
-  - package-ecosystem: docker
-    directory: /
-    schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 5
-    groups:
-      docker-non-breaking:
         update-types:
           - minor
           - patch

@@ -31,13 +31,32 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Detect JavaScript or TypeScript source
+        id: detect-source
+        shell: bash
+        run: |
+          if find . -type f \
+            \( -name '*.js' -o -name '*.jsx' -o -name '*.mjs' -o -name '*.cjs' \
+            -o -name '*.ts' -o -name '*.tsx' \) \
+            -not -path './.git/*' -print -quit | grep -q .; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip CodeQL without source
+        if: ${{ steps.detect-source.outputs.present != 'true' }}
+        run: echo 'No JavaScript or TypeScript source yet; CodeQL activates with the first source file.'
+
       - name: Initialize CodeQL
+        if: ${{ steps.detect-source.outputs.present == 'true' }}
         uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build_mode }}
 
       - name: Analyze
+        if: ${{ steps.detect-source.outputs.present == 'true' }}
         uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: /language:${{ matrix.language }}
