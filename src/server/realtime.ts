@@ -22,12 +22,27 @@ import type { WebSocket } from 'ws'
 import { REALTIME_PATH } from '../contracts/api.js'
 import type { AuthenticatedSession, SessionId, UserId } from '../domain/identity/model.js'
 import type { IdentityStore } from '../domain/identity/repositories.js'
+import type { WorkspaceId, WorkspaceRole } from '../domain/workspace/model.js'
+import type { WorkspaceStore } from '../domain/workspace/repositories.js'
 import type { AppConfig } from './config.js'
 import type { Logger } from './log.js'
 import { resolveSession } from './session.js'
 
 /** Anwendungsdefinierter Schliessgrund: die Sitzung wurde serverseitig ungueltig. */
 export const SESSION_REVOKED_CLOSE_CODE = 4401
+
+/**
+ * Andockpunkt fuer die spaetere Realtime-Strecke.
+ *
+ * Es gibt bewusst noch kein Raumkonzept: eine Verbindung gehoert zu einer Sitzung, nicht zu einem Board.
+ * Damit ein spaeterer Boardraum die Workspacezugehoerigkeit pruefen kann, bekommt `onConnection` diese
+ * Abfrage mit. Sie liest bei **jedem** Aufruf frisch aus der Datenbank und speichert nichts zwischen -
+ * deshalb wirkt ein Mitgliedschaftsentzug sowohl auf neue Verbindungen als auch auf jeden spaeteren Beitritt
+ * einer bestehenden Verbindung.
+ */
+export type WorkspaceScope = {
+  role(workspaceId: WorkspaceId): Promise<WorkspaceRole | null>
+}
 
 export type RealtimeGateway = {
   attach(server: Server): void
@@ -52,11 +67,12 @@ const DEFAULT_EXPIRY_CHECK_INTERVAL_MS = 60_000
 export type RealtimeOptions = {
   readonly config: AppConfig
   readonly identity: IdentityStore
+  readonly workspaces: WorkspaceStore
   readonly logger: Logger
   readonly now: () => Date
   readonly expiryCheckIntervalMs?: number
   /** Haken fuer die Realtime-Strecke. Ohne ihn bleibt die Verbindung offen und stumm. */
-  readonly onConnection?: (socket: WebSocket, auth: AuthenticatedSession) => void
+  readonly onConnection?: (socket: WebSocket, auth: AuthenticatedSession, scope: WorkspaceScope) => void
 }
 
 function reject(socket: Duplex, status: number, reason: string): void {
@@ -108,7 +124,13 @@ export function createRealtimeGateway(options: RealtimeOptions): RealtimeGateway
       options.logger('info', 'realtime.upgrade.accepted', { userId: auth.user.id })
       // Minimale Bestaetigung statt Protokoll: der Client weiss, dass er autorisiert verbunden ist.
       webSocket.send(JSON.stringify({ type: 'ready', userId: auth.user.id }))
-      options.onConnection?.(webSocket, auth)
+      const scope: WorkspaceScope = {
+        async role(workspaceId: WorkspaceId): Promise<WorkspaceRole | null> {
+          const access = await options.workspaces.workspaces.findForUser(workspaceId, auth.user.id)
+          return access?.role ?? null
+        },
+      }
+      options.onConnection?.(webSocket, auth, scope)
     })
   }
 

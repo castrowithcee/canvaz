@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { LoginErrorCode, MeResponse, UserView } from '../contracts/api.js'
 import { AUTH_LOGIN_PATH, LOGIN_ERROR_PARAM } from '../contracts/api.js'
 import { ApiError, fetchAdminUsers, fetchMe, logout, setUserStatus } from './api.js'
+import { Workspaces } from './workspaces.js'
 
 const LOGIN_ERROR_TEXTS: Readonly<Record<LoginErrorCode, string>> = {
   abgebrochen: 'Die Anmeldung wurde beim Identity Provider abgebrochen.',
@@ -199,7 +200,7 @@ function Shell({ me, onSignedOut }: { readonly me: MeResponse; readonly onSigned
         </p>
       )}
       <main>
-        <p>Die Anmeldung steht. Arbeitsbereiche und Boards folgen.</p>
+        <Workspaces me={me} />
         {me.user.isSystemAdmin && <AdminUsers me={me} />}
       </main>
     </div>

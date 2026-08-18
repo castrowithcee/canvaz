@@ -42,7 +42,7 @@ afterAll(async () => {
 })
 
 beforeEach(async () => {
-  await pool.query('truncate users cascade')
+  await pool.query('truncate users, workspaces cascade')
 })
 
 async function createUser(displayName: string, email: string | null = null) {

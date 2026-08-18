@@ -143,9 +143,12 @@ export function createRequestListener(routes: readonly Route[], webRoot: string)
     void (async () => {
       const url = new URL(request.url ?? '/', 'http://localhost')
       const method = request.method ?? 'GET'
-      const route = routes.find((candidate) => candidate.path === url.pathname)
-      if (route !== undefined) {
-        if (route.method !== method) {
+      // Erst nach Pfad, dann nach Methode: derselbe Pfad kann mehrere Methoden tragen (`/api/workspaces`
+      // listet und legt an), und ein bekannter Pfad mit falscher Methode bleibt eine 405.
+      const candidates = routes.filter((candidate) => candidate.path === url.pathname)
+      if (candidates.length > 0) {
+        const route = candidates.find((candidate) => candidate.method === method)
+        if (route === undefined) {
           sendError(response, 405, 'Methode nicht erlaubt')
           return
         }
