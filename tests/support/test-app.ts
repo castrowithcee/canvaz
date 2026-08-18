@@ -22,6 +22,8 @@ import { createBoardStore } from '../../src/persistence/board-store.js'
 import { createIdentityStore } from '../../src/persistence/identity-store.js'
 import { createWorkspaceStore } from '../../src/persistence/workspace-store.js'
 import { createRoutes } from '../../src/server/app.js'
+import { createBoardRooms } from '../../src/server/board-rooms.js'
+import type { BoardRoomOptions, BoardRooms } from '../../src/server/board-rooms.js'
 import { loadConfig } from '../../src/server/config.js'
 import type { AppContext } from '../../src/server/context.js'
 import { createRequestListener } from '../../src/server/http.js'
@@ -40,6 +42,7 @@ export type TestApp = {
   readonly workspaces: WorkspaceStore
   readonly boards: BoardStore
   readonly realtime: RealtimeGateway
+  readonly rooms: BoardRooms
   readonly logs: readonly LogEntry[]
   clearLogs(): void
   /** Verschiebt die Uhr der Anwendung; `null` stellt die echte Zeit wieder her. */
@@ -54,8 +57,10 @@ export async function startTestApp(options: {
   readonly pool: Pool
   readonly databaseUrl: string
   readonly sessionTtlHours?: number
-  /** Haken der spaeteren Realtime-Strecke; der Test nutzt ihn, um den Andockpunkt zu pruefen. */
+  /** Ersetzt die Boardraeume; nur der Test des Andockpunkts nutzt das. */
   readonly onConnection?: RealtimeOptions['onConnection']
+  /** Kurze Takte fuer Checkpoint, Presence und Berechtigungspruefung. */
+  readonly rooms?: Omit<BoardRoomOptions, 'boards' | 'logger' | 'now'>
   /**
    * Storage-Umgebung. Ohne Angabe laeuft der Dateisystem-Adapter in einem Verzeichnis unter `tmpdir()`.
    * Der Assettest reicht hier die Werte beider Adapter herein - der Anwendungscode bleibt derselbe.
@@ -94,6 +99,7 @@ export async function startTestApp(options: {
   const store = createIdentityStore(options.pool)
   const workspaces = createWorkspaceStore(options.pool)
   const boards = createBoardStore(options.pool)
+  const rooms = createBoardRooms({ boards, logger, now, ...options.rooms })
   // Kurzer Abstand der Ablaufpruefung: der Test soll auf das Schliessen nicht eine Minute warten.
   const realtime = createRealtimeGateway({
     config,
@@ -102,7 +108,7 @@ export async function startTestApp(options: {
     logger,
     now,
     expiryCheckIntervalMs: 25,
-    ...(options.onConnection === undefined ? {} : { onConnection: options.onConnection }),
+    onConnection: options.onConnection ?? rooms.onConnection,
   })
   const context: AppContext = {
     config,
@@ -126,6 +132,7 @@ export async function startTestApp(options: {
     workspaces,
     boards,
     realtime,
+    rooms,
     logs,
     clearLogs(): void {
       logs.length = 0
@@ -134,6 +141,7 @@ export async function startTestApp(options: {
       frozenNow = value
     },
     async close(): Promise<void> {
+      await rooms.close()
       await realtime.close()
       await new Promise<void>((resolve) => {
         server.close(() => {

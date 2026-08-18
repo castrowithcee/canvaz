@@ -21,7 +21,7 @@ import type { ReactElement } from 'react'
 import type { BinaryFileRef, PersistedAppState, SceneSnapshot, SyncElement } from '../../contracts/scene.js'
 import { DEFAULT_APP_STATE } from '../../contracts/scene.js'
 import { reconcileElements } from '../../domain/board/reconcile.js'
-import type { BoardEditorPort, EditorPeer, LocalChange } from './board-editor-port.js'
+import type { BoardEditorPort, EditorPeer, LocalChange, LocalPresence } from './board-editor-port.js'
 
 /** Excalidraws eigener Rasterabstand, wenn der Boardzustand kein Raster vorgibt. */
 const EXCALIDRAW_DEFAULT_GRID_SIZE = 20
@@ -60,6 +60,7 @@ function samePersistedAppState(left: PersistedAppState, right: PersistedAppState
 export class ExcalidrawBoardAdapter implements BoardEditorPort {
   readonly #api: ExcalidrawImperativeAPI
   readonly #listeners = new Set<(change: LocalChange) => void>()
+  readonly #presenceListeners = new Set<(presence: LocalPresence) => void>()
   readonly #sentVersions = new Map<string, number>()
   readonly #knownFileIds = new Set<string>()
   #unsubscribe: (() => void) | null = null
@@ -194,11 +195,38 @@ export class ExcalidrawBoardAdapter implements BoardEditorPort {
     for (const peer of peers) {
       const collaborator: Collaborator = {
         username: `${peer.displayName}${peer.readOnly ? ' (nur Lesen)' : ''}`,
+        selectedElementIds: Object.fromEntries(peer.selectedElementIds.map((id) => [id, true])),
         ...(peer.pointer === null ? {} : { pointer: { x: peer.pointer.x, y: peer.pointer.y, tool: 'pointer' as const } }),
       }
       collaborators.set(peer.clientId as SocketId, collaborator)
     }
     this.#api.updateScene({ collaborators, captureUpdate: CaptureUpdateAction.NEVER })
+  }
+
+  /**
+   * Meldet den eigenen Zeigezustand.
+   *
+   * Wird von der Zeichenflaeche in Bewegungsrate aufgerufen. Der Adapter buendelt bewusst nicht: das ist
+   * eine Frage des Uebertragungswegs und gehoert zum Realtime-Client, nicht zum Editor.
+   */
+  reportPointer(pointer: LocalPresence['pointer']): void {
+    if (this.#presenceListeners.size === 0) {
+      return
+    }
+    const presence: LocalPresence = {
+      pointer,
+      selectedElementIds: Object.keys(this.#api.getAppState().selectedElementIds),
+    }
+    for (const listener of this.#presenceListeners) {
+      listener(presence)
+    }
+  }
+
+  onPointerChange(listener: (presence: LocalPresence) => void): () => void {
+    this.#presenceListeners.add(listener)
+    return () => {
+      this.#presenceListeners.delete(listener)
+    }
   }
 
   setReadOnly(readOnly: boolean): void {
@@ -251,6 +279,11 @@ export function BoardCanvas({
   )
   return createElement(Excalidraw, {
     excalidrawAPI: handleApi,
+    // Der Zeiger kommt ueber einen eigenen Rueckruf und nicht ueber `onChange`: er ist fluechtig und darf
+    // weder eine Speicherung noch eine Aenderungsmeldung ausloesen.
+    onPointerUpdate: ({ pointer }: { readonly pointer: { readonly x: number; readonly y: number } }) => {
+      adapter.current?.reportPointer({ x: pointer.x, y: pointer.y })
+    },
     viewModeEnabled: viewMode,
     langCode: 'de-DE',
     initialData: {

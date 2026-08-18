@@ -120,7 +120,7 @@ function parseBinaryFileRef(value: unknown): BinaryFileRef | null {
   return { id, mimeType, created, byteSize, storageKey }
 }
 
-function parseAppState(value: unknown): PersistedAppState | null {
+export function parsePersistedAppState(value: unknown): PersistedAppState | null {
   if (!isRecord(value)) {
     return null
   }
@@ -150,7 +150,7 @@ export function parseSceneSnapshot(value: unknown): SceneSnapshot | null {
     return null
   }
   const elements = parseSyncElements(value['elements'])
-  const appState = parseAppState(value['appState'])
+  const appState = parsePersistedAppState(value['appState'])
   if (elements === null || appState === null) {
     return null
   }

@@ -5,10 +5,16 @@
  * Szenenvertrag. Sie haelt drei Dinge zusammen: den geladenen Stand, die Ausgangsversion der naechsten
  * Speicherung und den sichtbaren Zustand von Laden und Speichern.
  *
- * Gespeichert wird verzoegert nach der letzten Aenderung und auf Knopfdruck. Ein Konflikt (409) beendet das
- * automatische Speichern: einfach mit der neuen Ausgangsversion weiterzumachen waere genau das stille
- * Ueberschreiben, das die Versionspruefung verhindern soll. Die Aufloesung entscheidet der Mensch, bis
- * Issue 5 die Zusammenfuehrung mehrerer Bearbeiter bringt.
+ * Es gibt zwei Wege, wie eine Zeichnung sicher wird, und immer nur einen davon zugleich:
+ *
+ * - **Live verbunden**: Aenderungen gehen an den Boardraum, der sie verteilt und getaktet persistiert. Der
+ *   Speicherstatus kommt dann vom Server (`saved`), nicht aus einer eigenen Speicherung.
+ * - **Nicht verbunden**: die verzoegerte Speicherung ueber die HTTP-API uebernimmt wieder. Ein Konflikt
+ *   (409) beendet das automatische Speichern - einfach mit der neuen Ausgangsversion weiterzumachen waere
+ *   genau das stille Ueberschreiben, das die Versionspruefung verhindern soll.
+ *
+ * Damit fuehrt ein Verbindungsverlust nie zu stillem Datenverlust: er ist sichtbar, und die Zeichnung wird
+ * weiter gesichert.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -17,11 +23,14 @@ import type { ReactNode } from 'react'
 import '@excalidraw/excalidraw/index.css'
 
 import type { BoardView } from '../../contracts/api.js'
+import type { PresenceView } from '../../contracts/realtime.js'
 import type { BinaryFileRef, SceneSnapshot } from '../../contracts/scene.js'
 import { SCENE_SCHEMA_VERSION } from '../../contracts/scene.js'
 import { ApiError, fetchBoardAssetDataUrl, fetchBoardScene, saveBoardScene, uploadBoardAsset } from '../api.js'
-import type { BoardEditorPort } from './board-editor-port.js'
+import type { BoardEditorPort, EditorPeer } from './board-editor-port.js'
 import { BoardCanvas } from './excalidraw-adapter.js'
+import { connectBoardRealtime } from './realtime-client.js'
+import type { BoardRealtime, RealtimeStatus } from './realtime-client.js'
 
 /** Ruhezeit nach der letzten Aenderung, bevor gespeichert wird. */
 const AUTOSAVE_DELAY_MS = 1_500
@@ -46,6 +55,25 @@ type SaveState =
   | { readonly kind: 'saved'; readonly at: Date }
   | { readonly kind: 'conflict' }
   | { readonly kind: 'failed'; readonly message: string }
+
+/** Presence des Servers wird zu dem, was der Editor darstellen kann - ohne den eigenen Eintrag. */
+function fremdePeers(peers: readonly PresenceView[], selbst: string | null): readonly EditorPeer[] {
+  return peers
+    .filter((peer) => peer.clientId !== selbst)
+    .map((peer) => ({
+      clientId: peer.clientId,
+      displayName: peer.displayName,
+      readOnly: !peer.canWrite,
+      pointer: peer.pointer,
+      selectedElementIds: peer.selectedElementIds,
+    }))
+}
+
+const CONNECTION_TEXTS: Readonly<Record<RealtimeStatus, string>> = {
+  verbindet: 'Verbindung wird aufgebaut …',
+  verbunden: 'Live verbunden.',
+  getrennt: 'Nicht live verbunden. Aenderungen werden ueber die Speicherung gesichert.',
+}
 
 function saveMessage(state: SaveState): string {
   switch (state.kind) {
@@ -78,6 +106,10 @@ export function BoardEditor({
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
   const [save, setSave] = useState<SaveState>({ kind: 'idle' })
   const [adapter, setAdapter] = useState<BoardEditorPort | null>(null)
+  const [connection, setConnection] = useState<RealtimeStatus>('verbindet')
+  /** Vom Server aufgeloestes Schreibrecht. Bis zum Beitritt entscheidet allein der geladene Boardzustand. */
+  const [canWrite, setCanWrite] = useState(true)
+  const [peers, setPeers] = useState<readonly EditorPeer[]>([])
   /** Meldung ueber ein Bild, das nicht hochgeladen oder nicht geladen werden konnte. */
   const [assetProblem, setAssetProblem] = useState<string | null>(null)
   /** Erzwingt eine frische Zeichenflaeche beim Neuladen; sonst blieben verworfene Elemente stehen. */
@@ -89,12 +121,20 @@ export function BoardEditor({
   const blockedRef = useRef(false)
   /** Laufende Bilduploads. Solange einer offen ist, wird die Szene nicht gespeichert. */
   const uploadsRef = useRef(0)
+  const clientRef = useRef<BoardRealtime | null>(null)
+  /** Eigene fluechtige Kennung im Raum; sie trennt die anderen Teilnehmer vom eigenen Eintrag. */
+  const selfRef = useRef<string | null>(null)
+  /** Spiegel von `live` fuer die Rueckrufe des Editors, die nicht neu aufgebaut werden sollen. */
+  const liveRef = useRef(false)
 
   const load = useCallback(() => {
     setState({ kind: 'loading' })
     setSave({ kind: 'idle' })
     setAssetProblem(null)
     setAdapter(null)
+    setConnection('verbindet')
+    setCanWrite(true)
+    setPeers([])
     setMountKey((current) => current + 1)
     blockedRef.current = false
     uploadsRef.current = 0
@@ -125,8 +165,13 @@ export function BoardEditor({
 
   useEffect(load, [load])
 
+  // Der Server entscheidet; die Oberflaeche folgt ihm. `canWrite` kommt aus dem Raum und beruht auf
+  // derselben Policy wie die HTTP-API.
   const viewOnly =
-    workspaceArchived || (state.kind === 'ready' && state.loaded.board.status === 'archived')
+    workspaceArchived || !canWrite || (state.kind === 'ready' && state.loaded.board.status === 'archived')
+  /** Live heisst: der Raum nimmt Aenderungen an und persistiert sie. Dann speichert die Ansicht nicht selbst. */
+  const live = connection === 'verbunden' && !viewOnly
+  liveRef.current = live
 
   const persist = useCallback(() => {
     if (adapter === null || blockedRef.current) {
@@ -166,16 +211,17 @@ export function BoardEditor({
       })
   }, [adapter, boardId, csrfToken])
 
-  // Verzoegertes Speichern: erst wenn eine Weile nichts mehr passiert ist.
+  // Verzoegertes Speichern: erst wenn eine Weile nichts mehr passiert ist. Solange der Raum traegt, gibt es
+  // keine eigene Speicherung - sie wuerde gegen die Checkpoints des Servers laufen und Konflikte erzeugen.
   useEffect(() => {
-    if (save.kind !== 'dirty') {
+    if (save.kind !== 'dirty' || live) {
       return
     }
     const timer = window.setTimeout(persist, AUTOSAVE_DELAY_MS)
     return () => {
       window.clearTimeout(timer)
     }
-  }, [save, persist])
+  }, [save, persist, live])
 
   // Der gezeichnete Ausgangsstand steht bereits im Editor (`scene` an der Zeichenflaeche). Hier kommen die
   // Bilder dazu: ihre Bytes holt der autorisierte Abrufendpunkt, einzeln und mit der laufenden Sitzung.
@@ -212,6 +258,8 @@ export function BoardEditor({
         uploadBoardAsset(csrfToken, boardId, fileId, dataUrl)
           .then((response) => {
             filesRef.current = { ...filesRef.current, [response.file.id]: response.file }
+            // Erst jetzt darf der Raum die Datei kennen: vorher gaebe es zu der Kennung keinen Datensatz.
+            clientRef.current?.sendChange([], null, [response.file.id])
           })
           .catch((cause: unknown) => {
             setAssetProblem(
@@ -225,13 +273,113 @@ export function BoardEditor({
             setSave((current) => (current.kind === 'conflict' ? current : { kind: 'dirty' }))
           })
       }
+      if (liveRef.current) {
+        clientRef.current?.sendChange(change.changedElements, change.appState, [])
+      }
       setSave((current) => (current.kind === 'conflict' ? current : { kind: 'dirty' }))
+    })
+    // Der Zeigezustand ist fluechtig und loest weder Speicherung noch Aenderungsmeldung aus.
+    const unsubscribePointer = adapter.onPointerChange((presence) => {
+      if (liveRef.current) {
+        clientRef.current?.sendPresence(presence.pointer, presence.selectedElementIds)
+      }
     })
     return () => {
       abandoned = true
       unsubscribe()
+      unsubscribePointer()
     }
   }, [adapter, boardId, csrfToken, state, viewOnly])
+
+  /**
+   * Der Boardraum.
+   *
+   * Aufgebaut, sobald Board und Zeichenflaeche stehen; abgebaut mit dem Editor. Die Berechtigung entscheidet
+   * ausschliesslich der Server - diese Ansicht stellt sie nur dar.
+   */
+  useEffect(() => {
+    if (adapter === null || state.kind !== 'ready') {
+      return
+    }
+    let abandoned = false
+
+    function zeigePeers(fremde: readonly EditorPeer[]): void {
+      setPeers(fremde)
+      adapter?.showPeers(fremde)
+    }
+
+    const client = connectBoardRealtime(boardId, {
+      onStatus(status): void {
+        setConnection(status)
+        if (status !== 'verbunden') {
+          zeigePeers([])
+        }
+      },
+      onJoined(message): void {
+        versionRef.current = message.version
+        filesRef.current = { ...filesRef.current, ...message.scene.files }
+        setCanWrite(message.canWrite)
+        selfRef.current = message.clientId
+        adapter?.applyRemoteElements(message.scene.elements)
+        adapter?.applyRemoteAppState(message.scene.appState)
+        zeigePeers(fremdePeers(message.peers, message.clientId))
+        // Was vor dem Beitritt gezeichnet wurde, geht als eigener Stand hinaus. Die Reconciliation
+        // entscheidet danach je Element; ein aelterer Stand kann keinen neueren verdraengen.
+        if (message.canWrite && adapter !== null) {
+          client.sendChange(adapter.getElements(), adapter.getAppState(), [])
+        }
+      },
+      onSnapshot(message): void {
+        versionRef.current = message.version
+        adapter?.applyRemoteElements(message.scene.elements)
+        adapter?.applyRemoteAppState(message.scene.appState)
+      },
+      onSceneChange(message): void {
+        adapter?.applyRemoteElements(message.elements)
+        if (message.appState !== null) {
+          adapter?.applyRemoteAppState(message.appState)
+        }
+        for (const file of message.files) {
+          filesRef.current = { ...filesRef.current, [file.id]: file }
+          fetchBoardAssetDataUrl(boardId, file.id)
+            .then((dataUrl) => {
+              if (!abandoned) {
+                adapter?.applyRemoteFileRef(file, dataUrl)
+              }
+            })
+            .catch(() => {
+              if (!abandoned) {
+                setAssetProblem('Ein Bild eines Mitbearbeiters konnte nicht geladen werden.')
+              }
+            })
+        }
+      },
+      onPresence(fremde): void {
+        zeigePeers(fremdePeers(fremde, selfRef.current))
+      },
+      onAccess(erlaubt): void {
+        setCanWrite(erlaubt)
+      },
+      onSaved(message): void {
+        versionRef.current = message.version
+        setSave((current) => (current.kind === 'conflict' ? current : { kind: 'saved', at: new Date(message.savedAt) }))
+      },
+      onError(message): void {
+        if (message.code === 'board-nicht-gefunden') {
+          setState({ kind: 'not-found' })
+          return
+        }
+        setSave({ kind: 'failed', message: message.message })
+      },
+    })
+    clientRef.current = client
+    return () => {
+      abandoned = true
+      clientRef.current = null
+      liveRef.current = false
+      client.close()
+    }
+  }, [adapter, boardId, state.kind])
 
   if (state.kind === 'loading') {
     return (
@@ -276,7 +424,15 @@ export function BoardEditor({
       <header className="board__bar">
         <h2 className="board__title">{state.loaded.board.title}</h2>
         <p className="board__state" role="status">
-          {viewOnly ? 'Nur Lesen: archiviert.' : saveMessage(save)}
+          {viewOnly ? 'Nur Lesen: keine Schreibberechtigung.' : saveMessage(save)}
+        </p>
+        <p className="board__state" role="status">
+          {CONNECTION_TEXTS[connection]}
+        </p>
+        <p className="board__peers" role="status">
+          {peers.length === 0
+            ? 'Allein auf diesem Board.'
+            : `Mit dabei: ${peers.map((peer) => peer.displayName).join(', ')}`}
         </p>
         {!viewOnly && (
           <button type="button" onClick={persist} disabled={save.kind === 'saving' || adapter === null}>

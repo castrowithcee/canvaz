@@ -11,7 +11,7 @@ Planung, Architekturentscheidungen und Betriebswissen liegen im getrennten Repos
 | --- | --- |
 | `src/domain` | Reiner Fachkern: Modelle, Invarianten, Repository- und Storage-Ports. Kein IO. |
 | `src/contracts` | Zwischen Server und SPA geteilte Typen (HTTP-Vertraege, Szenenvertrag). |
-| `src/server` | Konfiguration, HTTP, Routentabelle, OIDC-Anmeldung, Guards, WebSocket-Einstieg, Composition Root. |
+| `src/server` | Konfiguration, HTTP, Routentabelle, OIDC-Anmeldung, Guards, WebSocket-Einstieg, Boardraeume, Composition Root. |
 | `src/persistence` | Adapter zur Aussenwelt: Pool, SQL-Migrationen, Repository- und Storage-Umsetzungen. |
 | `src/web` | React/Vite-SPA inklusive Editor-Port und Excalidraw-Adapter. |
 | `tests` | `unit` (ohne IO), `integration` (echte Datenbank), `e2e` (Playwright), `support` (Testhilfen). |
@@ -231,11 +231,13 @@ Jede Speicherung nennt in `baseVersion` die Version, auf der sie aufsetzt. Stimm
 zweite Absicherung. Zwei gleichzeitige Speicherungen auf derselben Ausgangsversion ergeben deshalb genau eine
 neue Version und genau eine 409.
 
-Die Oberflaeche speichert verzoegert nach der letzten Aenderung und auf Knopfdruck. Nach einem Konflikt hoert
-sie auf, automatisch zu speichern: mit der neuen Ausgangsversion weiterzumachen waere genau das stille
-Ueberschreiben, das die Pruefung verhindern soll. Die Zeichnung bleibt im Browser, und der Mensch entscheidet.
-Mehrbenutzerbetrieb in Echtzeit kommt in einem eigenen Paket; zwei offene Browser sehen sich hier noch nicht,
-koennen sich aber auch nicht gegenseitig ueberschreiben.
+Diese Pruefung bleibt die Wahrheit ueber die Persistenz - **auch fuer die Echtzeitstrecke**. Ein
+Realtime-Checkpoint geht denselben Weg und kann sie nicht umgehen (siehe *Echtzeit-Kollaboration*).
+
+Ohne Echtzeitverbindung speichert die Oberflaeche verzoegert nach der letzten Aenderung und auf Knopfdruck.
+Nach einem Konflikt hoert sie auf, automatisch zu speichern: mit der neuen Ausgangsversion weiterzumachen
+waere genau das stille Ueberschreiben, das die Pruefung verhindern soll. Die Zeichnung bleibt im Browser, und
+der Mensch entscheidet.
 
 ### Versionierung und Serialisierung
 
@@ -454,6 +456,144 @@ Anlage, Umbenennung, Archivierung und Entarchivierung eines Boards schreiben ein
 `audit_events` (`targetType: 'board'`). Einzelne Speicherungen tun das nicht: sie sind Inhalt, nicht
 Verwaltung, und `audit_events` enthaelt nie Boardinhalte. Die Historie der Inhalte steht in `scene_versions`.
 
+## Echtzeit-Kollaboration
+
+Mehrere Menschen zeichnen gleichzeitig auf demselben Board. Traeger ist **eine** WebSocket-Strecke
+(`/api/realtime`) mit **einem Raum je Board**, gehalten im Speicher genau dieser Instanz. Es gibt bewusst
+kein Redis und keine Koordination ueber Prozessgrenzen; die Zielgroesse sind fuenf gleichzeitige Bearbeiter
+je Board.
+
+### Zustandsmaschine einer Verbindung
+
+```
+verbunden --join--> beigetreten --leave--> verbunden
+    |                    |
+    +--------------------+--> geschlossen (Socket zu, Sitzung ungueltig, Zugriff entzogen)
+```
+
+`verbunden` nimmt ausschliesslich `join` an, `beigetreten` alles andere; eine Verbindung ist zu jedem
+Zeitpunkt in hoechstens einem Raum. Jede unpassende Nachricht wird benannt abgelehnt und laesst die
+Verbindung in ihrem bisherigen Zustand - es gibt keinen undefinierten Zwischenzustand.
+
+### Protokoll
+
+`src/contracts/realtime.ts` ist der gesamte Vertrag und zugleich die einzige Stelle, die eingehende
+Nachrichten validiert (`parseClientMessage`). `REALTIME_PROTOCOL_VERSION` steht im `ready` des Servers und
+im `join` des Clients; weichen sie ab, wird der Beitritt abgelehnt, statt halb verstandene Nachrichten zu
+verarbeiten.
+
+| Richtung | Typ | Nutzlast |
+| --- | --- | --- |
+| Server → Client | `ready` | `protocolVersion`, `userId` - authentifiziert, aber in keinem Raum |
+| Client → Server | `join` | `protocolVersion`, `boardId` |
+| Server → Client | `joined` | `boardId`, `clientId`, `canWrite`, `version`, vollstaendige `scene`, `peers` |
+| Client → Server | `scene-change` | `boardId`, geaenderte `elements`, `appState` oder `null`, `fileIds` |
+| Server → Client | `scene-change` | `boardId`, uebernommene `elements`, `appState`, neue `files` |
+| Client → Server | `presence` | `boardId`, `pointer` oder `null`, `selectedElementIds` |
+| Server → Client | `presence` | `boardId`, vollstaendiges Teilnehmerfeld `peers` |
+| Client → Server | `resync` | `boardId` |
+| Server → Client | `snapshot` | `boardId`, `version`, vollstaendige `scene` |
+| Client → Server | `leave` | `boardId` |
+| Server → Client | `left` | `boardId` |
+| Server → Client | `access` | `boardId`, `canWrite` - die Berechtigung hat sich geaendert |
+| Server → Client | `saved` | `boardId`, `version`, `savedAt` |
+| Server → Client | `error` | `code`, `message` |
+
+`fileIds` nennt ausschliesslich Kennungen: Groesse, Typ und Speicherschluessel loest der Server aus
+`board_assets` auf. Bytes laufen nie ueber diesen Kanal, sondern weiterhin ueber den autorisierten
+Assetendpunkt.
+
+### Wer darf was
+
+**Die WebSocket-Grenze prueft nicht schwaecher als die HTTP-API.** Es gibt genau eine Stelle, an der aus
+einer Verbindung eine Berechtigung wird (`resolveAccess` in `src/server/board-rooms.ts`), und sie ruft
+dieselbe Funktion auf wie jede Route: `decideBoardAccess`. Gelesen wird bei **jedem** Aufruf frisch, ohne
+Zwischenspeicher.
+
+- **Beim Beitritt** entscheidet `board:read`. Wer nicht lesen darf, bekommt `board-nicht-gefunden` - genau
+  dieselbe Antwort wie fuer eine erfundene Kennung. Ob es das Board gibt, erfaehrt er nicht.
+- **Bei jeder Aenderungsnachricht** wird `scene:write` erneut aufgeloest. Eine manipulierte Nachricht eines
+  Teilnehmers ohne Schreibrecht wird verworfen, veraendert den Raumzustand nicht und erreicht niemanden.
+- **Beim Checkpoint** entscheidet dieselbe Policy noch einmal unter der Zeilensperre des Boards.
+- **Stille Verbindungen** werden alle zwei Sekunden nachgeprueft. Ein Mitgliedschaftsentzug beendet die
+  Verbindung mit dem Schliessgrund `4403`, eine Archivierung stuft sie auf Nur-Lesen herab (`access`) -
+  beides ohne dass sich jemand neu anmelden muss. Deaktivierung und Logout schliessen bereits auf der
+  Sitzungsebene (`4401`).
+
+Presence ist ausdruecklich **kein** Schreibzugriff auf den Boardzustand; sie setzt Raummitgliedschaft
+voraus, die beim Beitritt geprueft und durch den Wiederholungslauf laufend bestaetigt wird.
+
+Feingranulare Boardrollen und Gastlinks (`boardRole`, `guestGrant`) setzen in `resolveAccess` und in
+`decideBoardAccess` an - das Protokoll aendert sich dafuer nicht.
+
+### Was Presence uebertraegt
+
+Eine fluechtige Verbindungskennung, den Anzeigenamen, ob dieser Teilnehmer schreiben darf, den Zeiger und die
+Auswahl. **Keine E-Mail, keine Nutzerkennung, keine Rolle.** Presence wird nie persistiert und verschwindet
+mit der Verbindung.
+
+Uebertragen wird gebuendelt, in beide Richtungen: der Browser sammelt Zeigerstaende und geaenderte Elemente
+und schickt sie hoechstens alle **50 ms**, der Raum verschickt hoechstens alle **100 ms** ein vollstaendiges
+Teilnehmerfeld. Ungebuendelt waeren das bei fuenf Bearbeitern mehrere hundert Nachrichten je Sekunde; 100 ms
+liegen unter der Wahrnehmungsschwelle fuer einen fremden Mauszeiger, und weil die Reconciliation ueber
+`version` entscheidet und nicht ueber die Reihenfolge, kann ein zurueckgehaltener Zwischenstand nichts
+verlieren - er wird schlicht vom neueren ueberholt.
+
+### Fanout und Konvergenz
+
+Der Raum haelt den geteilten Zustand im Speicher. Eine eingehende Aenderung wird ueber
+`reconcileElements` zusammengefuehrt; weitergegeben werden **nur die tatsaechlich uebernommenen** Elemente,
+und nie an den Absender zurueck. Eine verspaetete Nachricht mit aelterer Version aendert damit nichts und
+loest auch keinen Fanout aus. Es gibt keine zentrale Sequenznummer: hoehere `version` gewinnt, bei
+Gleichstand der kleinere `versionNonce`, Loeschungen bleiben als Tombstone.
+
+### Checkpoints
+
+Der Raum schreibt **nicht bei jeder Aenderung**, sondern getaktet:
+
+- **2 Sekunden** nach der letzten Aenderung (Ruhe), und
+- spaetestens **10 Sekunden** nach der ersten unpersistierten Aenderung (Obergrenze), und
+- **sofort**, wenn der letzte Teilnehmer den Raum verlaesst oder der Server geordnet beendet wird.
+
+Die Ruhezeit macht eine abgeschlossene Zeichnung schnell sicher, die Obergrenze begrenzt den Verlust bei
+durchgehendem Zeichnen auf zehn Sekunden Arbeit. Eine Speicherung je Aenderung wuerde `scene_versions` mit
+jedem Mausklick fuellen und die Historie unlesbar machen.
+
+**Ein Checkpoint kann keinen neueren Stand ueberschreiben.** Er laeuft durch dieselbe Transaktion wie die
+HTTP-Speicherung: Zeilensperre auf dem Board, Berechtigungspruefung, `append` auf `version + 1` gegen den
+Primaerschluessel `(board_id, version)`. Steht in `boards.current_scene_version` inzwischen eine hoehere
+Nummer, wird der persistierte Stand zuerst per Reconciliation in den Raum zusammengefuehrt und erst danach
+die naechste Version geschrieben - je Element entscheidet die Version, nicht der Zeitpunkt der Speicherung.
+Wird der Checkpoint abgelehnt (etwa weil das Board inzwischen archiviert ist), bleibt der Raum unpersistiert
+statt an der Policy vorbei zu schreiben.
+
+### Im Editor
+
+Der Editor zeigt Verbindungsstatus, Speicherstatus und die Mitbearbeiter namentlich. Es gibt immer genau
+einen Weg, wie eine Zeichnung sicher wird:
+
+- **Live verbunden**: der Raum verteilt und persistiert; der Speicherstatus kommt vom Server (`saved`).
+- **Nicht verbunden**: die verzoegerte Speicherung ueber die HTTP-API uebernimmt wieder.
+
+Ein Verbindungsverlust ist damit sichtbar und fuehrt nicht zu stillem Datenverlust. Die
+Content-Security-Policy wurde dafuer **nicht** gelockert: `connect-src` faellt auf `default-src 'self'`
+zurueck, und `'self'` deckt die gleichnamige WebSocket-Herkunft ab. Der Browsertest belegt es.
+
+### Bekannte Grenzen
+
+- **Genau eine Instanz.** Raeume leben im Prozessspeicher; zwei Anwendungsserver haetten zwei getrennte
+  Raeume fuer dasselbe Board. Horizontale Skalierung braucht eine eigene Entscheidung.
+- **Kein Reconnect.** Bricht die Verbindung ab, verbindet sich der Browser nicht von selbst neu; er meldet
+  den Zustand und speichert weiter ueber die HTTP-API. Reconnect, Resync-Protokoll, Heartbeat,
+  Nachrichtenlimits und Backpressure sind ein eigenes Paket. Die Nahtstellen dafuer stehen bereits:
+  `resync`/`snapshot`, die Groessengrenze am WebSocket-Server (`maxPayload = CANVAZ_MAX_SCENE_BYTES`) und die
+  eine Stelle, ueber die jede ausgehende Nachricht laeuft.
+- **Keine Boardrollen.** In diesem Paket entscheidet die Workspace-Mitgliedschaft; einen Teilnehmer, der
+  lesen aber nicht schreiben darf, gibt es nur ueber Archivierung. Echte Viewer und Gaeste kommen mit den
+  Boardrollen.
+- Der Zeigezustand wird an Zeigerbewegungen gehaengt. Eine Auswahl ohne jede Mausbewegung (etwa per
+  Tastatur) wird erst mit der naechsten Bewegung sichtbar.
+
 ## Identity Provider einrichten (Beispiel Authentik)
 
 Die Konfiguration bleibt generisch: gesetzt wird nur der Issuer, den Rest holt die Anwendung ueber
@@ -510,6 +650,11 @@ genau eine Suite (`assetStorageContract`), zweimal ausgefuehrt - einmal gegen `f
 sie kennt ausschliesslich `AssetStoragePort`. Der Neustart-Nachweis in
 `tests/integration/board-assets.test.ts` laeuft ebenfalls fuer beide Adapter: hochladen, den
 Anwendungsprozess vollstaendig ersetzen, abrufen, Bytes vergleichen.
+
+`tests/integration/realtime.test.ts` faehrt die Echtzeitstrecke ueber **echte WebSocket-Verbindungen**:
+Beitritt mit und ohne Berechtigung, Entzug und Archivierung waehrend bestehender Verbindung, manipulierte
+Nachrichten, Konfliktfaelle und Checkpoints. `tests/e2e/realtime.spec.ts` setzt zwei getrennte
+Browserkontexte auf dasselbe Board und liest die Zeichenflaeche des jeweils anderen aus.
 
 Integrations- und Browsertests sprechen einen echten OIDC-Provider an: `tests/support/oidc-provider.ts`
 signiert ID-Tokens mit RSA und liefert ein echtes JWKS aus. Fehlerlagen (falscher Issuer, falsche Audience,

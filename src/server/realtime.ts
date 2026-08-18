@@ -1,8 +1,9 @@
 /**
  * Authentifizierter WebSocket-Einstieg.
  *
- * Bewusst ohne Protokoll, Raeume oder Presence: dieses Paket liefert nur den Upgrade-Pfad mit demselben
- * Auth-Kontext wie die HTTP-Endpunkte. Die Realtime-Strecke dockt spaeter an `onConnection` an.
+ * Diese Datei liefert ausschliesslich den Upgrade-Pfad mit demselben Auth-Kontext wie die HTTP-Endpunkte
+ * und das Verbindungsregister. Protokoll, Raeume und Presence stehen in `board-rooms.ts` und docken ueber
+ * `onConnection` an.
  *
  * Der Upgrade laeuft ueber dieselbe Aufloesung wie jeder HTTP-Guard und damit ueber `authenticate()`. Offene
  * Verbindungen werden mitgefuehrt, damit Logout, Deaktivierung und Ablauf sie schliessen koennen - sonst
@@ -20,6 +21,8 @@ import { WebSocketServer } from 'ws'
 import type { WebSocket } from 'ws'
 
 import { REALTIME_PATH } from '../contracts/api.js'
+import type { ReadyMessage } from '../contracts/realtime.js'
+import { REALTIME_PROTOCOL_VERSION } from '../contracts/realtime.js'
 import type { AuthenticatedSession, SessionId, UserId } from '../domain/identity/model.js'
 import type { IdentityStore } from '../domain/identity/repositories.js'
 import type { WorkspaceId, WorkspaceRole } from '../domain/workspace/model.js'
@@ -81,7 +84,9 @@ function reject(socket: Duplex, status: number, reason: string): void {
 }
 
 export function createRealtimeGateway(options: RealtimeOptions): RealtimeGateway {
-  const server = new WebSocketServer({ noServer: true })
+  // Groessengrenze am Rahmen selbst: `ws` verwirft alles Groessere, bevor es im Speicher zusammengesetzt
+  // wird. Dieselbe Grenze wie fuer einen gespeicherten Snapshot - mehr kann eine Aenderung nie tragen.
+  const server = new WebSocketServer({ noServer: true, maxPayload: options.config.maxSceneBytes })
   const connections = new Set<Connection>()
   const allowedOrigin = new URL(options.config.baseUrl).origin
 
@@ -122,8 +127,14 @@ export function createRealtimeGateway(options: RealtimeOptions): RealtimeGateway
       connections.add(connection)
       webSocket.on('close', () => connections.delete(connection))
       options.logger('info', 'realtime.upgrade.accepted', { userId: auth.user.id })
-      // Minimale Bestaetigung statt Protokoll: der Client weiss, dass er autorisiert verbunden ist.
-      webSocket.send(JSON.stringify({ type: 'ready', userId: auth.user.id }))
+      // Erste Nachricht der Zustandsmaschine: verbunden und authentifiziert, aber in keinem Raum. Die
+      // Protokollversion steht dabei, damit ein Browser mit altem Bundle es bemerkt, bevor er beitritt.
+      const ready: ReadyMessage = {
+        type: 'ready',
+        protocolVersion: REALTIME_PROTOCOL_VERSION,
+        userId: auth.user.id,
+      }
+      webSocket.send(JSON.stringify(ready))
       const scope: WorkspaceScope = {
         async role(workspaceId: WorkspaceId): Promise<WorkspaceRole | null> {
           const access = await options.workspaces.workspaces.findForUser(workspaceId, auth.user.id)

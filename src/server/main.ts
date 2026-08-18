@@ -13,6 +13,7 @@ import { createIdentityStore } from '../persistence/identity-store.js'
 import { createPool } from '../persistence/pool.js'
 import { createWorkspaceStore } from '../persistence/workspace-store.js'
 import { createRoutes } from './app.js'
+import { createBoardRooms } from './board-rooms.js'
 import { ConfigError, loadConfig } from './config.js'
 import type { AppContext } from './context.js'
 import { createRequestListener } from './http.js'
@@ -38,12 +39,14 @@ const identity = createIdentityStore(pool)
 const workspaces = createWorkspaceStore(pool)
 const boards = createBoardStore(pool)
 const storage = createAssetStorage(config.storage)
+const rooms = createBoardRooms({ boards, logger: consoleLogger, now: () => new Date() })
 const realtime = createRealtimeGateway({
   config,
   identity,
   workspaces,
   logger: consoleLogger,
   now: () => new Date(),
+  onConnection: rooms.onConnection,
 })
 const context: AppContext = {
   config,
@@ -67,9 +70,13 @@ server.listen(config.port, () => {
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
     server.close(() => {
-      void pool.end().then(() => {
-        process.exit(0)
-      })
+      // Erst die Raeume: was noch nicht persistiert ist, wird beim geordneten Beenden noch geschrieben.
+      void rooms
+        .close()
+        .then(() => pool.end())
+        .then(() => {
+          process.exit(0)
+        })
     })
   })
 }

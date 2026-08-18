@@ -158,7 +158,8 @@ h4 {
   margin: 0;
 }
 
-.board__state {
+.board__state,
+.board__peers {
   margin: 0;
   font-size: 0.9rem;
 }

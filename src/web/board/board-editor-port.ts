@@ -5,9 +5,9 @@
  * seiner Adapterimplementierung; ein Editorwechsel oder ein Upstream-Bruch bleibt damit auf eine Datei
  * begrenzt.
  *
- * Presence (`showPeers`) und die Uebernahme entfernter Aenderungen sind bereits Teil des Ports; die
- * Realtime-Strecke, die sie fuellt, folgt in einem eigenen Issue. Die Boardansicht nutzt heute Laden,
- * Speichern und die lokale Aenderungsmeldung.
+ * Presence (`showPeers`, `onPointerChange`) und die Uebernahme entfernter Aenderungen gehoeren zum Port,
+ * weil der Editor sie darstellen und melden muss. Wie sie uebertragen werden, steht im Realtime-Vertrag und
+ * nicht hier.
  */
 
 import type { BinaryFileRef, PersistedAppState, SyncElement } from '../../contracts/scene.js'
@@ -21,6 +21,13 @@ export type EditorPeer = {
   readonly displayName: string
   readonly readOnly: boolean
   readonly pointer: { readonly x: number; readonly y: number } | null
+  readonly selectedElementIds: readonly string[]
+}
+
+/** Eigener Zeige- und Auswahlzustand. Fluechtig: er gehoert nie in den gespeicherten Boardzustand. */
+export type LocalPresence = {
+  readonly pointer: { readonly x: number; readonly y: number } | null
+  readonly selectedElementIds: readonly string[]
 }
 
 export type LocalChange = {
@@ -50,6 +57,8 @@ export interface BoardEditorPort {
   /** Legt eine geladene Datei in den Editor. Die Bytes kommen als Data-URL vom autorisierten Abrufendpunkt. */
   applyRemoteFileRef(file: BinaryFileRef, dataUrl: string): void
   showPeers(peers: readonly EditorPeer[]): void
+  /** Meldet den eigenen Zeiger und die eigene Auswahl. Feuert in Bewegungsrate; der Aufrufer buendelt. */
+  onPointerChange(listener: (presence: LocalPresence) => void): () => void
   setReadOnly(readOnly: boolean): void
   onLocalChange(listener: (change: LocalChange) => void): () => void
 }

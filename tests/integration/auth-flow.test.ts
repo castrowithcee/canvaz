@@ -23,6 +23,7 @@ import { migrate } from '../../src/persistence/migrate.js'
 import { createPool } from '../../src/persistence/pool.js'
 import { SESSION_COOKIE } from '../../src/server/session.js'
 import { FLOW_COOKIE } from '../../src/server/flow-state.js'
+import { REALTIME_PROTOCOL_VERSION } from '../../src/contracts/realtime.js'
 import { SESSION_REVOKED_CLOSE_CODE } from '../../src/server/realtime.js'
 import { createJar } from '../support/browser-client.js'
 import type { Jar } from '../support/browser-client.js'
@@ -508,7 +509,11 @@ describe('WebSocket-Einstieg', () => {
     const connection = await connectRealtime(jar)
     const message = await connection.next()
 
-    expect(JSON.parse(message)).toEqual({ type: 'ready', userId: profile.user.id })
+    expect(JSON.parse(message)).toEqual({
+      type: 'ready',
+      protocolVersion: REALTIME_PROTOCOL_VERSION,
+      userId: profile.user.id,
+    })
     connection.socket.close()
   })
 
@@ -533,7 +538,11 @@ describe('WebSocket-Einstieg', () => {
 
     const connection = await connectRealtime(jar, { origin: app.baseUrl })
 
-    expect(JSON.parse(await connection.next())).toEqual({ type: 'ready', userId: profile.user.id })
+    expect(JSON.parse(await connection.next())).toEqual({
+      type: 'ready',
+      protocolVersion: REALTIME_PROTOCOL_VERSION,
+      userId: profile.user.id,
+    })
     connection.socket.close()
   })
 
