@@ -110,6 +110,11 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Identit
         return requireRow(result.rows[0], 'count lieferte keine Zeile').count
       },
 
+      async list(): Promise<readonly User[]> {
+        const result = await db.query<UserRow>(`select ${USER_COLUMNS} from users order by created_at, id`)
+        return result.rows.map(toUser)
+      },
+
       async create(profile: UserProfileDraft, options: { readonly isSystemAdmin: boolean }): Promise<User> {
         const result = await db.query<UserRow>(
           `insert into users (display_name, email, is_system_admin)

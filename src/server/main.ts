@@ -11,7 +11,11 @@ import { createIdentityStore } from '../persistence/identity-store.js'
 import { createPool } from '../persistence/pool.js'
 import { createRoutes } from './app.js'
 import { ConfigError, loadConfig } from './config.js'
+import type { AppContext } from './context.js'
 import { createRequestListener } from './http.js'
+import { consoleLogger } from './log.js'
+import { createOidcClient } from './oidc.js'
+import { createRealtimeGateway } from './realtime.js'
 
 function loadConfigOrExit(): ReturnType<typeof loadConfig> {
   try {
@@ -28,7 +32,18 @@ function loadConfigOrExit(): ReturnType<typeof loadConfig> {
 const config = loadConfigOrExit()
 const pool = createPool(config.databaseUrl)
 const identity = createIdentityStore(pool)
-const server = createServer(createRequestListener(createRoutes({ config, pool, identity }), config.webRoot))
+const realtime = createRealtimeGateway({ identity, logger: consoleLogger, now: () => new Date() })
+const context: AppContext = {
+  config,
+  pool,
+  identity,
+  oidc: createOidcClient(config),
+  realtime,
+  logger: consoleLogger,
+  now: () => new Date(),
+}
+const server = createServer(createRequestListener(createRoutes(context), config.webRoot))
+realtime.attach(server)
 
 server.listen(config.port, () => {
   console.log(`Canvaz laeuft auf Port ${String(config.port)} (${config.baseUrl})`)

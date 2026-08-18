@@ -131,6 +131,14 @@ export function loadConfig(env: Env = process.env): AppConfig {
     webRoot: env['CANVAZ_WEB_ROOT']?.trim() ?? 'dist/web',
   }
 
+  // Die Redirect-URI zeigt auf diese Instanz zurueck. Eine fremde Herkunft waere ein offener Umleitungspunkt
+  // und wuerde ausserdem das Session-Cookie nie erreichen.
+  if (baseUrl !== '' && config.oidc.redirectUri !== '') {
+    if (new URL(config.oidc.redirectUri).origin !== new URL(baseUrl).origin) {
+      problems.push('CANVAZ_OIDC_REDIRECT_URI muss dieselbe Herkunft wie CANVAZ_BASE_URL haben')
+    }
+  }
+
   if (problems.length > 0) {
     // Nur Variablennamen, nie Werte: die Fehlermeldung landet im Log.
     throw new ConfigError(problems)

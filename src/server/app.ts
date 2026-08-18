@@ -1,25 +1,19 @@
 /**
- * Anwendungskontext und Routentabelle.
+ * Routentabelle.
  *
- * Nahtstelle fuer die folgenden Pakete: OIDC-Anmeldung, Session-Guard und API-Endpunkte ergaenzen hier ihre
- * Routen und bekommen ueber `AppContext` Konfiguration und Persistenz, ohne selbst eine Verbindung
- * aufzubauen.
+ * Setzt die Routen der Teilbereiche zusammen. Der Kontext liefert Konfiguration, Persistenz, OIDC-Client und
+ * WebSocket-Einstieg; keine Route baut selbst eine Verbindung auf.
  */
-
-import type { Pool } from 'pg'
 
 import { API_BASE_PATH } from '../contracts/api.js'
 import type { HealthResponse } from '../contracts/api.js'
-import type { IdentityStore } from '../domain/identity/repositories.js'
-import type { AppConfig } from './config.js'
+import { createAdminRoutes } from './admin-routes.js'
+import { createAuthRoutes } from './auth-routes.js'
+import type { AppContext } from './context.js'
 import type { Route } from './http.js'
 import { sendJson } from './http.js'
 
-export type AppContext = {
-  readonly config: AppConfig
-  readonly pool: Pool
-  readonly identity: IdentityStore
-}
+export type { AppContext }
 
 export function createRoutes(context: AppContext): readonly Route[] {
   return [
@@ -33,5 +27,7 @@ export function createRoutes(context: AppContext): readonly Route[] {
         sendJson(response, 200, body)
       },
     },
+    ...createAuthRoutes(context),
+    ...createAdminRoutes(context),
   ]
 }

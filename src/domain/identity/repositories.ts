@@ -34,6 +34,8 @@ export interface UserRepository {
   findById(id: UserId): Promise<User | null>
   /** Bootstrap-Entscheidung der Provisionierung: die erste Anmeldung einer leeren Instanz wird Systemadmin. */
   count(): Promise<number>
+  /** Nutzerliste der Systemadministration, aelteste zuerst. */
+  list(): Promise<readonly User[]>
   create(profile: UserProfileDraft, options: { readonly isSystemAdmin: boolean }): Promise<User>
   updateProfile(id: UserId, profile: UserProfileDraft): Promise<User>
   setStatus(id: UserId, status: UserStatus): Promise<User>

@@ -45,7 +45,19 @@ describe('Konfiguration', () => {
     expect(() => loadConfig({ ...validEnv, CANVAZ_PORT: '0' })).toThrow(ConfigError)
   })
 
+  it('verlangt eine Redirect-URI unter der eigenen Basis-URL', () => {
+    expect(() =>
+      loadConfig({ ...validEnv, CANVAZ_OIDC_REDIRECT_URI: 'https://fremd.example.com/api/auth/callback' }),
+    ).toThrow(ConfigError)
+  })
+
   it('setzt unsichere Cookies nur ohne TLS-Basis-URL', () => {
-    expect(loadConfig({ ...validEnv, CANVAZ_BASE_URL: 'http://localhost:3000' }).secureCookies).toBe(false)
+    const config = loadConfig({
+      ...validEnv,
+      CANVAZ_BASE_URL: 'http://localhost:3000',
+      CANVAZ_OIDC_REDIRECT_URI: 'http://localhost:3000/api/auth/callback',
+    })
+
+    expect(config.secureCookies).toBe(false)
   })
 })

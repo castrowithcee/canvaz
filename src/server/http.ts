@@ -35,9 +35,42 @@ export function sendJson(response: ServerResponse, status: number, body: unknown
   response.end(payload)
 }
 
-function sendError(response: ServerResponse, status: number, message: string): void {
+export function sendError(response: ServerResponse, status: number, message: string): void {
   const body: ErrorResponse = { error: message }
   sendJson(response, status, body)
+}
+
+/** Weiterleitung mit `no-store`: Anmeldeantworten duerfen nie aus einem Cache wiederholt werden. */
+export function sendRedirect(response: ServerResponse, location: string): void {
+  response.writeHead(302, { location, 'cache-control': 'no-store' })
+  response.end()
+}
+
+const MAX_JSON_BODY_BYTES = 16_384
+
+/** Liest einen begrenzten JSON-Koerper. `null` bedeutet: zu gross, kein JSON oder kein Objekt. */
+export async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown> | null> {
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of request) {
+    const buffer = chunk as Buffer
+    size += buffer.length
+    if (size > MAX_JSON_BODY_BYTES) {
+      return null
+    }
+    chunks.push(buffer)
+  }
+  if (size === 0) {
+    return {}
+  }
+  try {
+    const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null
+  } catch {
+    return null
+  }
 }
 
 const CONTENT_TYPES: Readonly<Record<string, string>> = {

@@ -26,9 +26,12 @@
   },
   "dependencies": {
     "@excalidraw/excalidraw": "0.18.1",
+    "jose": "^6.2.9",
+    "openid-client": "^6.8.5",
     "pg": "^8.16.3",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -37,6 +40,7 @@
     "@types/pg": "^8.15.6",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.1.0",
     "eslint": "^10.8.1",
     "globals": "^16.5.0",
