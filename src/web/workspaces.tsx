@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import type {
+  BoardView,
   MeResponse,
   WorkspaceMemberView,
   WorkspaceRoleView,
@@ -29,6 +30,7 @@ import {
   renameWorkspace,
   setWorkspaceStatus,
 } from './api.js'
+import { Boards } from './boards.js'
 
 const ROLE_LABELS: Readonly<Record<WorkspaceRoleView, string>> = {
   owner: 'Owner',
@@ -376,11 +378,13 @@ function WorkspaceDetail({
   workspaceId,
   onBack,
   onChanged,
+  onOpenBoard,
 }: {
   readonly me: MeResponse
   readonly workspaceId: string
   readonly onBack: () => void
   readonly onChanged: () => void
+  readonly onOpenBoard: (board: BoardView, workspace: WorkspaceView) => void
 }) {
   const [state, setState] = useState<
     | { readonly kind: 'loading' }
@@ -506,6 +510,14 @@ function WorkspaceDetail({
         </p>
       )}
 
+      <Boards
+        me={me}
+        workspace={workspace}
+        onOpenBoard={(board) => {
+          onOpenBoard(board, workspace)
+        }}
+      />
+
       <h4>Mitglieder</h4>
       <table className="users">
         <caption className="visually-hidden">Mitglieder von {workspace.name}</caption>
@@ -543,7 +555,13 @@ function WorkspaceDetail({
   )
 }
 
-export function Workspaces({ me }: { readonly me: MeResponse }) {
+export function Workspaces({
+  me,
+  onOpenBoard,
+}: {
+  readonly me: MeResponse
+  readonly onOpenBoard: (board: BoardView, workspace: WorkspaceView) => void
+}) {
   const [list, setList] = useState<readonly WorkspaceView[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -623,6 +641,7 @@ export function Workspaces({ me }: { readonly me: MeResponse }) {
             load()
           }}
           onChanged={load}
+          onOpenBoard={onOpenBoard}
         />
       )}
     </section>

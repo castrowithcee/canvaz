@@ -10,6 +10,18 @@ const validEnv = {
   CANVAZ_OIDC_CLIENT_ID: 'canvaz',
   CANVAZ_OIDC_CLIENT_SECRET: 'client-secret',
   CANVAZ_OIDC_REDIRECT_URI: 'https://canvaz.example.com/api/auth/callback',
+  CANVAZ_STORAGE_FILESYSTEM_ROOT: '/srv/canvaz/assets',
+}
+
+/** Vollstaendige S3-Umgebung. Der Adapterwechsel ist ausschliesslich Konfiguration. */
+const s3Env = {
+  ...validEnv,
+  CANVAZ_STORAGE_ADAPTER: 's3',
+  CANVAZ_S3_ENDPOINT: 'https://s3.example.com',
+  CANVAZ_S3_REGION: 'eu-central-1',
+  CANVAZ_S3_BUCKET: 'canvaz-assets',
+  CANVAZ_S3_ACCESS_KEY_ID: 'schluessel',
+  CANVAZ_S3_SECRET_ACCESS_KEY: 'geheimnis',
 }
 
 describe('Konfiguration', () => {
@@ -21,6 +33,67 @@ describe('Konfiguration', () => {
     expect(config.sessionTtlSeconds).toBe(12 * 3600)
     expect(config.secureCookies).toBe(true)
     expect(config.oidc.clientId).toBe('canvaz')
+    expect(config.maxSceneBytes).toBe(5 * 1024 * 1024)
+    expect(config.storage.maxAssetBytes).toBe(5 * 1024 * 1024)
+    expect(config.storage.filesystem).toEqual({ root: '/srv/canvaz/assets' })
+    expect(config.storage.s3).toBeNull()
+  })
+
+  it('liest die S3-Umgebung vollstaendig und ohne Ersatzwerte ein', () => {
+    const config = loadConfig(s3Env)
+
+    expect(config.storage.adapter).toBe('s3')
+    expect(config.storage.filesystem).toBeNull()
+    expect(config.storage.s3).toEqual({
+      endpoint: 'https://s3.example.com',
+      region: 'eu-central-1',
+      bucket: 'canvaz-assets',
+      accessKeyId: 'schluessel',
+      secretAccessKey: 'geheimnis',
+      // AWS-Standard; MinIO braucht ausdruecklich true.
+      forcePathStyle: false,
+    })
+    expect(loadConfig({ ...s3Env, CANVAZ_S3_FORCE_PATH_STYLE: 'true' }).storage.s3?.forcePathStyle).toBe(true)
+  })
+
+  it('nennt fehlende adapterspezifische Pflichtwerte beim Namen', () => {
+    // Der Dateisystem-Adapter hat bewusst keinen Standardpfad: ein Ersatzwert im Containerlayer saehe aus
+    // wie Persistenz und waere beim naechsten Neustart weg.
+    const ohneWurzel = { ...validEnv, CANVAZ_STORAGE_FILESYSTEM_ROOT: '' }
+    expect(() => loadConfig(ohneWurzel)).toThrow(ConfigError)
+    try {
+      loadConfig(ohneWurzel)
+    } catch (error) {
+      expect((error as ConfigError).problems).toContain('CANVAZ_STORAGE_FILESYSTEM_ROOT fehlt')
+    }
+
+    try {
+      loadConfig({ ...validEnv, CANVAZ_STORAGE_ADAPTER: 's3' })
+    } catch (error) {
+      expect((error as ConfigError).problems).toEqual([
+        'CANVAZ_S3_ENDPOINT fehlt',
+        'CANVAZ_S3_REGION fehlt',
+        'CANVAZ_S3_BUCKET fehlt',
+        'CANVAZ_S3_ACCESS_KEY_ID fehlt',
+        'CANVAZ_S3_SECRET_ACCESS_KEY fehlt',
+      ])
+    }
+    // Und umgekehrt: wer S3 faehrt, stolpert nicht ueber ein fehlendes Wurzelverzeichnis.
+    expect(() => loadConfig({ ...s3Env, CANVAZ_STORAGE_FILESYSTEM_ROOT: '' })).not.toThrow()
+  })
+
+  it('nimmt eine eigene Assetgrenze nur innerhalb der zulaessigen Spanne an', () => {
+    expect(loadConfig({ ...validEnv, CANVAZ_MAX_ASSET_BYTES: '1048576' }).storage.maxAssetBytes).toBe(1_048_576)
+    expect(() => loadConfig({ ...validEnv, CANVAZ_MAX_ASSET_BYTES: '512' })).toThrow(ConfigError)
+    expect(() => loadConfig({ ...validEnv, CANVAZ_MAX_ASSET_BYTES: '999999999' })).toThrow(ConfigError)
+    expect(() => loadConfig({ ...s3Env, CANVAZ_S3_FORCE_PATH_STYLE: 'vielleicht' })).toThrow(ConfigError)
+  })
+
+  it('nimmt eine eigene Szenengrenze nur innerhalb der zulaessigen Spanne an', () => {
+    expect(loadConfig({ ...validEnv, CANVAZ_MAX_SCENE_BYTES: '1048576' }).maxSceneBytes).toBe(1_048_576)
+    expect(() => loadConfig({ ...validEnv, CANVAZ_MAX_SCENE_BYTES: '1024' })).toThrow(ConfigError)
+    expect(() => loadConfig({ ...validEnv, CANVAZ_MAX_SCENE_BYTES: '999999999' })).toThrow(ConfigError)
+    expect(() => loadConfig({ ...validEnv, CANVAZ_MAX_SCENE_BYTES: 'viel' })).toThrow(ConfigError)
   })
 
   it('meldet alle fehlenden Pflichtwerte auf einmal statt still zu ersetzen', () => {

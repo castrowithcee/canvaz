@@ -28,7 +28,7 @@ import type {
 } from '../domain/workspace/repositories.js'
 import { MembershipConflictError } from '../domain/workspace/repositories.js'
 
-type Queryable = Pick<PoolClient, 'query'>
+export type Queryable = Pick<PoolClient, 'query'>
 
 const UNIQUE_VIOLATION = '23505'
 
@@ -104,7 +104,11 @@ function requireRow<T>(row: T | undefined, message: string): T {
   return row
 }
 
-function createStore(pool: Pool, db: Queryable, inTransaction: boolean): WorkspaceStore {
+/**
+ * Baut den Store ueber einer bereits gewaehlten Verbindung. Exportiert, damit der Board-Store dieselben
+ * Workspace- und Auditabfragen in *seiner* Transaktion nutzen kann, statt sie ein zweites Mal zu schreiben.
+ */
+export function createWorkspaceStoreOn(pool: Pool, db: Queryable, inTransaction: boolean): WorkspaceStore {
   async function loadAccess(id: WorkspaceId, userId: UserId, lock: boolean): Promise<WorkspaceAccess | null> {
     // Zwei Schritte statt eines Joins, weil `for update` mit einem Left Join auf die Mitgliedschaft die
     // falsche Zeile sperren wuerde. Gesperrt wird ausschliesslich die Workspacezeile.
@@ -321,7 +325,7 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Workspa
       const client = await pool.connect()
       try {
         await client.query('begin')
-        const result = await run(createStore(pool, client, true))
+        const result = await run(createWorkspaceStoreOn(pool, client, true))
         await client.query('commit')
         return result
       } catch (error) {
@@ -336,5 +340,5 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Workspa
 }
 
 export function createWorkspaceStore(pool: Pool): WorkspaceStore {
-  return createStore(pool, pool, false)
+  return createWorkspaceStoreOn(pool, pool, false)
 }

@@ -1,5 +1,7 @@
 node_modules/
 dist/
+# Lokales Assetvolume des filesystem-Adapters. Nutzerinhalte gehoeren nie in die Versionierung.
+var/
 playwright-report/
 test-results/
 *.local

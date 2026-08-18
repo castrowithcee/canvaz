@@ -7,6 +7,8 @@
 
 import { createServer } from 'node:http'
 
+import { createAssetStorage } from '../persistence/asset-storage.js'
+import { createBoardStore } from '../persistence/board-store.js'
 import { createIdentityStore } from '../persistence/identity-store.js'
 import { createPool } from '../persistence/pool.js'
 import { createWorkspaceStore } from '../persistence/workspace-store.js'
@@ -34,6 +36,8 @@ const config = loadConfigOrExit()
 const pool = createPool(config.databaseUrl)
 const identity = createIdentityStore(pool)
 const workspaces = createWorkspaceStore(pool)
+const boards = createBoardStore(pool)
+const storage = createAssetStorage(config.storage)
 const realtime = createRealtimeGateway({
   config,
   identity,
@@ -46,6 +50,8 @@ const context: AppContext = {
   pool,
   identity,
   workspaces,
+  boards,
+  storage,
   oidc: createOidcClient(config),
   realtime,
   logger: consoleLogger,

@@ -119,6 +119,7 @@ describe('Cookie-Namen', () => {
     CANVAZ_OIDC_CLIENT_ID: 'canvaz',
     CANVAZ_OIDC_CLIENT_SECRET: 'client-secret',
     CANVAZ_OIDC_REDIRECT_URI: 'https://canvaz.example.com/api/auth/callback',
+    CANVAZ_STORAGE_FILESYSTEM_ROOT: '/srv/canvaz/assets',
   }
   const httpEnv = {
     ...httpsEnv,

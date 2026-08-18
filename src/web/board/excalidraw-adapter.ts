@@ -5,12 +5,20 @@
  * Elementfelder werden unveraendert durchgereicht, damit ein Upstream-Update keine Daten verliert.
  */
 
-import { CaptureUpdateAction } from '@excalidraw/excalidraw'
-import type { ExcalidrawImperativeAPI, BinaryFiles, Collaborator, SocketId } from '@excalidraw/excalidraw/types'
+import { CaptureUpdateAction, Excalidraw } from '@excalidraw/excalidraw'
+import type {
+  ExcalidrawImperativeAPI,
+  BinaryFileData,
+  BinaryFiles,
+  Collaborator,
+  SocketId,
+} from '@excalidraw/excalidraw/types'
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types'
 import type { AppState } from '@excalidraw/excalidraw/types'
+import { createElement, useCallback, useEffect, useRef } from 'react'
+import type { ReactElement } from 'react'
 
-import type { BinaryFileRef, PersistedAppState, SyncElement } from '../../contracts/scene.js'
+import type { BinaryFileRef, PersistedAppState, SceneSnapshot, SyncElement } from '../../contracts/scene.js'
 import { DEFAULT_APP_STATE } from '../../contracts/scene.js'
 import { reconcileElements } from '../../domain/board/reconcile.js'
 import type { BoardEditorPort, EditorPeer, LocalChange } from './board-editor-port.js'
@@ -39,30 +47,37 @@ export function toPersistedAppState(appState: Pick<AppState, 'viewBackgroundColo
   }
 }
 
-/** Binaerassets verlassen den Editor nur als Referenz; die Bytes gehen spaeter an den Storage-Port. */
-export function toFileRefs(files: BinaryFiles, storagePrefix: string): BinaryFileRef[] {
-  return Object.values(files).map((file) => ({
-    id: file.id,
-    mimeType: file.mimeType,
-    created: file.created,
-    byteSize: file.dataURL.length,
-    storageKey: `${storagePrefix}/${file.id}`,
-  }))
+/** Gleichheit der persistierten Teilmenge. Vier Felder, deshalb ein Vergleich statt einer Bibliothek. */
+function samePersistedAppState(left: PersistedAppState, right: PersistedAppState): boolean {
+  return (
+    left.viewBackgroundColor === right.viewBackgroundColor &&
+    left.gridSize === right.gridSize &&
+    left.gridModeEnabled === right.gridModeEnabled &&
+    left.name === right.name
+  )
 }
 
 export class ExcalidrawBoardAdapter implements BoardEditorPort {
   readonly #api: ExcalidrawImperativeAPI
-  readonly #storagePrefix: string
   readonly #listeners = new Set<(change: LocalChange) => void>()
   readonly #sentVersions = new Map<string, number>()
   readonly #knownFileIds = new Set<string>()
   #unsubscribe: (() => void) | null = null
   #applyingRemote = false
   #readOnly = false
+  /** Zuletzt gemeldeter AppState. `null` heisst: noch kein Ausgangsstand uebernommen. */
+  #lastAppState: PersistedAppState | null = null
 
-  constructor(api: ExcalidrawImperativeAPI, storagePrefix: string) {
+  constructor(api: ExcalidrawImperativeAPI) {
     this.#api = api
-    this.#storagePrefix = storagePrefix
+    // Der Ausgangsstand des Editors ist bereits bekannt und keine lokale Aenderung. Ohne diese Uebernahme
+    // meldete das erste Editorereignis die geladene Szene als frisch gezeichnet.
+    for (const element of this.getElements()) {
+      this.#sentVersions.set(element.id, element.version)
+    }
+    for (const fileId of Object.keys(this.#api.getFiles())) {
+      this.#knownFileIds.add(fileId)
+    }
   }
 
   start(): void {
@@ -80,6 +95,16 @@ export class ExcalidrawBoardAdapter implements BoardEditorPort {
     return toSyncElements(this.#api.getSceneElementsIncludingDeleted())
   }
 
+  /** Persistierte Teilmenge des aktuellen AppState. Der Aufrufer sieht nie einen Excalidraw-Typ. */
+  getAppState(): PersistedAppState {
+    return toPersistedAppState(this.#api.getAppState())
+  }
+
+  /** Inhalt einer Datei als Data-URL. Einzige Stelle, an der Bytes den Editor verlassen. */
+  getFileDataUrl(fileId: string): string | null {
+    return this.#api.getFiles()[fileId]?.dataURL ?? null
+  }
+
   #handleChange(elements: readonly ExcalidrawElement[], appState: AppState, files: BinaryFiles): void {
     if (this.#applyingRemote || this.#readOnly) {
       return
@@ -91,14 +116,20 @@ export class ExcalidrawBoardAdapter implements BoardEditorPort {
         changed.push(element)
       }
     }
-    const newFiles = toFileRefs(files, this.#storagePrefix).filter((file) => !this.#knownFileIds.has(file.id))
-    for (const file of newFiles) {
-      this.#knownFileIds.add(file.id)
+    const newFileIds = Object.keys(files).filter((fileId) => !this.#knownFileIds.has(fileId))
+    for (const fileId of newFileIds) {
+      this.#knownFileIds.add(fileId)
     }
-    if (changed.length === 0 && newFiles.length === 0) {
+    // Der AppState gehoert zum geteilten Zustand: eine geaenderte Hintergrundfarbe oder ein umgeschaltetes
+    // Raster ist eine Aenderung, auch wenn dabei kein Element angefasst wurde.
+    const persistedAppState = toPersistedAppState(appState)
+    const appStateChanged =
+      this.#lastAppState !== null && !samePersistedAppState(this.#lastAppState, persistedAppState)
+    this.#lastAppState = persistedAppState
+    if (changed.length === 0 && newFileIds.length === 0 && !appStateChanged) {
       return
     }
-    const change: LocalChange = { changedElements: changed, appState: toPersistedAppState(appState), newFiles }
+    const change: LocalChange = { changedElements: changed, appState: persistedAppState, newFileIds }
     for (const listener of this.#listeners) {
       listener(change)
     }
@@ -125,6 +156,10 @@ export class ExcalidrawBoardAdapter implements BoardEditorPort {
   }
 
   applyRemoteAppState(appState: PersistedAppState): void {
+    // Der Vergleichsmassstab wird verworfen und beim naechsten Editorereignis neu genommen. Ihn hier auf den
+    // uebernommenen Stand zu setzen waere falsch: Excalidraw kennt fuer `gridSize` keinen Nullwert und
+    // meldet stattdessen seinen Standardabstand zurueck - das saehe wie eine lokale Aenderung aus.
+    this.#lastAppState = null
     this.#applyingRemote = true
     try {
       this.#api.updateScene({
@@ -143,10 +178,15 @@ export class ExcalidrawBoardAdapter implements BoardEditorPort {
     }
   }
 
-  applyRemoteFileRef(file: BinaryFileRef): void {
-    // Der Spike transportiert keine Bytes. Das Produkt laedt sie hier ueber den Storage-Port nach und ruft
-    // danach `api.addFiles`.
+  applyRemoteFileRef(file: BinaryFileRef, dataUrl: string): void {
+    // Bekannt, bevor die Datei im Editor landet: sonst meldete das folgende Editorereignis sie als neu und
+    // der Aufrufer wuerde dieselbe Datei sofort wieder hochladen.
     this.#knownFileIds.add(file.id)
+    // Der Cast liegt an derselben Grenze wie der der Elemente: Excalidraw fuehrt fuer Kennung und Data-URL
+    // eigene Markentypen, fachlich sind es Zeichenketten.
+    this.#api.addFiles([
+      { id: file.id, mimeType: file.mimeType, dataURL: dataUrl, created: file.created },
+    ] as unknown as BinaryFileData[])
   }
 
   showPeers(peers: readonly EditorPeer[]): void {
@@ -171,4 +211,61 @@ export class ExcalidrawBoardAdapter implements BoardEditorPort {
       this.#listeners.delete(listener)
     }
   }
+}
+
+/**
+ * Mountet die Zeichenflaeche und reicht einen fertigen Adapter heraus.
+ *
+ * Bewusst hier und nicht in der Boardansicht: das Excalidraw-Paket - Komponente wie Typen - erscheint
+ * ausschliesslich in dieser Datei. Die Boardansicht kennt nur `BoardEditorPort`. Ohne JSX, damit die Datei
+ * eine `.ts` bleiben kann.
+ */
+export function BoardCanvas({
+  viewMode,
+  scene,
+  onAdapterReady,
+}: {
+  readonly viewMode: boolean
+  /** Ausgangsstand. Wird als `initialData` gesetzt, damit der Editor ihn nicht beim Mounten ueberschreibt. */
+  readonly scene: SceneSnapshot
+  readonly onAdapterReady: (adapter: ExcalidrawBoardAdapter) => void
+}): ReactElement {
+  const adapter = useRef<ExcalidrawBoardAdapter | null>(null)
+  // Stabile Identitaet: Excalidraw reicht die Schnittstelle erneut heraus, sobald sich der Rueckruf aendert.
+  const handleApi = useCallback(
+    (api: ExcalidrawImperativeAPI) => {
+      const next = new ExcalidrawBoardAdapter(api)
+      adapter.current = next
+      // Das Abonnement auf Editoraenderungen gehoert zum Adapter und nicht zum Aufrufer; der Port kennt
+      // deshalb weder `start` noch `stop`.
+      next.start()
+      onAdapterReady(next)
+    },
+    [onAdapterReady],
+  )
+  useEffect(
+    () => () => {
+      adapter.current?.stop()
+    },
+    [],
+  )
+  return createElement(Excalidraw, {
+    excalidrawAPI: handleApi,
+    viewModeEnabled: viewMode,
+    langCode: 'de-DE',
+    initialData: {
+      elements: toExcalidrawElements(scene.elements),
+      appState: {
+        viewBackgroundColor: scene.appState.viewBackgroundColor,
+        gridModeEnabled: scene.appState.gridModeEnabled,
+        name: scene.appState.name,
+        // `gridSize: null` bedeutet im Boardzustand "kein Raster". Excalidraw kennt dafuer keinen Nullwert
+        // und steuert die Sichtbarkeit ueber `gridModeEnabled`; der Snapshot behaelt `null`.
+        gridSize: scene.appState.gridSize ?? EXCALIDRAW_DEFAULT_GRID_SIZE,
+      },
+      // Kamera und Auswahl sind clientlokal und werden nicht gespeichert; der Blick geht deshalb auf den
+      // vorhandenen Inhalt statt auf den Nullpunkt.
+      scrollToContent: true,
+    },
+  })
 }

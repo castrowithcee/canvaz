@@ -5,8 +5,9 @@
  * seiner Adapterimplementierung; ein Editorwechsel oder ein Upstream-Bruch bleibt damit auf eine Datei
  * begrenzt.
  *
- * Aus dem Spike uebernommen und noch unverdrahtet: die Board- und Realtime-Strecke folgt in einem eigenen
- * Issue. Bis dahin haelt der Port fest, was ein Editor koennen muss.
+ * Presence (`showPeers`) und die Uebernahme entfernter Aenderungen sind bereits Teil des Ports; die
+ * Realtime-Strecke, die sie fuellt, folgt in einem eigenen Issue. Die Boardansicht nutzt heute Laden,
+ * Speichern und die lokale Aenderungsmeldung.
  */
 
 import type { BinaryFileRef, PersistedAppState, SyncElement } from '../../contracts/scene.js'
@@ -26,16 +27,28 @@ export type LocalChange = {
   /** Nur die seit der letzten Meldung tatsaechlich veraenderten Elemente. */
   readonly changedElements: readonly SyncElement[]
   readonly appState: PersistedAppState
-  readonly newFiles: readonly BinaryFileRef[]
+  /**
+   * Kennungen der Dateien, die seit der letzten Meldung neu im Editor liegen. Bewusst nur die Kennungen:
+   * Groesse und Speicherschluessel denkt sich der Client nicht aus, sie kommen mit der Antwort des Uploads.
+   */
+  readonly newFileIds: readonly string[]
 }
 
 export interface BoardEditorPort {
   /** Vollstaendiger geteilter Zustand inklusive Tombstones. */
   getElements(): readonly SyncElement[]
+  /** Persistierte Teilmenge des Editorzustands. */
+  getAppState(): PersistedAppState
+  /**
+   * Inhalt einer im Editor liegenden Datei als Data-URL, oder `null`. Der Aufrufer laedt sie damit hoch;
+   * die Bytes verlassen den Editor ausschliesslich ueber diese Stelle.
+   */
+  getFileDataUrl(fileId: string): string | null
   /** Uebernimmt entfernte Elemente ohne die lokale Undo-Historie zu verschmutzen. */
   applyRemoteElements(elements: readonly SyncElement[]): void
   applyRemoteAppState(appState: PersistedAppState): void
-  applyRemoteFileRef(file: BinaryFileRef): void
+  /** Legt eine geladene Datei in den Editor. Die Bytes kommen als Data-URL vom autorisierten Abrufendpunkt. */
+  applyRemoteFileRef(file: BinaryFileRef, dataUrl: string): void
   showPeers(peers: readonly EditorPeer[]): void
   setReadOnly(readOnly: boolean): void
   onLocalChange(listener: (change: LocalChange) => void): () => void

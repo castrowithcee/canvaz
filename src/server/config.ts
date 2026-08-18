@@ -8,6 +8,7 @@
  */
 
 import type { AssetStorageAdapter } from '../domain/storage/asset-storage-port.js'
+import type { S3StorageConfig } from '../persistence/asset-storage-s3.js'
 
 export type AppConfig = {
   readonly port: number
@@ -25,7 +26,17 @@ export type AppConfig = {
   }
   readonly storage: {
     readonly adapter: AssetStorageAdapter
+    /** Obergrenze einer einzelnen hochgeladenen Bilddatei in Bytes. Begrenzt zugleich den Anfragekoerper. */
+    readonly maxAssetBytes: number
+    /** Genau der gewaehlte Adapter ist gesetzt; der andere ist `null`. */
+    readonly filesystem: { readonly root: string } | null
+    readonly s3: S3StorageConfig | null
   }
+  /**
+   * Obergrenze eines serialisierten Szenen-Snapshots in Bytes. Sie begrenzt zugleich den Anfragekoerper der
+   * Speicherung; ein groesserer Koerper wird gar nicht erst vollstaendig gelesen.
+   */
+  readonly maxSceneBytes: number
   /** Verzeichnis mit der gebauten SPA. */
   readonly webRoot: string
 }
@@ -101,11 +112,67 @@ function readStorageAdapter(env: Env, problems: string[]): AssetStorageAdapter {
   return adapter
 }
 
+function readBoolean(env: Env, name: string, fallback: boolean, problems: string[]): boolean {
+  const raw = env[name]?.trim().toLowerCase()
+  if (raw === undefined || raw.length === 0) {
+    return fallback
+  }
+  if (raw === 'true' || raw === 'false') {
+    return raw === 'true'
+  }
+  problems.push(`${name} muss true oder false sein`)
+  return fallback
+}
+
+/**
+ * Adapterspezifische Pflichtwerte.
+ *
+ * Nur der gewaehlte Adapter wird geprueft: wer `filesystem` faehrt, soll nicht ueber fehlende S3-Werte
+ * stolpern. Fuer das Wurzelverzeichnis gibt es bewusst keinen Standardwert - ein Ersatzpfad im
+ * Containerlayer saehe aus wie Persistenz und waere beim naechsten Neustart weg.
+ */
+function readStorage(
+  env: Env,
+  adapter: AssetStorageAdapter,
+  problems: string[],
+): { readonly filesystem: { readonly root: string } | null; readonly s3: S3StorageConfig | null } {
+  if (adapter === 's3') {
+    return {
+      filesystem: null,
+      s3: {
+        endpoint: readUrl(env, 'CANVAZ_S3_ENDPOINT', problems, ['http:', 'https:']),
+        region: readRequired(env, 'CANVAZ_S3_REGION', problems),
+        bucket: readRequired(env, 'CANVAZ_S3_BUCKET', problems),
+        accessKeyId: readRequired(env, 'CANVAZ_S3_ACCESS_KEY_ID', problems),
+        secretAccessKey: readRequired(env, 'CANVAZ_S3_SECRET_ACCESS_KEY', problems),
+        // MinIO und aeltere Installationen koennen den Bucket nur im Pfad adressieren; AWS erwartet ihn im
+        // Hostnamen. Der Standard folgt AWS, weil eine falsche Annahme dort schwerer zu bemerken waere.
+        forcePathStyle: readBoolean(env, 'CANVAZ_S3_FORCE_PATH_STYLE', false, problems),
+      },
+    }
+  }
+  return { filesystem: { root: readRequired(env, 'CANVAZ_STORAGE_FILESYSTEM_ROOT', problems) }, s3: null }
+}
+
 const SECONDS_PER_HOUR = 3600
+
+/** 5 MiB. Deutlich mehr als jede beobachtete Szene und klein genug, um Speicher und Datenbank zu schuetzen. */
+const DEFAULT_MAX_SCENE_BYTES = 5 * 1024 * 1024
+const MIN_MAX_SCENE_BYTES = 64 * 1024
+const MAX_MAX_SCENE_BYTES = 64 * 1024 * 1024
+
+/**
+ * 5 MiB je Bilddatei. Reicht fuer eine Bildschirmaufnahme oder ein Foto in Ansichtsgroesse und haelt eine
+ * einzelne Anfrage klein genug, dass sie vollstaendig im Speicher geprueft werden kann.
+ */
+const DEFAULT_MAX_ASSET_BYTES = 5 * 1024 * 1024
+const MIN_MAX_ASSET_BYTES = 16 * 1024
+const MAX_MAX_ASSET_BYTES = 64 * 1024 * 1024
 
 export function loadConfig(env: Env = process.env): AppConfig {
   const problems: string[] = []
 
+  const storageAdapter = readStorageAdapter(env, problems)
   const baseUrl = readUrl(env, 'CANVAZ_BASE_URL', problems, ['http:', 'https:'])
   const databaseUrl = readUrl(env, 'DATABASE_URL', problems, ['postgres:', 'postgresql:'])
   const sessionSecret = readRequired(env, 'CANVAZ_SESSION_SECRET', problems)
@@ -127,7 +194,26 @@ export function loadConfig(env: Env = process.env): AppConfig {
       clientSecret: readRequired(env, 'CANVAZ_OIDC_CLIENT_SECRET', problems),
       redirectUri: readUrl(env, 'CANVAZ_OIDC_REDIRECT_URI', problems, ['http:', 'https:']),
     },
-    storage: { adapter: readStorageAdapter(env, problems) },
+    storage: {
+      adapter: storageAdapter,
+      maxAssetBytes: readInteger(
+        env,
+        'CANVAZ_MAX_ASSET_BYTES',
+        DEFAULT_MAX_ASSET_BYTES,
+        MIN_MAX_ASSET_BYTES,
+        MAX_MAX_ASSET_BYTES,
+        problems,
+      ),
+      ...readStorage(env, storageAdapter, problems),
+    },
+    maxSceneBytes: readInteger(
+      env,
+      'CANVAZ_MAX_SCENE_BYTES',
+      DEFAULT_MAX_SCENE_BYTES,
+      MIN_MAX_SCENE_BYTES,
+      MAX_MAX_SCENE_BYTES,
+      problems,
+    ),
     webRoot: env['CANVAZ_WEB_ROOT']?.trim() ?? 'dist/web',
   }
 

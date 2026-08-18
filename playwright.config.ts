@@ -1,3 +1,7 @@
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
 import { defineConfig, devices } from '@playwright/test'
 
 const PROVIDER_PORT = 4471
@@ -10,6 +14,12 @@ export const E2E_APP_URL = `http://127.0.0.1:${String(APP_PORT)}`
 
 const OIDC_CLIENT_ID = 'canvaz-e2e'
 const OIDC_CLIENT_SECRET = 'canvaz-e2e-secret'
+
+/**
+ * Assetvolume der Browsertests. Der Dateisystem-Adapter hat bewusst keinen Standardpfad; hier bekommt er
+ * ein frisches Verzeichnis je Lauf, damit ein alter Lauf den naechsten nicht beeinflusst.
+ */
+const E2E_ASSET_ROOT = mkdtempSync(join(tmpdir(), 'canvaz-e2e-assets-'))
 
 /**
  * Die Browsertests laufen gegen den echten Anwendungsserver und einen standardkonformen Test-Provider mit
@@ -57,6 +67,8 @@ export default defineConfig({
         CANVAZ_OIDC_CLIENT_ID: OIDC_CLIENT_ID,
         CANVAZ_OIDC_CLIENT_SECRET: OIDC_CLIENT_SECRET,
         CANVAZ_OIDC_REDIRECT_URI: `${E2E_APP_URL}/api/auth/callback`,
+        CANVAZ_STORAGE_ADAPTER: 'filesystem',
+        CANVAZ_STORAGE_FILESYSTEM_ROOT: E2E_ASSET_ROOT,
       },
     },
   ],

@@ -9,11 +9,16 @@
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import type { Pool } from 'pg'
 
+import type { BoardStore } from '../../src/domain/board/repositories.js'
 import type { IdentityStore } from '../../src/domain/identity/repositories.js'
 import type { WorkspaceStore } from '../../src/domain/workspace/repositories.js'
+import { createAssetStorage } from '../../src/persistence/asset-storage.js'
+import { createBoardStore } from '../../src/persistence/board-store.js'
 import { createIdentityStore } from '../../src/persistence/identity-store.js'
 import { createWorkspaceStore } from '../../src/persistence/workspace-store.js'
 import { createRoutes } from '../../src/server/app.js'
@@ -33,6 +38,7 @@ export type TestApp = {
   readonly context: AppContext
   readonly store: IdentityStore
   readonly workspaces: WorkspaceStore
+  readonly boards: BoardStore
   readonly realtime: RealtimeGateway
   readonly logs: readonly LogEntry[]
   clearLogs(): void
@@ -50,6 +56,11 @@ export async function startTestApp(options: {
   readonly sessionTtlHours?: number
   /** Haken der spaeteren Realtime-Strecke; der Test nutzt ihn, um den Andockpunkt zu pruefen. */
   readonly onConnection?: RealtimeOptions['onConnection']
+  /**
+   * Storage-Umgebung. Ohne Angabe laeuft der Dateisystem-Adapter in einem Verzeichnis unter `tmpdir()`.
+   * Der Assettest reicht hier die Werte beider Adapter herein - der Anwendungscode bleibt derselbe.
+   */
+  readonly storage?: Readonly<Record<string, string>>
 }): Promise<TestApp> {
   const server: Server = createServer()
   await new Promise<void>((resolve) => {
@@ -69,6 +80,8 @@ export async function startTestApp(options: {
     CANVAZ_OIDC_CLIENT_ID: options.provider.clientId,
     CANVAZ_OIDC_CLIENT_SECRET: options.provider.clientSecret,
     CANVAZ_OIDC_REDIRECT_URI: `${baseUrl}/api/auth/callback`,
+    CANVAZ_STORAGE_FILESYSTEM_ROOT: join(tmpdir(), 'canvaz-test-assets'),
+    ...options.storage,
   })
 
   const logs: LogEntry[] = []
@@ -80,6 +93,7 @@ export async function startTestApp(options: {
 
   const store = createIdentityStore(options.pool)
   const workspaces = createWorkspaceStore(options.pool)
+  const boards = createBoardStore(options.pool)
   // Kurzer Abstand der Ablaufpruefung: der Test soll auf das Schliessen nicht eine Minute warten.
   const realtime = createRealtimeGateway({
     config,
@@ -95,6 +109,8 @@ export async function startTestApp(options: {
     pool: options.pool,
     identity: store,
     workspaces,
+    boards,
+    storage: createAssetStorage(config.storage),
     oidc: createOidcClient(config),
     realtime,
     logger,
@@ -108,6 +124,7 @@ export async function startTestApp(options: {
     context,
     store,
     workspaces,
+    boards,
     realtime,
     logs,
     clearLogs(): void {

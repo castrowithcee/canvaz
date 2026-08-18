@@ -70,10 +70,31 @@ jobs:
         if: ${{ hashFiles('package.json', 'package-lock.json') != '' }}
         run: npm run typecheck --if-present
 
+      # Der s3-Storage-Adapter wird gegen einen echten Objektspeicher geprueft, nicht gegen eine Attrappe.
+      # Kein `services:`-Eintrag: das MinIO-Image braucht ein eigenes Kommando, das dort nicht setzbar ist.
+      - name: Start MinIO
+        if: ${{ hashFiles('package.json', 'package-lock.json') != '' }}
+        run: |
+          docker run --detach --name canvaz-minio \
+            --publish 127.0.0.1:59000:9000 \
+            --env MINIO_ROOT_USER=canvaz \
+            --env MINIO_ROOT_PASSWORD=canvaz-minio-dev \
+            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:59000/minio/health/live > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "MinIO wurde nicht bereit"
+          docker logs canvaz-minio
+          exit 1
+
       - name: Test
         if: ${{ hashFiles('package.json', 'package-lock.json') != '' }}
         env:
           CANVAZ_TEST_DATABASE_URL: postgres://canvaz:canvaz@127.0.0.1:5432/canvaz_test
+          CANVAZ_TEST_S3_ENDPOINT: http://127.0.0.1:59000
         run: npm run test --if-present
 
       - name: Build

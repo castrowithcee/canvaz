@@ -70,29 +70,125 @@ export function sendRedirect(response: ServerResponse, location: string): void {
 
 const MAX_JSON_BODY_BYTES = 16_384
 
-/** Liest einen begrenzten JSON-Koerper. `null` bedeutet: zu gross, kein JSON oder kein Objekt. */
-export async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown> | null> {
+/**
+ * Ergebnis des Koerperlesens. Zu gross und ungueltig sind getrennt, weil sie verschiedene Antworten
+ * verdienen: 413 nennt eine ueberschreitbare Grenze, 400 einen kaputten Koerper.
+ */
+export type JsonBody =
+  | { readonly ok: true; readonly body: Record<string, unknown> }
+  | { readonly ok: false; readonly reason: 'too-large' | 'invalid' }
+
+/**
+ * Liest einen JSON-Koerper mit harter Obergrenze. Ein zu grosser Koerper landet nie vollstaendig im
+ * Speicher: ab der Grenze wird nichts mehr aufgehoben.
+ */
+export async function readJsonBodyLimited(request: IncomingMessage, maxBytes: number): Promise<JsonBody> {
+  // Angekuendigte Groesse zuerst: ein zu grosser Koerper wird gar nicht erst gelesen.
+  const declared = Number(request.headers['content-length'])
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    return { ok: false, reason: 'too-large' }
+  }
   const chunks: Buffer[] = []
   let size = 0
+  let tooLarge = false
   for await (const chunk of request) {
     const buffer = chunk as Buffer
     size += buffer.length
-    if (size > MAX_JSON_BODY_BYTES) {
-      return null
+    if (size > maxBytes) {
+      // Ab hier wird nichts mehr aufgehoben, aber weiter gelesen: der Verbindungsabbruch mitten in der
+      // Anfrage wuerde dem Client statt der 413 einen Netzwerkfehler liefern. Der Speicher bleibt begrenzt.
+      tooLarge = true
+      chunks.length = 0
+      continue
     }
     chunks.push(buffer)
   }
+  if (tooLarge) {
+    return { ok: false, reason: 'too-large' }
+  }
   if (size === 0) {
-    return {}
+    return { ok: true, body: {} }
   }
   try {
     const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
     return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null
+      ? { ok: true, body: parsed as Record<string, unknown> }
+      : { ok: false, reason: 'invalid' }
   } catch {
-    return null
+    return { ok: false, reason: 'invalid' }
   }
+}
+
+/**
+ * Ergebnis des Lesens eines Binaerkoerpers.
+ *
+ * `aborted` ist ein eigener Fall: bricht der Client den Transfer ab, sind die Bytes unvollstaendig. Sie
+ * duerfen dann nirgends ankommen - weder im Speicher noch als Metadatensatz.
+ */
+export type BinaryBody =
+  | { readonly ok: true; readonly bytes: Buffer }
+  | { readonly ok: false; readonly reason: 'too-large' | 'empty' | 'aborted' }
+
+/** Liest einen Binaerkoerper mit harter Obergrenze. Wie beim JSON-Koerper wird nichts darueber aufgehoben. */
+export async function readBinaryBodyLimited(request: IncomingMessage, maxBytes: number): Promise<BinaryBody> {
+  const declared = Number(request.headers['content-length'])
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    return { ok: false, reason: 'too-large' }
+  }
+  const chunks: Buffer[] = []
+  let size = 0
+  let tooLarge = false
+  try {
+    for await (const chunk of request) {
+      const buffer = chunk as Buffer
+      size += buffer.length
+      if (size > maxBytes) {
+        tooLarge = true
+        chunks.length = 0
+        continue
+      }
+      chunks.push(buffer)
+    }
+  } catch {
+    // Verbindungsabbruch mitten im Transfer. Das Gelesene ist eine halbe Datei und wird verworfen.
+    return { ok: false, reason: 'aborted' }
+  }
+  if (tooLarge) {
+    return { ok: false, reason: 'too-large' }
+  }
+  // Ein angekuendigter, aber nicht vollstaendig gelieferter Koerper ist ebenfalls ein Abbruch.
+  if (Number.isFinite(declared) && declared !== size) {
+    return { ok: false, reason: 'aborted' }
+  }
+  if (size === 0) {
+    return { ok: false, reason: 'empty' }
+  }
+  return { ok: true, bytes: Buffer.concat(chunks) }
+}
+
+/**
+ * Sendet Bytes mit ausdruecklichem Typ und ausdruecklicher Cachevorgabe.
+ *
+ * Es gibt keinen Standardwert fuer `cacheControl`: eine berechtigungsabhaengige Antwort ohne bewusste
+ * Cachevorgabe waere genau der Fehler, der ein Bild in einen geteilten Zwischenspeicher legt.
+ */
+export function sendBytes(
+  response: ServerResponse,
+  bytes: Uint8Array,
+  options: { readonly contentType: string; readonly cacheControl: string },
+): void {
+  response.writeHead(200, {
+    'content-type': options.contentType,
+    'content-length': String(bytes.byteLength),
+    'cache-control': options.cacheControl,
+  })
+  response.end(bytes)
+}
+
+/** Liest einen kleinen JSON-Koerper. `null` bedeutet: zu gross, kein JSON oder kein Objekt. */
+export async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown> | null> {
+  const result = await readJsonBodyLimited(request, MAX_JSON_BODY_BYTES)
+  return result.ok ? result.body : null
 }
 
 const CONTENT_TYPES: Readonly<Record<string, string>> = {

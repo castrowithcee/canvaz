@@ -5,6 +5,8 @@
  * zur Laufzeit.
  */
 
+import type { BinaryFileRef, SceneSnapshot } from './scene.js'
+
 export const API_BASE_PATH = '/api'
 
 export const AUTH_LOGIN_PATH = `${API_BASE_PATH}/auth/login`
@@ -188,4 +190,117 @@ export type RemoveWorkspaceMemberRequest = {
 export type WorkspaceMemberChangeResponse = {
   readonly userId: string
   readonly role: WorkspaceRoleView | null
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+/* Boards und Szenen                                                                                     */
+/* ---------------------------------------------------------------------------------------------------- */
+
+export const BOARDS_PATH = `${API_BASE_PATH}/boards`
+export const BOARD_RENAME_PATH = `${API_BASE_PATH}/boards/rename`
+export const BOARD_STATUS_PATH = `${API_BASE_PATH}/boards/status`
+/** Laden (GET) und Speichern (POST) der Szene eines Boards. */
+export const BOARD_SCENE_PATH = `${API_BASE_PATH}/boards/scene`
+
+/** Kennung des Boards als Query-Parameter der lesenden Boardendpunkte. */
+export const BOARD_ID_PARAM = 'boardId'
+/** Titelfilter der Boardliste. Ein Teilstring ohne Platzhalterdeutung; leer heisst: kein Filter. */
+export const BOARD_QUERY_PARAM = 'q'
+/** Aktive Liste oder Archivansicht. Fehlt der Parameter, gilt `active`. */
+export const BOARD_STATUS_PARAM = 'status'
+
+export type BoardStatusView = 'active' | 'archived'
+
+export type BoardView = {
+  readonly id: string
+  readonly workspaceId: string
+  readonly title: string
+  readonly status: BoardStatusView
+  readonly ownerUserId: string
+  readonly ownerDisplayName: string
+  /** Nummer der zuletzt gespeicherten Szene. `0` heisst: noch nie gespeichert. */
+  readonly sceneVersion: number
+  /** ISO-8601. */
+  readonly createdAt: string
+  readonly updatedAt: string
+}
+
+export type BoardsResponse = {
+  readonly workspace: WorkspaceView
+  readonly boards: readonly BoardView[]
+}
+
+export type CreateBoardRequest = {
+  readonly workspaceId: string
+  readonly title: string
+}
+
+export type RenameBoardRequest = {
+  readonly boardId: string
+  readonly title: string
+}
+
+export type SetBoardStatusRequest = {
+  readonly boardId: string
+  readonly status: BoardStatusView
+}
+
+/**
+ * Geoeffnetes Board samt Szene. `version` ist die Ausgangsversion der naechsten Speicherung; bei einem noch
+ * nie gespeicherten Board ist sie `0` und `scene` der leere Ausgangsstand.
+ */
+export type BoardSceneResponse = {
+  readonly board: BoardView
+  readonly version: number
+  readonly scene: SceneSnapshot
+}
+
+export type SaveSceneRequest = {
+  readonly boardId: string
+  /** Version, auf der diese Speicherung aufsetzt. */
+  readonly baseVersion: number
+  readonly scene: SceneSnapshot
+}
+
+export type SaveSceneResponse = {
+  readonly version: number
+  /** ISO-8601, serverseitiger Zeitpunkt der Speicherung. */
+  readonly savedAt: string
+}
+
+/**
+ * Antwort auf eine Speicherung, die auf einer ueberholten Version aufsetzt (409). Die aktuelle Version steht
+ * dabei, damit die Oberflaeche den Abstand benennen kann, ohne zu raten.
+ */
+export type SceneConflictResponse = ErrorResponse & {
+  readonly currentVersion: number
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+/* Bildassets                                                                                            */
+/* ---------------------------------------------------------------------------------------------------- */
+
+/**
+ * Hochladen (POST) und Abrufen (GET) einer Bilddatei eines Boards.
+ *
+ * Beim Upload stehen Board, Dateikennung und Dateiname in der Abfragezeichenfolge und die Bytes im
+ * Anfragekoerper - roh, nicht als JSON und nicht als Formular. Damit gibt es keine Base64-Aufblaehung und
+ * keinen Parser fuer mehrteilige Koerper.
+ */
+export const BOARD_ASSETS_PATH = `${API_BASE_PATH}/boards/assets`
+
+/** Kennung der Datei im Szenenvertrag (`BinaryFileRef.id`), vom Editor vergeben. */
+export const ASSET_FILE_ID_PARAM = 'fileId'
+/** Urspruenglicher Dateiname. Rein beschreibend; er bestimmt weder Typ noch Speicherort. */
+export const ASSET_FILE_NAME_PARAM = 'fileName'
+
+export const MAX_ASSET_FILE_ID_LENGTH = 255
+export const MAX_ASSET_FILE_NAME_LENGTH = 255
+
+/**
+ * Antwort eines angenommenen Uploads. `file` geht unveraendert in `SceneSnapshot.files` - der Client denkt
+ * sich weder Groesse noch Speicherschluessel selbst aus.
+ */
+export type UploadBoardAssetResponse = {
+  readonly file: BinaryFileRef
 }

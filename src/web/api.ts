@@ -9,6 +9,12 @@
 import type {
   AddWorkspaceMemberRequest,
   AdminUsersResponse,
+  BoardSceneResponse,
+  BoardStatusView,
+  BoardView,
+  BoardsResponse,
+  SaveSceneResponse,
+  UploadBoardAssetResponse,
   ChangeWorkspaceMemberRoleRequest,
   LogoutResponse,
   MeResponse,
@@ -26,7 +32,16 @@ import type {
 import {
   ADMIN_USER_STATUS_PATH,
   ADMIN_USERS_PATH,
+  ASSET_FILE_ID_PARAM,
   AUTH_LOGOUT_PATH,
+  BOARD_ASSETS_PATH,
+  BOARD_ID_PARAM,
+  BOARD_QUERY_PARAM,
+  BOARD_RENAME_PATH,
+  BOARD_SCENE_PATH,
+  BOARD_STATUS_PARAM,
+  BOARD_STATUS_PATH,
+  BOARDS_PATH,
   CSRF_HEADER,
   ME_PATH,
   WORKSPACE_ID_PARAM,
@@ -40,6 +55,8 @@ import {
   WORKSPACE_STATUS_PATH,
   WORKSPACES_PATH,
 } from '../contracts/api.js'
+
+import type { SceneSnapshot } from '../contracts/scene.js'
 
 export class ApiError extends Error {
   readonly status: number
@@ -151,4 +168,128 @@ export async function removeWorkspaceMember(
   change: RemoveWorkspaceMemberRequest,
 ): Promise<WorkspaceMemberChangeResponse> {
   return request<WorkspaceMemberChangeResponse>(WORKSPACE_MEMBER_REMOVE_PATH, mutation(csrfToken, change))
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+/* Boards und Szenen                                                                                     */
+/* ---------------------------------------------------------------------------------------------------- */
+
+/** Boards eines Arbeitsbereichs. `status` trennt die aktive Liste von der Archivansicht. */
+export async function fetchBoards(
+  workspaceId: string,
+  options: { readonly status: BoardStatusView; readonly query: string },
+): Promise<BoardsResponse> {
+  const params = new URLSearchParams({
+    [WORKSPACE_ID_PARAM]: workspaceId,
+    [BOARD_STATUS_PARAM]: options.status,
+  })
+  if (options.query !== '') {
+    params.set(BOARD_QUERY_PARAM, options.query)
+  }
+  return request<BoardsResponse>(`${BOARDS_PATH}?${params.toString()}`)
+}
+
+export async function createBoard(csrfToken: string, workspaceId: string, title: string): Promise<BoardView> {
+  return request<BoardView>(BOARDS_PATH, mutation(csrfToken, { workspaceId, title }))
+}
+
+export async function renameBoard(csrfToken: string, boardId: string, title: string): Promise<BoardView> {
+  return request<BoardView>(BOARD_RENAME_PATH, mutation(csrfToken, { boardId, title }))
+}
+
+export async function setBoardStatus(
+  csrfToken: string,
+  boardId: string,
+  status: BoardStatusView,
+): Promise<BoardView> {
+  return request<BoardView>(BOARD_STATUS_PATH, mutation(csrfToken, { boardId, status }))
+}
+
+export async function fetchBoardScene(boardId: string): Promise<BoardSceneResponse> {
+  const params = new URLSearchParams({ [BOARD_ID_PARAM]: boardId })
+  return request<BoardSceneResponse>(`${BOARD_SCENE_PATH}?${params.toString()}`)
+}
+
+/**
+ * Speichert die Szene auf der genannten Ausgangsversion. Ein 409 kommt als `ApiError` an und darf nie
+ * stillschweigend wiederholt werden - er bedeutet, dass jemand anderes bereits geschrieben hat.
+ */
+export async function saveBoardScene(
+  csrfToken: string,
+  payload: { readonly boardId: string; readonly baseVersion: number; readonly scene: SceneSnapshot },
+): Promise<SaveSceneResponse> {
+  return request<SaveSceneResponse>(BOARD_SCENE_PATH, mutation(csrfToken, payload))
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+/* Bildassets                                                                                            */
+/* ---------------------------------------------------------------------------------------------------- */
+
+/**
+ * Zerlegt eine Data-URL des Editors in Typ und Bytes.
+ *
+ * Der Upload traegt die rohen Bytes, nicht die Base64-Zeichenkette: das spart ein Drittel Uebertragung und
+ * der Server prueft ohnehin den tatsaechlichen Inhalt. `atob` und eine Schleife reichen dafuer; eine
+ * Bibliothek dafuer waere ein Paket fuer sechs Zeilen.
+ */
+function decodeDataUrl(dataUrl: string): { readonly mimeType: string; readonly body: ArrayBuffer } {
+  const comma = dataUrl.indexOf(',')
+  if (!dataUrl.startsWith('data:') || comma < 0 || !dataUrl.slice(0, comma).includes(';base64')) {
+    throw new ApiError(0, 'Das Bild liegt in einer unerwarteten Form vor.')
+  }
+  const mimeType = dataUrl.slice('data:'.length, comma).split(';')[0] ?? ''
+  const binary = atob(dataUrl.slice(comma + 1))
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+  return { mimeType, body: bytes.buffer }
+}
+
+function assetQuery(boardId: string, fileId: string): string {
+  return new URLSearchParams({ [BOARD_ID_PARAM]: boardId, [ASSET_FILE_ID_PARAM]: fileId }).toString()
+}
+
+/**
+ * Laedt ein Bild zu einem Board hoch und liefert die Referenz, mit der die Szene es fuehrt.
+ *
+ * Idempotent: derselbe Inhalt unter derselben Kennung ergibt dieselbe Antwort, ohne ein zweites Mal zu
+ * speichern.
+ */
+export async function uploadBoardAsset(
+  csrfToken: string,
+  boardId: string,
+  fileId: string,
+  dataUrl: string,
+): Promise<UploadBoardAssetResponse> {
+  const { mimeType, body } = decodeDataUrl(dataUrl)
+  return request<UploadBoardAssetResponse>(`${BOARD_ASSETS_PATH}?${assetQuery(boardId, fileId)}`, {
+    method: 'POST',
+    headers: { [CSRF_HEADER]: csrfToken, 'content-type': mimeType },
+    body,
+  })
+}
+
+/**
+ * Holt die Bytes eines Bildes ueber den autorisierten Endpunkt und macht daraus eine Data-URL fuer den
+ * Editor. Es gibt keine oeffentliche Bild-URL: die Sitzung entscheidet bei jedem einzelnen Abruf.
+ */
+export async function fetchBoardAssetDataUrl(boardId: string, fileId: string): Promise<string> {
+  const response = await fetch(`${BOARD_ASSETS_PATH}?${assetQuery(boardId, fileId)}`, {
+    credentials: 'same-origin',
+  })
+  if (!response.ok) {
+    throw new ApiError(response.status, `Das Bild konnte nicht geladen werden (${String(response.status)}).`)
+  }
+  const blob = await response.blob()
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      resolve(String(reader.result))
+    }
+    reader.onerror = () => {
+      reject(new ApiError(0, 'Das Bild konnte nicht gelesen werden.'))
+    }
+    reader.readAsDataURL(blob)
+  })
 }
