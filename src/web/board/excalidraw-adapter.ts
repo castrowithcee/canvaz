@@ -6,7 +6,13 @@
  */
 
 import { CaptureUpdateAction, Excalidraw } from '@excalidraw/excalidraw'
-import type { ExcalidrawImperativeAPI, BinaryFiles, Collaborator, SocketId } from '@excalidraw/excalidraw/types'
+import type {
+  ExcalidrawImperativeAPI,
+  BinaryFileData,
+  BinaryFiles,
+  Collaborator,
+  SocketId,
+} from '@excalidraw/excalidraw/types'
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types'
 import type { AppState } from '@excalidraw/excalidraw/types'
 import { createElement, useCallback, useEffect, useRef } from 'react'
@@ -41,17 +47,6 @@ export function toPersistedAppState(appState: Pick<AppState, 'viewBackgroundColo
   }
 }
 
-/** Binaerassets verlassen den Editor nur als Referenz; die Bytes gehen spaeter an den Storage-Port. */
-export function toFileRefs(files: BinaryFiles, storagePrefix: string): BinaryFileRef[] {
-  return Object.values(files).map((file) => ({
-    id: file.id,
-    mimeType: file.mimeType,
-    created: file.created,
-    byteSize: file.dataURL.length,
-    storageKey: `${storagePrefix}/${file.id}`,
-  }))
-}
-
 /** Gleichheit der persistierten Teilmenge. Vier Felder, deshalb ein Vergleich statt einer Bibliothek. */
 function samePersistedAppState(left: PersistedAppState, right: PersistedAppState): boolean {
   return (
@@ -64,7 +59,6 @@ function samePersistedAppState(left: PersistedAppState, right: PersistedAppState
 
 export class ExcalidrawBoardAdapter implements BoardEditorPort {
   readonly #api: ExcalidrawImperativeAPI
-  readonly #storagePrefix: string
   readonly #listeners = new Set<(change: LocalChange) => void>()
   readonly #sentVersions = new Map<string, number>()
   readonly #knownFileIds = new Set<string>()
@@ -74,16 +68,15 @@ export class ExcalidrawBoardAdapter implements BoardEditorPort {
   /** Zuletzt gemeldeter AppState. `null` heisst: noch kein Ausgangsstand uebernommen. */
   #lastAppState: PersistedAppState | null = null
 
-  constructor(api: ExcalidrawImperativeAPI, storagePrefix: string) {
+  constructor(api: ExcalidrawImperativeAPI) {
     this.#api = api
-    this.#storagePrefix = storagePrefix
     // Der Ausgangsstand des Editors ist bereits bekannt und keine lokale Aenderung. Ohne diese Uebernahme
     // meldete das erste Editorereignis die geladene Szene als frisch gezeichnet.
     for (const element of this.getElements()) {
       this.#sentVersions.set(element.id, element.version)
     }
-    for (const file of this.getFileRefs()) {
-      this.#knownFileIds.add(file.id)
+    for (const fileId of Object.keys(this.#api.getFiles())) {
+      this.#knownFileIds.add(fileId)
     }
   }
 
@@ -107,9 +100,9 @@ export class ExcalidrawBoardAdapter implements BoardEditorPort {
     return toPersistedAppState(this.#api.getAppState())
   }
 
-  /** Referenzen aller im Editor bekannten Binaerdateien. Die Bytes bleiben beim Storage-Port. */
-  getFileRefs(): readonly BinaryFileRef[] {
-    return toFileRefs(this.#api.getFiles(), this.#storagePrefix)
+  /** Inhalt einer Datei als Data-URL. Einzige Stelle, an der Bytes den Editor verlassen. */
+  getFileDataUrl(fileId: string): string | null {
+    return this.#api.getFiles()[fileId]?.dataURL ?? null
   }
 
   #handleChange(elements: readonly ExcalidrawElement[], appState: AppState, files: BinaryFiles): void {
@@ -123,9 +116,9 @@ export class ExcalidrawBoardAdapter implements BoardEditorPort {
         changed.push(element)
       }
     }
-    const newFiles = toFileRefs(files, this.#storagePrefix).filter((file) => !this.#knownFileIds.has(file.id))
-    for (const file of newFiles) {
-      this.#knownFileIds.add(file.id)
+    const newFileIds = Object.keys(files).filter((fileId) => !this.#knownFileIds.has(fileId))
+    for (const fileId of newFileIds) {
+      this.#knownFileIds.add(fileId)
     }
     // Der AppState gehoert zum geteilten Zustand: eine geaenderte Hintergrundfarbe oder ein umgeschaltetes
     // Raster ist eine Aenderung, auch wenn dabei kein Element angefasst wurde.
@@ -133,10 +126,10 @@ export class ExcalidrawBoardAdapter implements BoardEditorPort {
     const appStateChanged =
       this.#lastAppState !== null && !samePersistedAppState(this.#lastAppState, persistedAppState)
     this.#lastAppState = persistedAppState
-    if (changed.length === 0 && newFiles.length === 0 && !appStateChanged) {
+    if (changed.length === 0 && newFileIds.length === 0 && !appStateChanged) {
       return
     }
-    const change: LocalChange = { changedElements: changed, appState: persistedAppState, newFiles }
+    const change: LocalChange = { changedElements: changed, appState: persistedAppState, newFileIds }
     for (const listener of this.#listeners) {
       listener(change)
     }
@@ -185,10 +178,15 @@ export class ExcalidrawBoardAdapter implements BoardEditorPort {
     }
   }
 
-  applyRemoteFileRef(file: BinaryFileRef): void {
-    // Der Spike transportiert keine Bytes. Das Produkt laedt sie hier ueber den Storage-Port nach und ruft
-    // danach `api.addFiles`.
+  applyRemoteFileRef(file: BinaryFileRef, dataUrl: string): void {
+    // Bekannt, bevor die Datei im Editor landet: sonst meldete das folgende Editorereignis sie als neu und
+    // der Aufrufer wuerde dieselbe Datei sofort wieder hochladen.
     this.#knownFileIds.add(file.id)
+    // Der Cast liegt an derselben Grenze wie der der Elemente: Excalidraw fuehrt fuer Kennung und Data-URL
+    // eigene Markentypen, fachlich sind es Zeichenketten.
+    this.#api.addFiles([
+      { id: file.id, mimeType: file.mimeType, dataURL: dataUrl, created: file.created },
+    ] as unknown as BinaryFileData[])
   }
 
   showPeers(peers: readonly EditorPeer[]): void {
@@ -224,12 +222,10 @@ export class ExcalidrawBoardAdapter implements BoardEditorPort {
  */
 export function BoardCanvas({
   viewMode,
-  storagePrefix,
   scene,
   onAdapterReady,
 }: {
   readonly viewMode: boolean
-  readonly storagePrefix: string
   /** Ausgangsstand. Wird als `initialData` gesetzt, damit der Editor ihn nicht beim Mounten ueberschreibt. */
   readonly scene: SceneSnapshot
   readonly onAdapterReady: (adapter: ExcalidrawBoardAdapter) => void
@@ -238,14 +234,14 @@ export function BoardCanvas({
   // Stabile Identitaet: Excalidraw reicht die Schnittstelle erneut heraus, sobald sich der Rueckruf aendert.
   const handleApi = useCallback(
     (api: ExcalidrawImperativeAPI) => {
-      const next = new ExcalidrawBoardAdapter(api, storagePrefix)
+      const next = new ExcalidrawBoardAdapter(api)
       adapter.current = next
       // Das Abonnement auf Editoraenderungen gehoert zum Adapter und nicht zum Aufrufer; der Port kennt
       // deshalb weder `start` noch `stop`.
       next.start()
       onAdapterReady(next)
     },
-    [storagePrefix, onAdapterReady],
+    [onAdapterReady],
   )
   useEffect(
     () => () => {

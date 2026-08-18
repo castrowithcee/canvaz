@@ -12,7 +12,7 @@ Planung, Architekturentscheidungen und Betriebswissen liegen im getrennten Repos
 | `src/domain` | Reiner Fachkern: Modelle, Invarianten, Repository- und Storage-Ports. Kein IO. |
 | `src/contracts` | Zwischen Server und SPA geteilte Typen (HTTP-Vertraege, Szenenvertrag). |
 | `src/server` | Konfiguration, HTTP, Routentabelle, OIDC-Anmeldung, Guards, WebSocket-Einstieg, Composition Root. |
-| `src/persistence` | PostgreSQL-Adapter: Pool, SQL-Migrationen, Repository-Umsetzungen. |
+| `src/persistence` | Adapter zur Aussenwelt: Pool, SQL-Migrationen, Repository- und Storage-Umsetzungen. |
 | `src/web` | React/Vite-SPA inklusive Editor-Port und Excalidraw-Adapter. |
 | `tests` | `unit` (ohne IO), `integration` (echte Datenbank), `e2e` (Playwright), `support` (Testhilfen). |
 
@@ -30,9 +30,10 @@ npm run start:server      # API und gebaute SPA auf Port 3000
 npm run dev               # alternativ: Vite auf Port 5173 mit Proxy auf /api
 ```
 
-`npm run db:up` startet die Datenbank aus `compose.yml`. Der Hostport ist bewusst **55432** statt 5432,
-damit er nicht mit anderen lokalen Diensten kollidiert. Die Datenbank `canvaz_test` wird beim ersten Start
-mit angelegt und gehoert den Integrationstests.
+`npm run db:up` startet PostgreSQL und MinIO aus `compose.yml`. Die Hostports sind bewusst **55432** und
+**59000** statt 5432 und 9000, damit sie nicht mit anderen lokalen Diensten kollidieren. Die Datenbank
+`canvaz_test` wird beim ersten Start mit angelegt und gehoert den Integrationstests; MinIO ist der
+Gegenpart des `s3`-Storage-Adapters und wird nur fuer dessen Pruefung gebraucht.
 
 Der Server startet nicht mit unvollstaendiger Konfiguration; fehlende Umgebungsvariablen werden beim Start
 gesammelt gemeldet. Siehe `.env.example`.
@@ -213,6 +214,8 @@ Die Antwort entsteht in der Transaktion und wird erst nach dem Commit gesendet.
 | POST | `/api/boards/status` | `board:archive` / `board:unarchive` | 404 unsichtbar, sonst 403 | — |
 | GET | `/api/boards/scene?boardId=` | `board:read` | 404 | — |
 | POST | `/api/boards/scene` | `scene:write` | 404 unsichtbar, sonst 403 | 409 |
+| POST | `/api/boards/assets?boardId=&fileId=` | `scene:write` | 404 unsichtbar, sonst 403 | 409 |
+| GET | `/api/boards/assets?boardId=&fileId=` | `board:read` | 404 | — |
 
 `status` trennt die aktive Liste von der Archivansicht (Standard `active`), `q` filtert nach einem Teilstring
 im Titel - ohne Platzhalterdeutung, damit `%` und `_` keine Wirkung haben.
@@ -273,11 +276,138 @@ fremde Herkunft, und die Schriften kommen nachweislich aus dem eigenen Build.
 Der Editor wird erst beim Oeffnen eines Boards nachgeladen. Das haelt den Einstieg klein (rund 215 kB, 67 kB
 gzip) und stellt sicher, dass der eigene Assetpfad vor dem Schriftregister von Excalidraw steht.
 
-### Assets
+### Bildassets
 
-Die Tabelle `board_assets` und der Port `BoardAssetRepository` stehen bereits - damit Board- und
-Workspacebezug von Anfang an Teil des Vertrags sind. Storage-Port, Upload und Abruf der Bytes liefert ein
-eigenes Paket; eine PostgreSQL-Umsetzung des Ports gibt es deshalb bewusst noch nicht.
+Ein **Asset** sind die Bytes eines Bildes, das in einem Board liegt. Die Metadaten stehen in `board_assets`
+(Board- und Workspacebezug, Dateikennung, MIME-Typ, Groesse, Pruefsumme, Speicherschluessel), die Bytes
+liegen hinter dem Storage-Port. **Die Datenbank ist die Wahrheit ueber ein Asset, der Storage-Port kennt nur
+Schluessel und Bytes.**
+
+#### Ein Port, zwei Adapter
+
+`src/domain/storage/asset-storage-port.ts` ist der gesamte Vertrag:
+
+```ts
+put(key: string, bytes: Uint8Array): Promise<void>
+get(key: string): Promise<Uint8Array | null>
+delete(key: string): Promise<void>
+```
+
+| Adapter | Umsetzung | Zusagen |
+| --- | --- | --- |
+| `filesystem` | `src/persistence/asset-storage-filesystem.ts` | Schreibt ausschliesslich unter `CANVAZ_STORAGE_FILESYSTEM_ROOT`. Geschrieben wird in eine temporaere Datei im Zielverzeichnis und dann per `rename` gezogen - ein Abbruch hinterlaesst nie eine halbe Datei unter dem gueltigen Schluessel. |
+| `s3` | `src/persistence/asset-storage-s3.ts` | Spricht S3 und MinIO ueber signierte HTTP-Anfragen (AWS Signature Version 4, `node:crypto` und `fetch`). Ein einzelnes `PUT` ist die atomare Einheit des Objektspeichers. |
+
+**Kein S3-SDK.** Gebraucht werden drei Aufrufe auf genau einem Bucket. `@aws-sdk/client-s3` braechte
+Paginierung, Multipart, Presigning, Retry-Strategien, eine Credential-Provider-Kette und einen
+Middleware-Stack mit - nichts davon wird hier verwendet, und es waeren mehrere Dutzend zusaetzliche Pakete
+in einer selbst gehosteten Anwendung. Der einzige nicht triviale Teil ist die Signatur; sie ist
+vollstaendig spezifiziert und in wenigen Zeilen geschrieben. Belegt wird das gegen ein echtes MinIO, nicht
+gegen eine Attrappe.
+
+Der Speicherschluessel ist **inhaltsadressiert**: `boards/<boardId>/<sha256>`. Derselbe Inhalt im selben
+Board ergibt denselben Schluessel, ein Wiederholungsversuch ueberschreibt sich selbst, und der erlaubte
+Zeichenvorrat (`assertStorageKey`) macht einen Ausbruch aus dem Namensraum gar nicht erst formulierbar.
+
+**Der Adapterwechsel ist ausschliesslich Laufzeitkonfiguration.** Die Wahl faellt an genau einer Stelle
+(`src/persistence/asset-storage.ts`); Routen, Domain und Datenbank kennen nur `AssetStoragePort`. Fehlende
+adapterspezifische Pflichtwerte fuehren zum Startfehler, gesammelt wie jeder andere Konfigurationsfehler.
+
+| Variable | Gilt fuer | Bedeutung |
+| --- | --- | --- |
+| `CANVAZ_STORAGE_ADAPTER` | beide | `filesystem` (Standard) oder `s3` |
+| `CANVAZ_MAX_ASSET_BYTES` | beide | Obergrenze je Datei, Standard 5 MiB (erlaubt 16 KiB bis 64 MiB) |
+| `CANVAZ_STORAGE_FILESYSTEM_ROOT` | `filesystem` | Wurzelverzeichnis, **Pflicht ohne Standardwert** |
+| `CANVAZ_S3_ENDPOINT` | `s3` | Basis-URL des Dienstes |
+| `CANVAZ_S3_REGION` | `s3` | Region der Signatur |
+| `CANVAZ_S3_BUCKET` | `s3` | Bucket, vom Betreiber angelegt |
+| `CANVAZ_S3_ACCESS_KEY_ID`, `CANVAZ_S3_SECRET_ACCESS_KEY` | `s3` | Zugangsdaten |
+| `CANVAZ_S3_FORCE_PATH_STYLE` | `s3` | `true` fuer MinIO, Standard `false` (AWS) |
+
+Fuer das Wurzelverzeichnis gibt es bewusst **keinen** Standardwert: es muss ein persistentes Volume sein.
+Ein Ersatzpfad im Containerlayer saehe aus wie Persistenz und waere beim naechsten Neustart weg.
+
+#### Endpunkte
+
+| Methode | Pfad | Berechtigung | Ohne Berechtigung | Falscher Typ | Zu gross |
+| --- | --- | --- | --- | --- | --- |
+| POST | `/api/boards/assets?boardId=&fileId=&fileName=` | `scene:write` + CSRF-Token | 404 unsichtbar, sonst 403 | 415 | 413 |
+| GET | `/api/boards/assets?boardId=&fileId=` | `board:read` | 404 | — | — |
+
+Der Upload traegt die Bytes **roh** im Anfragekoerper; Board, Dateikennung und Dateiname stehen in der
+Abfragezeichenfolge. Das spart die Base64-Aufblaehung und einen Parser fuer mehrteilige Koerper. Ein Bild
+ist Inhalt des Boards, deshalb entscheidet dieselbe Aktion wie fuer die Szene: in einem archivierten Board
+oder Arbeitsbereich bleiben Bilder lesbar, aber es kommt keines mehr dazu (403).
+
+Weitere Antworten: 401 ohne Sitzung, 403 ohne CSRF-Token, 400 ohne Inhalt oder mit ungueltiger
+Dateikennung, 400 bei abgebrochenem Transfer, **409**, wenn dieselbe Dateikennung im selben Board bereits
+einen **anderen** Inhalt traegt. Derselbe Inhalt unter derselben Kennung ist dagegen idempotent und
+antwortet mit 200 statt 201, ohne ein zweites Mal zu speichern.
+
+#### Was der Client behauptet, zaehlt nicht
+
+Geprueft wird der **Inhalt**: die Signaturbytes muessen ein erlaubtes Format ergeben **und** mit dem
+behaupteten Content-Type uebereinstimmen. Eine `.png`-Endung mit Skriptinhalt scheitert daran ebenso wie
+ein echtes PNG, das als JPEG angekuendigt wird.
+
+Erlaubt sind `image/png`, `image/jpeg`, `image/gif` und `image/webp`. **SVG fehlt bewusst**: es ist ein
+Dokument mit Skript- und Verweisfaehigkeit, kein Rasterbild; es aus einer Instanz auszuliefern, die auch
+Sitzungen fuehrt, waere eine eigene Entscheidung mit eigener Absicherung.
+
+#### Der Abruf ist nicht erratbar und ueberlebt keinen Entzug
+
+Es gibt **keine oeffentliche und keine vorsignierte Bild-URL**. Jeder Abruf laeuft ueber dieselbe Sitzung
+und dieselbe Entscheidung (`decideBoardAccess`) wie das Oeffnen des Boards; das Bucket-Objekt oder die
+Datei im Volume ist von aussen nie erreichbar. Damit gibt es nichts, was ein Nutzer nach dem Entzug seiner
+Berechtigung noch einloesen koennte - der naechste Abruf beantwortet dieselbe URL mit 404.
+
+Eine geratene Dateikennung ist von einer fremden nicht zu unterscheiden: die Abfrage traegt immer den
+Boardbezug (`findByFileId(boardId, fileId)`), es gibt keinen Weg zu einem Asset ohne ihn.
+
+Die Antwort traegt den in der Datenbank gespeicherten Typ - nie den beim Upload behaupteten -, dazu
+`X-Content-Type-Options: nosniff` und `Cache-Control: private, no-store`. Berechtigungsabhaengiger Inhalt
+gehoert in keinen geteilten und in keinen privaten Zwischenspeicher.
+
+**Die Content-Security-Policy wurde dafuer nicht angefasst.** Der Editor holt die Bytes ueber `fetch` von
+der eigenen Herkunft (`default-src 'self'`) und bettet sie als `data:`-Verweis ein, was `img-src 'self'
+data: blob:` seit Beginn erlaubt. Der Browsertest belegt es: ein Bild wird eingefuegt, hochgeladen,
+gespeichert und nach dem Neuladen wieder dargestellt.
+
+Mit dem Bild kommt allerdings ein zweiter, **gewollt blockierter** Verstoss dazu: Excalidraw kompiliert fuer
+die Schriftreduktion ein Harfbuzz-WebAssembly und braeuchte dafuer `'wasm-unsafe-eval'` in `script-src`. Die
+Policy erlaubt es **nicht**. Zeichnen, Bilder, Speichern und Laden funktionieren ohne - der Browsertest
+zeigt beides in einem Lauf. Betroffen waere allein der Export mit reduzierten Schriften, und das ist kein
+Gegenstand dieses Pakets; die Lockerung waere eine eigene Entscheidung mit eigener Begruendung.
+
+#### Aufraeumen und Archivieren
+
+**Es wird nichts geloescht.** Weder wenn ein Bildelement aus der Szene entfernt wird, noch beim Archivieren
+eines Boards oder Arbeitsbereichs. Zwei Gruende:
+
+1. Die Historie in `scene_versions` haelt bis zu 100 aeltere Staende, und die verweisen weiter auf das Bild.
+   Ein Hard Delete wuerde ein Rueckgaengig oder einen Blick in die Historie ins Leere laufen lassen.
+2. Archivieren ist ausdruecklich umkehrbar und macht unveraenderlich, nicht unvollstaendig. Ein Board muss
+   aus dem Archiv verlustfrei zurueckkehren.
+
+Ein Hard Delete braucht laut Aufgabenvertrag eine gesonderte Entscheidung - mitsamt Aufbewahrungsfrist,
+Wirkung auf die Historie und Nachweis. Bis dahin leben Assets so lange wie ihr Board. `board_assets` traegt
+`on delete cascade` auf `(board_id, workspace_id)`; das beschreibt, was beim direkten Loeschen in der
+Datenbank geschieht, ueber die Anwendung gibt es diesen Weg nicht.
+
+Der einzige Loeschvorgang im Anwendungscode ist die Aufraeumung eines gescheiterten Uploads: schlaegt die
+Transaktion oder ihr Commit fehl, nachdem die Bytes geschrieben wurden, werden genau diese Bytes wieder
+entfernt. Sonst blieben unerreichbare Bytes ohne Metadatensatz zurueck.
+
+#### Editor
+
+Ein eingefuegtes Bild geht **zuerst** ueber den Upload und **erst danach** in die Szene: Groesse und
+Speicherschluessel kommen aus der Antwort des Servers, der Client denkt sie sich nicht aus. Solange ein
+Upload laeuft, wird die Szene nicht gespeichert - ein Stand, der auf ein noch nicht hochgeladenes Bild
+verweist, waere beim naechsten Oeffnen unvollstaendig. Beim Oeffnen holt die Boardansicht die Bytes jedes
+in `SceneSnapshot.files` genannten Bildes einzeln ueber den autorisierten Endpunkt.
+
+Excalidraw-Typen bleiben dabei in `src/web/board/excalidraw-adapter.ts`: der Port reicht Data-URLs als
+schlichte Zeichenketten heraus und herein.
 
 ### Bekannte Grenzen
 
@@ -288,6 +418,12 @@ eigenes Paket; eine PostgreSQL-Umsetzung des Ports gibt es deshalb bewusst noch 
   der Datenbank nimmt Boards und ihre Szenen mit. Ueber die Anwendung gibt es nur Archivierung.
 - Ein Board wird beim Archivieren des Arbeitsbereichs nicht selbst archiviert; es wird durch den Zustand des
   Arbeitsbereichs unveraenderlich. Das haelt die Rueckkehr aus dem Archiv verlustfrei.
+- Der Storage-Port kennt keine Bereinigung verwaister Bytes. Bytes ohne Metadatensatz koennen nur entstehen,
+  wenn die Aufraeumung eines gescheiterten Uploads selbst scheitert; das wird als `board.asset.orphan`
+  protokolliert. Ein Aufraeumlauf braucht dieselbe gesonderte Entscheidung wie das Hard Delete.
+- `SceneSnapshot.files[].storageKey` kommt zwar vom Server, wird beim Abruf aber nicht verwendet: massgeblich
+  ist ausschliesslich `board_assets.storage_key`. Ein Client kann ueber die Szene keinen fremden Schluessel
+  erreichbar machen.
 
 ### Nachweis
 
@@ -342,8 +478,15 @@ npm run test:e2e      # Playwright, benoetigt einmalig `npx playwright install c
 npm audit --audit-level=high
 ```
 
-Die Integrationstests brauchen eine laufende Datenbank (`npm run db:up`). Ihre Verbindung laesst sich ueber
-`CANVAZ_TEST_DATABASE_URL` uebersteuern.
+Die Integrationstests brauchen eine laufende Datenbank **und ein laufendes MinIO** (`npm run db:up`). Die
+Verbindungen lassen sich ueber `CANVAZ_TEST_DATABASE_URL` und `CANVAZ_TEST_S3_ENDPOINT` uebersteuern.
+
+`tests/integration/asset-storage.test.ts` enthaelt die **gemeinsame Contract-Testsuite des Storage-Ports**:
+genau eine Suite (`assetStorageContract`), zweimal ausgefuehrt - einmal gegen `filesystem`, einmal gegen
+`s3` vor einem echten MinIO. Innerhalb der Suite gibt es keine Fallunterscheidung und keinen Adapternamen;
+sie kennt ausschliesslich `AssetStoragePort`. Der Neustart-Nachweis in
+`tests/integration/board-assets.test.ts` laeuft ebenfalls fuer beide Adapter: hochladen, den
+Anwendungsprozess vollstaendig ersetzen, abrufen, Bytes vergleichen.
 
 Integrations- und Browsertests sprechen einen echten OIDC-Provider an: `tests/support/oidc-provider.ts`
 signiert ID-Tokens mit RSA und liefert ein echtes JWKS aus. Fehlerlagen (falscher Issuer, falsche Audience,

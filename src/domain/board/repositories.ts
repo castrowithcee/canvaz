@@ -98,9 +98,9 @@ export interface SceneRepository {
 /**
  * Metadaten eines Bildassets.
  *
- * **Nahtstelle fuer das folgende Paket.** Schema und Port stehen hier, damit Board- und Workspacebezug von
- * Anfang an Teil des Vertrags sind; Storage-Port, Upload und Abruf liefert das Assetpaket. Es gibt bewusst
- * noch keine PostgreSQL-Umsetzung: ungenutzter Code waere ein Versprechen ohne Nachweis.
+ * **Die Datenbank ist die Wahrheit ueber ein Asset, der Storage-Port kennt nur Bytes.** MIME-Typ, Groesse,
+ * Pruefsumme und Speicherschluessel stehen hier; Board- und Workspacebezug sind Teil des Vertrags, damit
+ * ein Abruf ohne Workspacegrenze gar nicht erst formulierbar ist.
  */
 export type BoardAsset = {
   readonly id: string
@@ -120,6 +120,10 @@ export type NewBoardAsset = Omit<BoardAsset, 'id' | 'createdAt'>
 
 export interface BoardAssetRepository {
   listForBoard(boardId: BoardId): Promise<readonly BoardAsset[]>
+  /**
+   * Ausschliesslich innerhalb genau dieses Boards. Eine geratene Dateikennung erreicht damit nie ein
+   * fremdes Asset, auch wenn sie zufaellig anderswo existiert.
+   */
   findByFileId(boardId: BoardId, fileId: string): Promise<BoardAsset | null>
   record(asset: NewBoardAsset): Promise<BoardAsset>
 }
@@ -132,6 +136,7 @@ export interface BoardAssetRepository {
 export interface BoardStore {
   readonly boards: BoardRepository
   readonly scenes: SceneRepository
+  readonly assets: BoardAssetRepository
   readonly workspaces: WorkspaceRepository
   readonly audit: AuditRepository
   transaction<T>(run: (store: BoardStore) => Promise<T>): Promise<T>

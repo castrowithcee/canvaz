@@ -9,12 +9,15 @@
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import type { Pool } from 'pg'
 
 import type { BoardStore } from '../../src/domain/board/repositories.js'
 import type { IdentityStore } from '../../src/domain/identity/repositories.js'
 import type { WorkspaceStore } from '../../src/domain/workspace/repositories.js'
+import { createAssetStorage } from '../../src/persistence/asset-storage.js'
 import { createBoardStore } from '../../src/persistence/board-store.js'
 import { createIdentityStore } from '../../src/persistence/identity-store.js'
 import { createWorkspaceStore } from '../../src/persistence/workspace-store.js'
@@ -53,6 +56,11 @@ export async function startTestApp(options: {
   readonly sessionTtlHours?: number
   /** Haken der spaeteren Realtime-Strecke; der Test nutzt ihn, um den Andockpunkt zu pruefen. */
   readonly onConnection?: RealtimeOptions['onConnection']
+  /**
+   * Storage-Umgebung. Ohne Angabe laeuft der Dateisystem-Adapter in einem Verzeichnis unter `tmpdir()`.
+   * Der Assettest reicht hier die Werte beider Adapter herein - der Anwendungscode bleibt derselbe.
+   */
+  readonly storage?: Readonly<Record<string, string>>
 }): Promise<TestApp> {
   const server: Server = createServer()
   await new Promise<void>((resolve) => {
@@ -72,6 +80,8 @@ export async function startTestApp(options: {
     CANVAZ_OIDC_CLIENT_ID: options.provider.clientId,
     CANVAZ_OIDC_CLIENT_SECRET: options.provider.clientSecret,
     CANVAZ_OIDC_REDIRECT_URI: `${baseUrl}/api/auth/callback`,
+    CANVAZ_STORAGE_FILESYSTEM_ROOT: join(tmpdir(), 'canvaz-test-assets'),
+    ...options.storage,
   })
 
   const logs: LogEntry[] = []
@@ -100,6 +110,7 @@ export async function startTestApp(options: {
     identity: store,
     workspaces,
     boards,
+    storage: createAssetStorage(config.storage),
     oidc: createOidcClient(config),
     realtime,
     logger,

@@ -19,7 +19,7 @@ import '@excalidraw/excalidraw/index.css'
 import type { BoardView } from '../../contracts/api.js'
 import type { BinaryFileRef, SceneSnapshot } from '../../contracts/scene.js'
 import { SCENE_SCHEMA_VERSION } from '../../contracts/scene.js'
-import { ApiError, fetchBoardScene, saveBoardScene } from '../api.js'
+import { ApiError, fetchBoardAssetDataUrl, fetchBoardScene, saveBoardScene, uploadBoardAsset } from '../api.js'
 import type { BoardEditorPort } from './board-editor-port.js'
 import { BoardCanvas } from './excalidraw-adapter.js'
 
@@ -78,6 +78,8 @@ export function BoardEditor({
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
   const [save, setSave] = useState<SaveState>({ kind: 'idle' })
   const [adapter, setAdapter] = useState<BoardEditorPort | null>(null)
+  /** Meldung ueber ein Bild, das nicht hochgeladen oder nicht geladen werden konnte. */
+  const [assetProblem, setAssetProblem] = useState<string | null>(null)
   /** Erzwingt eine frische Zeichenflaeche beim Neuladen; sonst blieben verworfene Elemente stehen. */
   const [mountKey, setMountKey] = useState(0)
 
@@ -85,13 +87,17 @@ export function BoardEditor({
   const versionRef = useRef(0)
   const filesRef = useRef<Record<string, BinaryFileRef>>({})
   const blockedRef = useRef(false)
+  /** Laufende Bilduploads. Solange einer offen ist, wird die Szene nicht gespeichert. */
+  const uploadsRef = useRef(0)
 
   const load = useCallback(() => {
     setState({ kind: 'loading' })
     setSave({ kind: 'idle' })
+    setAssetProblem(null)
     setAdapter(null)
     setMountKey((current) => current + 1)
     blockedRef.current = false
+    uploadsRef.current = 0
     fetchBoardScene(boardId)
       .then((response) => {
         versionRef.current = response.version
@@ -124,6 +130,12 @@ export function BoardEditor({
 
   const persist = useCallback(() => {
     if (adapter === null || blockedRef.current) {
+      return
+    }
+    // Eine Szene, die auf ein noch nicht hochgeladenes Bild verweist, waere beim naechsten Oeffnen unvollstaendig.
+    // Also wird gewartet, statt einen halben Stand festzuschreiben.
+    if (uploadsRef.current > 0) {
+      setSave({ kind: 'dirty' })
       return
     }
     const snapshot: SceneSnapshot = {
@@ -165,23 +177,61 @@ export function BoardEditor({
     }
   }, [save, persist])
 
-  // Der gezeichnete Ausgangsstand steht bereits im Editor (`scene` an der Zeichenflaeche). Hier kommen nur
-  // die Dateireferenzen dazu - ihre Bytes liegen hinter dem Storage-Port - und das Abonnement auf Aenderungen.
+  // Der gezeichnete Ausgangsstand steht bereits im Editor (`scene` an der Zeichenflaeche). Hier kommen die
+  // Bilder dazu: ihre Bytes holt der autorisierte Abrufendpunkt, einzeln und mit der laufenden Sitzung.
   useEffect(() => {
     if (adapter === null || state.kind !== 'ready') {
       return
     }
     adapter.setReadOnly(viewOnly)
-    for (const file of Object.values(state.loaded.scene.files)) {
-      adapter.applyRemoteFileRef(file)
-    }
-    return adapter.onLocalChange((change) => {
-      for (const file of change.newFiles) {
-        filesRef.current = { ...filesRef.current, [file.id]: file }
+    let abandoned = false
+    void (async () => {
+      for (const file of Object.values(state.loaded.scene.files)) {
+        try {
+          const dataUrl = await fetchBoardAssetDataUrl(boardId, file.id)
+          if (!abandoned) {
+            adapter.applyRemoteFileRef(file, dataUrl)
+          }
+        } catch {
+          // Ein einzelnes fehlendes Bild macht das Board nicht unbrauchbar; es wird benannt statt verschwiegen.
+          if (!abandoned) {
+            setAssetProblem('Mindestens ein Bild dieses Boards konnte nicht geladen werden.')
+          }
+        }
+      }
+    })()
+
+    const unsubscribe = adapter.onLocalChange((change) => {
+      for (const fileId of change.newFileIds) {
+        const dataUrl = adapter.getFileDataUrl(fileId)
+        if (dataUrl === null) {
+          continue
+        }
+        // Erst hochladen, dann in die Szene aufnehmen: Groesse und Speicherschluessel kommen vom Server.
+        uploadsRef.current += 1
+        uploadBoardAsset(csrfToken, boardId, fileId, dataUrl)
+          .then((response) => {
+            filesRef.current = { ...filesRef.current, [response.file.id]: response.file }
+          })
+          .catch((cause: unknown) => {
+            setAssetProblem(
+              cause instanceof ApiError
+                ? `Ein Bild wurde nicht uebernommen. ${cause.message}`
+                : 'Ein Bild konnte nicht hochgeladen werden.',
+            )
+          })
+          .finally(() => {
+            uploadsRef.current -= 1
+            setSave((current) => (current.kind === 'conflict' ? current : { kind: 'dirty' }))
+          })
       }
       setSave((current) => (current.kind === 'conflict' ? current : { kind: 'dirty' }))
     })
-  }, [adapter, state, viewOnly])
+    return () => {
+      abandoned = true
+      unsubscribe()
+    }
+  }, [adapter, boardId, csrfToken, state, viewOnly])
 
   if (state.kind === 'loading') {
     return (
@@ -233,7 +283,12 @@ export function BoardEditor({
             Board speichern
           </button>
         )}
-        {save.kind === 'conflict' && (
+        {assetProblem !== null && (
+        <p className="notice notice--error" role="alert">
+          {assetProblem}
+        </p>
+      )}
+      {save.kind === 'conflict' && (
           <button type="button" onClick={load}>
             Neu laden und eigene Aenderungen verwerfen
           </button>
@@ -242,6 +297,11 @@ export function BoardEditor({
           Board schliessen
         </button>
       </header>
+      {assetProblem !== null && (
+        <p className="notice notice--error" role="alert">
+          {assetProblem}
+        </p>
+      )}
       {save.kind === 'conflict' && (
         <p className="notice notice--error" role="alert">
           Dieses Board wurde inzwischen an anderer Stelle gespeichert. Deine Zeichnung ist noch da, wurde aber
@@ -253,7 +313,6 @@ export function BoardEditor({
         <BoardCanvas
           key={mountKey}
           viewMode={viewOnly}
-          storagePrefix={`boards/${boardId}`}
           scene={state.loaded.scene}
           onAdapterReady={setAdapter}
         />

@@ -14,6 +14,7 @@ import type {
   BoardView,
   BoardsResponse,
   SaveSceneResponse,
+  UploadBoardAssetResponse,
   ChangeWorkspaceMemberRoleRequest,
   LogoutResponse,
   MeResponse,
@@ -31,7 +32,9 @@ import type {
 import {
   ADMIN_USER_STATUS_PATH,
   ADMIN_USERS_PATH,
+  ASSET_FILE_ID_PARAM,
   AUTH_LOGOUT_PATH,
+  BOARD_ASSETS_PATH,
   BOARD_ID_PARAM,
   BOARD_QUERY_PARAM,
   BOARD_RENAME_PATH,
@@ -216,4 +219,77 @@ export async function saveBoardScene(
   payload: { readonly boardId: string; readonly baseVersion: number; readonly scene: SceneSnapshot },
 ): Promise<SaveSceneResponse> {
   return request<SaveSceneResponse>(BOARD_SCENE_PATH, mutation(csrfToken, payload))
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+/* Bildassets                                                                                            */
+/* ---------------------------------------------------------------------------------------------------- */
+
+/**
+ * Zerlegt eine Data-URL des Editors in Typ und Bytes.
+ *
+ * Der Upload traegt die rohen Bytes, nicht die Base64-Zeichenkette: das spart ein Drittel Uebertragung und
+ * der Server prueft ohnehin den tatsaechlichen Inhalt. `atob` und eine Schleife reichen dafuer; eine
+ * Bibliothek dafuer waere ein Paket fuer sechs Zeilen.
+ */
+function decodeDataUrl(dataUrl: string): { readonly mimeType: string; readonly body: ArrayBuffer } {
+  const comma = dataUrl.indexOf(',')
+  if (!dataUrl.startsWith('data:') || comma < 0 || !dataUrl.slice(0, comma).includes(';base64')) {
+    throw new ApiError(0, 'Das Bild liegt in einer unerwarteten Form vor.')
+  }
+  const mimeType = dataUrl.slice('data:'.length, comma).split(';')[0] ?? ''
+  const binary = atob(dataUrl.slice(comma + 1))
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+  return { mimeType, body: bytes.buffer }
+}
+
+function assetQuery(boardId: string, fileId: string): string {
+  return new URLSearchParams({ [BOARD_ID_PARAM]: boardId, [ASSET_FILE_ID_PARAM]: fileId }).toString()
+}
+
+/**
+ * Laedt ein Bild zu einem Board hoch und liefert die Referenz, mit der die Szene es fuehrt.
+ *
+ * Idempotent: derselbe Inhalt unter derselben Kennung ergibt dieselbe Antwort, ohne ein zweites Mal zu
+ * speichern.
+ */
+export async function uploadBoardAsset(
+  csrfToken: string,
+  boardId: string,
+  fileId: string,
+  dataUrl: string,
+): Promise<UploadBoardAssetResponse> {
+  const { mimeType, body } = decodeDataUrl(dataUrl)
+  return request<UploadBoardAssetResponse>(`${BOARD_ASSETS_PATH}?${assetQuery(boardId, fileId)}`, {
+    method: 'POST',
+    headers: { [CSRF_HEADER]: csrfToken, 'content-type': mimeType },
+    body,
+  })
+}
+
+/**
+ * Holt die Bytes eines Bildes ueber den autorisierten Endpunkt und macht daraus eine Data-URL fuer den
+ * Editor. Es gibt keine oeffentliche Bild-URL: die Sitzung entscheidet bei jedem einzelnen Abruf.
+ */
+export async function fetchBoardAssetDataUrl(boardId: string, fileId: string): Promise<string> {
+  const response = await fetch(`${BOARD_ASSETS_PATH}?${assetQuery(boardId, fileId)}`, {
+    credentials: 'same-origin',
+  })
+  if (!response.ok) {
+    throw new ApiError(response.status, `Das Bild konnte nicht geladen werden (${String(response.status)}).`)
+  }
+  const blob = await response.blob()
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      resolve(String(reader.result))
+    }
+    reader.onerror = () => {
+      reject(new ApiError(0, 'Das Bild konnte nicht gelesen werden.'))
+    }
+    reader.readAsDataURL(blob)
+  })
 }

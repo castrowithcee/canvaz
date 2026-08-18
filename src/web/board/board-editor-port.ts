@@ -27,7 +27,11 @@ export type LocalChange = {
   /** Nur die seit der letzten Meldung tatsaechlich veraenderten Elemente. */
   readonly changedElements: readonly SyncElement[]
   readonly appState: PersistedAppState
-  readonly newFiles: readonly BinaryFileRef[]
+  /**
+   * Kennungen der Dateien, die seit der letzten Meldung neu im Editor liegen. Bewusst nur die Kennungen:
+   * Groesse und Speicherschluessel denkt sich der Client nicht aus, sie kommen mit der Antwort des Uploads.
+   */
+  readonly newFileIds: readonly string[]
 }
 
 export interface BoardEditorPort {
@@ -35,12 +39,16 @@ export interface BoardEditorPort {
   getElements(): readonly SyncElement[]
   /** Persistierte Teilmenge des Editorzustands. */
   getAppState(): PersistedAppState
-  /** Referenzen aller bekannten Binaerdateien; Bytes laufen ueber den Storage-Port. */
-  getFileRefs(): readonly BinaryFileRef[]
+  /**
+   * Inhalt einer im Editor liegenden Datei als Data-URL, oder `null`. Der Aufrufer laedt sie damit hoch;
+   * die Bytes verlassen den Editor ausschliesslich ueber diese Stelle.
+   */
+  getFileDataUrl(fileId: string): string | null
   /** Uebernimmt entfernte Elemente ohne die lokale Undo-Historie zu verschmutzen. */
   applyRemoteElements(elements: readonly SyncElement[]): void
   applyRemoteAppState(appState: PersistedAppState): void
-  applyRemoteFileRef(file: BinaryFileRef): void
+  /** Legt eine geladene Datei in den Editor. Die Bytes kommen als Data-URL vom autorisierten Abrufendpunkt. */
+  applyRemoteFileRef(file: BinaryFileRef, dataUrl: string): void
   showPeers(peers: readonly EditorPeer[]): void
   setReadOnly(readOnly: boolean): void
   onLocalChange(listener: (change: LocalChange) => void): () => void

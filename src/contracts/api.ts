@@ -5,7 +5,7 @@
  * zur Laufzeit.
  */
 
-import type { SceneSnapshot } from './scene.js'
+import type { BinaryFileRef, SceneSnapshot } from './scene.js'
 
 export const API_BASE_PATH = '/api'
 
@@ -274,4 +274,33 @@ export type SaveSceneResponse = {
  */
 export type SceneConflictResponse = ErrorResponse & {
   readonly currentVersion: number
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+/* Bildassets                                                                                            */
+/* ---------------------------------------------------------------------------------------------------- */
+
+/**
+ * Hochladen (POST) und Abrufen (GET) einer Bilddatei eines Boards.
+ *
+ * Beim Upload stehen Board, Dateikennung und Dateiname in der Abfragezeichenfolge und die Bytes im
+ * Anfragekoerper - roh, nicht als JSON und nicht als Formular. Damit gibt es keine Base64-Aufblaehung und
+ * keinen Parser fuer mehrteilige Koerper.
+ */
+export const BOARD_ASSETS_PATH = `${API_BASE_PATH}/boards/assets`
+
+/** Kennung der Datei im Szenenvertrag (`BinaryFileRef.id`), vom Editor vergeben. */
+export const ASSET_FILE_ID_PARAM = 'fileId'
+/** Urspruenglicher Dateiname. Rein beschreibend; er bestimmt weder Typ noch Speicherort. */
+export const ASSET_FILE_NAME_PARAM = 'fileName'
+
+export const MAX_ASSET_FILE_ID_LENGTH = 255
+export const MAX_ASSET_FILE_NAME_LENGTH = 255
+
+/**
+ * Antwort eines angenommenen Uploads. `file` geht unveraendert in `SceneSnapshot.files` - der Client denkt
+ * sich weder Groesse noch Speicherschluessel selbst aus.
+ */
+export type UploadBoardAssetResponse = {
+  readonly file: BinaryFileRef
 }

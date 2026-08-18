@@ -15,9 +15,11 @@ import type { UserId } from '../domain/identity/model.js'
 import type { Board, BoardId, BoardStatus } from '../domain/board/model.js'
 import type {
   BoardAccess,
+  BoardAsset,
   BoardFilter,
   BoardListEntry,
   BoardStore,
+  NewBoardAsset,
   SceneVersion,
 } from '../domain/board/repositories.js'
 import { CorruptSceneError, SceneConflictError } from '../domain/board/repositories.js'
@@ -52,6 +54,39 @@ function toBoard(row: BoardRow): Board {
     sceneVersion: row.current_scene_version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  }
+}
+
+type BoardAssetRow = {
+  id: string
+  board_id: string
+  workspace_id: string
+  file_id: string
+  file_name: string | null
+  mime_type: string
+  byte_size: string
+  checksum_sha256: string
+  storage_key: string
+  created_at: Date
+}
+
+const BOARD_ASSET_COLUMNS =
+  'id, board_id, workspace_id, file_id, file_name, mime_type, byte_size, checksum_sha256, storage_key, created_at'
+
+function toBoardAsset(row: BoardAssetRow): BoardAsset {
+  return {
+    id: row.id,
+    boardId: row.board_id,
+    workspaceId: row.workspace_id,
+    fileId: row.file_id,
+    fileName: row.file_name,
+    mimeType: row.mime_type,
+    // `bigint` kommt als Zeichenkette an; die Groesse ist durch die Uploadgrenze weit unterhalb von
+    // `Number.MAX_SAFE_INTEGER` und damit verlustfrei.
+    byteSize: Number(row.byte_size),
+    checksumSha256: row.checksum_sha256,
+    storageKey: row.storage_key,
+    createdAt: row.created_at,
   }
 }
 
@@ -244,6 +279,46 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
               and version <= (select max(version) from scene_versions where board_id = $1) - $2`,
           [boardId, keepNewest],
         )
+      },
+    },
+
+    assets: {
+      async listForBoard(boardId: BoardId): Promise<readonly BoardAsset[]> {
+        const result = await db.query<BoardAssetRow>(
+          `select ${BOARD_ASSET_COLUMNS} from board_assets where board_id = $1 order by created_at, id`,
+          [boardId],
+        )
+        return result.rows.map(toBoardAsset)
+      },
+
+      async findByFileId(boardId: BoardId, fileId: string): Promise<BoardAsset | null> {
+        // Board und Dateikennung zusammen; es gibt keine Abfrage allein ueber die Dateikennung.
+        const result = await db.query<BoardAssetRow>(
+          `select ${BOARD_ASSET_COLUMNS} from board_assets where board_id = $1 and file_id = $2`,
+          [boardId, fileId],
+        )
+        const row = result.rows[0]
+        return row === undefined ? null : toBoardAsset(row)
+      },
+
+      async record(asset: NewBoardAsset): Promise<BoardAsset> {
+        const result = await db.query<BoardAssetRow>(
+          `insert into board_assets
+             (board_id, workspace_id, file_id, file_name, mime_type, byte_size, checksum_sha256, storage_key)
+           values ($1, $2, $3, $4, $5, $6, $7, $8)
+           returning ${BOARD_ASSET_COLUMNS}`,
+          [
+            asset.boardId,
+            asset.workspaceId,
+            asset.fileId,
+            asset.fileName,
+            asset.mimeType,
+            asset.byteSize,
+            asset.checksumSha256,
+            asset.storageKey,
+          ],
+        )
+        return toBoardAsset(requireRow(result.rows[0], 'Assetdatensatz konnte nicht angelegt werden'))
       },
     },
 

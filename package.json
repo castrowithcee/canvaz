@@ -20,7 +20,7 @@
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
     "test:e2e": "playwright test",
-    "db:up": "docker compose up --detach --wait postgres",
+    "db:up": "docker compose up --detach --wait postgres minio",
     "db:down": "docker compose down",
     "db:migrate": "tsx --env-file-if-exists=.env src/persistence/migrate-cli.ts"
   },

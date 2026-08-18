@@ -11,6 +11,8 @@ import type { Page } from '@playwright/test'
 import { Pool } from 'pg'
 
 import { E2E_DATABASE_URL, E2E_PROVIDER_URL } from '../../playwright.config.js'
+import { BOARD_ASSETS_PATH } from '../../src/contracts/api.js'
+import { solidPng } from '../support/png.js'
 
 const pool = new Pool({ connectionString: E2E_DATABASE_URL, max: 2 })
 
@@ -157,6 +159,99 @@ test('benennt ein Board um und findet es nach dem Archivieren in der Archivansic
 })
 
 /**
+ * Bildassets im Browser.
+ *
+ * Das Bild geht ueber die echte Excalidraw-Oberflaeche in die Zeichenflaeche - dieselbe Werkzeugauswahl und
+ * derselbe Dateidialog, die ein Mensch bedient. Danach zaehlt nur, was ueber die Leitung geht: ein Upload
+ * mit 201 und nach dem Neuladen ein autorisierter Abruf mit 200, dessen Bytes auf dem Canvas landen.
+ */
+const BILD = solidPng(120, 90, [220, 30, 30])
+
+type Assetverkehr = { readonly methode: string; readonly status: number }
+
+/** Zeichnet jeden Zugriff auf den Assetendpunkt mit. Die Anwendung bekommt dafuer keinen Haken eingebaut. */
+function beobachteAssets(page: Page): Assetverkehr[] {
+  const verkehr: Assetverkehr[] = []
+  page.on('response', (response) => {
+    if (new URL(response.url()).pathname === BOARD_ASSETS_PATH) {
+      verkehr.push({ methode: response.request().method(), status: response.status() })
+    }
+  })
+  return verkehr
+}
+
+/**
+ * Fuegt ein Bild ueber die Zwischenablage in die Zeichenflaeche ein - `Strg+V`, der Weg, den ein Mensch
+ * fuer eine Bildschirmaufnahme nimmt.
+ *
+ * Bewusst nicht ueber den Dateidialog: Chromium oeffnet dafuer die File System Access API, und deren Dialog
+ * ist kein `<input type="file">`, das ein Test bedienen koennte. Die Zwischenablage fuehrt durch dieselbe
+ * Excalidraw-Logik und denselben Adapter - nur der Ausloeser ist ein anderer.
+ */
+async function fuegeBildEin(page: Page): Promise<void> {
+  const canvas = page.locator('.excalidraw canvas').first()
+  await expect(canvas).toBeVisible()
+  const box = await canvas.boundingBox()
+  if (box === null) {
+    throw new Error('Die Zeichenflaeche hat keine Ausdehnung.')
+  }
+  // Excalidraw nimmt eine Einfuegung nur an, wenn der Zeiger ueber der Zeichenflaeche steht und der Fokus
+  // im Editor liegt. Beides entsteht durch den Klick.
+  await page.mouse.click(box.x + box.width * 0.6, box.y + box.height * 0.35)
+  await page.evaluate((base64) => {
+    const binaer = atob(base64)
+    const bytes = new Uint8Array(binaer.length)
+    for (let index = 0; index < binaer.length; index += 1) {
+      bytes[index] = binaer.charCodeAt(index)
+    }
+    const daten = new DataTransfer()
+    daten.items.add(new File([bytes], 'punkt.png', { type: 'image/png' }))
+    document.dispatchEvent(new ClipboardEvent('paste', { clipboardData: daten, bubbles: true, cancelable: true }))
+  }, BILD.toString('base64'))
+}
+
+test('fuegt ein Bild ein, speichert, laedt die Anwendung neu und findet das Bild wieder', async ({ page }) => {
+  const verkehr = beobachteAssets(page)
+  await page.goto('/')
+  await signIn(page, 'e2e-bild')
+
+  await page.getByLabel('Name des neuen Arbeitsbereichs').fill('Team Bild')
+  await page.getByRole('button', { name: 'Arbeitsbereich anlegen' }).click()
+  await openWorkspace(page, 'Team Bild')
+  await page.getByLabel('Titel des neuen Boards').fill('Bildboard')
+  await page.getByRole('button', { name: 'Board anlegen' }).click()
+  await page.getByRole('button', { name: 'Bildboard oeffnen' }).click()
+  await expect(page.getByRole('heading', { name: 'Bildboard' })).toBeVisible()
+
+  await fuegeBildEin(page)
+
+  // Das Bild geht ueber den autorisierten Upload; erst danach darf die Szene es referenzieren.
+  await expect
+    .poll(() => verkehr.filter((eintrag) => eintrag.methode === 'POST' && eintrag.status === 201).length, {
+      timeout: 15_000,
+    })
+    .toBe(1)
+  await expect(page.getByText(/^Gespeichert um /)).toBeVisible()
+
+  // Neue Anwendungsinstanz im Browser: weder Szene noch Bild stehen noch im Arbeitsspeicher der Seite.
+  await page.reload()
+  await openWorkspace(page, 'Team Bild')
+  await expect(page.getByRole('cell', { name: 'Version 1' })).toBeVisible()
+  await page.getByRole('button', { name: 'Bildboard oeffnen' }).click()
+  await expect(page.getByRole('heading', { name: 'Bildboard' })).toBeVisible()
+
+  await expect
+    .poll(() => verkehr.filter((eintrag) => eintrag.methode === 'GET' && eintrag.status === 200).length, {
+      timeout: 15_000,
+    })
+    .toBeGreaterThan(0)
+  await expect.poll(async () => paintedPixels(page), { timeout: 15_000 }).toBeGreaterThan(0)
+  // Kein Abruf ist fehlgeschlagen, und es gibt keine Meldung ueber ein fehlendes Bild.
+  expect(verkehr.filter((eintrag) => eintrag.status >= 400)).toEqual([])
+  await expect(page.getByText('Mindestens ein Bild dieses Boards konnte nicht geladen werden.')).toHaveCount(0)
+})
+
+/**
  * Content-Security-Policy im Editor.
  *
  * **Die Policy wurde fuer den Editor nicht gelockert**: `default-src 'self'`, kein `unsafe-inline`. Belegt
@@ -164,13 +259,22 @@ test('benennt ein Board um und findet es nach dem Archivieren in der Archivansic
  *
  * 1. Keine Anfrage der Seite verlaesst erfolgreich die eigene Herkunft.
  * 2. Die Schriften des Editors kommen aus dem eigenen Build.
- * 3. Die einzigen gemeldeten Verstoesse betreffen den CDN-Rueckfall, den Excalidraw fest an jede
- *    Schriftquelle anhaengt (`https://esm.sh/@excalidraw/excalidraw@0.18.1/...`). Er steht hinter der
- *    eigenen Quelle, wird nie benutzt, und die Policy blockt ihn - genau das soll sie leisten.
+ * 3. Die einzigen gemeldeten Verstoesse sind die beiden bekannten, und beide werden gewollt blockiert:
+ *    - der CDN-Rueckfall, den Excalidraw fest an jede Schriftquelle anhaengt
+ *      (`https://esm.sh/@excalidraw/excalidraw@0.18.1/...`). Er steht hinter der eigenen Quelle und wird
+ *      nie benutzt.
+ *    - `script-src wasm-eval`: Excalidraw kompiliert fuer die Schriftreduktion ein Harfbuzz-WebAssembly.
+ *      Das braeuchte `'wasm-unsafe-eval'` in `script-src`. Die Policy erlaubt es bewusst nicht - Zeichnen,
+ *      Bilder, Speichern und Laden funktionieren ohne, wie der Bildtest oben belegt. Der Export mit
+ *      reduzierten Schriften ist kein Gegenstand dieses Pakets.
  */
 const CDN_RUECKFALL = 'https://esm.sh/@excalidraw/excalidraw@0.18.1/dist/prod/fonts/'
 
+/** Bekannt, benannt und blockiert. Alles andere waere ein echter Verstoss. */
+const BEKANNTE_VERSTOESSE = [`font-src ${CDN_RUECKFALL}`, 'script-src wasm-eval']
+
 test('laedt den Board-Editor ohne Lockerung der Content-Security-Policy', async ({ page }) => {
+  const verkehrCsp = beobachteAssets(page)
   await page.addInitScript(() => {
     const seite = window as unknown as { __cspVerstoesse?: string[] }
     seite.__cspVerstoesse = []
@@ -213,6 +317,11 @@ test('laedt den Board-Editor ohne Lockerung der Content-Security-Policy', async 
   await drawRectangle(page)
   await expect(page.getByText(/^Gespeichert um /)).toBeVisible()
 
+  // Auch mit einem Bild bleibt die Policy unangetastet: die Bytes kommen ueber den eigenen Endpunkt und
+  // werden als `data:`-Verweis eingebettet, was `img-src 'self' data: blob:` seit Beginn erlaubt.
+  await fuegeBildEin(page)
+  await expect.poll(() => verkehrCsp.filter((eintrag) => eintrag.status === 201).length, { timeout: 15_000 }).toBe(1)
+
   // Eine Schrift wirklich anfordern: sie kommt aus dem eigenen Build, nicht vom CDN.
   await page.evaluate(async () => {
     await document.fonts.load('20px Excalifont', 'Schriftprobe')
@@ -226,5 +335,7 @@ test('laedt den Board-Editor ohne Lockerung der Content-Security-Policy', async 
   const verstoesse = await page.evaluate(
     () => (window as unknown as { __cspVerstoesse?: string[] }).__cspVerstoesse ?? [],
   )
-  expect(verstoesse.filter((eintrag) => !eintrag.startsWith(`font-src ${CDN_RUECKFALL}`))).toEqual([])
+  expect(
+    verstoesse.filter((eintrag) => !BEKANNTE_VERSTOESSE.some((bekannt) => eintrag.startsWith(bekannt))),
+  ).toEqual([])
 })
