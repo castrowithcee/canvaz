@@ -18,6 +18,21 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    services:
+      # Die Repository-Integrationstests laufen gegen eine echte PostgreSQL-Instanz, nicht gegen Attrappen.
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: canvaz
+          POSTGRES_PASSWORD: canvaz
+          POSTGRES_DB: canvaz_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username=canvaz --dbname=canvaz_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -53,6 +68,8 @@ jobs:
 
       - name: Test
         if: ${{ hashFiles('package.json', 'package-lock.json') != '' }}
+        env:
+          CANVAZ_TEST_DATABASE_URL: postgres://canvaz:canvaz@127.0.0.1:5432/canvaz_test
         run: npm run test --if-present
 
       - name: Build

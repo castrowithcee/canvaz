@@ -1,37 +1,42 @@
 {
-  "name": "canvaz-spike-excalidraw-collab",
+  "name": "canvaz",
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "Technischer Spike: Excalidraw-Integration, Zwei-Client-Kollaboration, Snapshot-Roundtrip und serverseitige Schreibrechte.",
+  "description": "Selbst gehostete Kollaborationsplattform: React/Vite-SPA, HTTP-API und PostgreSQL in einem Deployable.",
   "license": "MIT",
   "engines": {
     "node": ">=22.11.0"
   },
   "scripts": {
     "dev": "vite",
-    "dev:server": "tsx watch spike/server/main.ts",
-    "start:server": "tsx spike/server/main.ts",
+    "dev:server": "tsx --env-file-if-exists=.env watch src/server/main.ts",
+    "start:server": "tsx --env-file-if-exists=.env src/server/main.ts",
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:e2e": "playwright test",
+    "db:up": "docker compose up --detach --wait postgres",
+    "db:down": "docker compose down",
+    "db:migrate": "tsx --env-file-if-exists=.env src/persistence/migrate-cli.ts"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "0.18.1",
+    "pg": "^8.16.3",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "ws": "^8.21.3"
+    "react-dom": "^19.2.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.62.1",
     "@types/node": "^24.10.1",
+    "@types/pg": "^8.15.6",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
-    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.1.0",
     "eslint": "^10.8.1",
     "globals": "^16.5.0",
