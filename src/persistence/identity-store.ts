@@ -21,8 +21,30 @@ import type {
 import { authenticate } from '../domain/identity/model.js'
 import type { UserProfileDraft } from '../domain/identity/provisioning.js'
 import type { IdentityStore, LinkedIdentity, NewSession } from '../domain/identity/repositories.js'
+import { IdentityConflictError } from '../domain/identity/repositories.js'
 
 type Queryable = Pick<PoolClient, 'query'>
+
+/** SQLSTATE einer verletzten Eindeutigkeit. */
+const UNIQUE_VIOLATION = '23505'
+
+/**
+ * Frei gewaehlte, projektweit feste Kennung der Bootstrap-Sperre. Sie serialisiert ausschliesslich die Frage
+ * "ist diese Instanz noch leer?" und liegt bewusst neben der Kennung des Migrationslocks.
+ */
+const BOOTSTRAP_LOCK_ID = 4_711_020_602
+
+/** Uebersetzt eine verletzte Eindeutigkeit in den fachlichen Konflikt; jeder andere Fehler bleibt, wie er ist. */
+async function conflictAware<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run()
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && (error as { code?: unknown }).code === UNIQUE_VIOLATION) {
+      throw new IdentityConflictError(error)
+    }
+    throw error
+  }
+}
 
 type UserRow = {
   id: string
@@ -110,17 +132,32 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Identit
         return requireRow(result.rows[0], 'count lieferte keine Zeile').count
       },
 
+      async isFirstUser(): Promise<boolean> {
+        if (!inTransaction) {
+          // Ausserhalb einer Transaktion gaebe die Sperre die Serialisierung sofort wieder her und die
+          // Antwort waere wertlos. Das ist ein Programmierfehler, kein Betriebszustand.
+          throw new Error('isFirstUser ist nur innerhalb einer Transaktion gueltig')
+        }
+        // Die Sperre haelt bis zum Commit: eine gleichzeitige Erstanmeldung wartet hier und sieht danach den
+        // bereits angelegten Nutzer. Ohne sie lesen unter READ COMMITTED beide eine leere Tabelle.
+        await db.query('select pg_advisory_xact_lock($1)', [BOOTSTRAP_LOCK_ID])
+        const result = await db.query<{ count: number }>('select count(*)::int as count from users')
+        return requireRow(result.rows[0], 'count lieferte keine Zeile').count === 0
+      },
+
       async list(): Promise<readonly User[]> {
         const result = await db.query<UserRow>(`select ${USER_COLUMNS} from users order by created_at, id`)
         return result.rows.map(toUser)
       },
 
       async create(profile: UserProfileDraft, options: { readonly isSystemAdmin: boolean }): Promise<User> {
-        const result = await db.query<UserRow>(
-          `insert into users (display_name, email, is_system_admin)
-           values ($1, $2, $3)
-           returning ${USER_COLUMNS}`,
-          [profile.displayName, profile.email, options.isSystemAdmin],
+        const result = await conflictAware(() =>
+          db.query<UserRow>(
+            `insert into users (display_name, email, is_system_admin)
+             values ($1, $2, $3)
+             returning ${USER_COLUMNS}`,
+            [profile.displayName, profile.email, options.isSystemAdmin],
+          ),
         )
         return toUser(requireRow(result.rows[0], 'Nutzer konnte nicht angelegt werden'))
       },
@@ -176,11 +213,13 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Identit
       },
 
       async link(userId: UserId, key: ExternalIdentityKey): Promise<ExternalIdentity> {
-        const result = await db.query<ExternalIdentityRow>(
-          `insert into external_identities (user_id, issuer, subject)
-           values ($1, $2, $3)
-           returning ${IDENTITY_COLUMNS}`,
-          [userId, key.issuer, key.subject],
+        const result = await conflictAware(() =>
+          db.query<ExternalIdentityRow>(
+            `insert into external_identities (user_id, issuer, subject)
+             values ($1, $2, $3)
+             returning ${IDENTITY_COLUMNS}`,
+            [userId, key.issuer, key.subject],
+          ),
         )
         return toExternalIdentity(requireRow(result.rows[0], 'Identitaet konnte nicht verknuepft werden'))
       },

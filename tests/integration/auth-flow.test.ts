@@ -87,9 +87,9 @@ type RealtimeConnection = {
   next(): Promise<string>
 }
 
-function connectRealtime(jar: Jar): Promise<RealtimeConnection> {
+function connectRealtime(jar: Jar, headers: Readonly<Record<string, string>> = {}): Promise<RealtimeConnection> {
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket(realtimeUrl(), { headers: { cookie: jar.cookieHeader() } })
+    const socket = new WebSocket(realtimeUrl(), { headers: { cookie: jar.cookieHeader(), ...headers } })
     const received: string[] = []
     let waiting: ((message: string) => void) | null = null
     socket.on('message', (data: Buffer) => {
@@ -171,6 +171,31 @@ describe('Anmeldung', () => {
     expect(await app.store.users.count()).toBe(2)
   })
 
+  it('macht bei gleichzeitigen Erstanmeldungen genau einen Systemadmin', async () => {
+    const subjekte = ['a', 'b', 'c', 'd', 'e']
+
+    const ergebnisse = await Promise.all(subjekte.map((subject) => login(app, createJar(), { subject })))
+
+    for (const ergebnis of ergebnisse) {
+      expect(ergebnis.error).toBeNull()
+    }
+    const users = await app.store.users.list()
+    expect(users).toHaveLength(subjekte.length)
+    expect(users.filter((user) => user.isSystemAdmin)).toHaveLength(1)
+  })
+
+  it('loest gleichzeitige Erstanmeldungen desselben Subjects als Konflikt auf, nicht als Fehler', async () => {
+    const versuche = [1, 2, 3].map(() => login(app, createJar(), { subject: 'ada', email: 'ada@example.com' }))
+
+    const ergebnisse = await Promise.all(versuche)
+
+    for (const ergebnis of ergebnisse) {
+      expect(ergebnis.error).toBeNull()
+    }
+    expect(await app.store.users.count()).toBe(1)
+    expect(app.logs.filter((entry) => entry.level === 'error')).toEqual([])
+  })
+
   it('verwirft den Flow-Zustand nach einmaliger Verwendung', async () => {
     const jar = createJar()
     const authorizationUrl = await startLogin(app, jar)
@@ -246,6 +271,21 @@ describe('Abgelehnte Anmeldungen', () => {
     expect(await app.store.users.count()).toBe(0)
   })
 
+  it('behandelt ein fehlerhaft prozentkodiertes Flow-Cookie wie ein fehlendes', async () => {
+    const jar = createJar()
+    const authorizationUrl = await startLogin(app, jar)
+    const callbackUrl = await decideAtProvider(jar, authorizationUrl, { subject: 'ada' })
+
+    const response = await fetch(callbackUrl, {
+      headers: { cookie: `${FLOW_COOKIE}=%` },
+      redirect: 'manual',
+    })
+
+    expect(response.status).toBe(302)
+    expect(new URL(response.headers.get('location') ?? '').searchParams.get('login_error')).toBe('flow-abgelaufen')
+    expect(await app.store.users.count()).toBe(0)
+  })
+
   it('lehnt einen fremden State ab, auch mit gueltigem Flow-Zustand', async () => {
     const opfer = createJar()
     await startLogin(app, opfer)
@@ -289,6 +329,18 @@ describe('Guard und Session', () => {
     jar.set(SESSION_COOKIE, 'frei-erfunden-aber-lang-genug-aussehend')
 
     expect((await me(jar)).status).toBe(401)
+  })
+
+  it('behandelt ein fehlerhaft prozentkodiertes Session-Cookie wie ein fehlendes', async () => {
+    const kaputt = { cookie: `${SESSION_COOKIE}=%` }
+
+    const profil = await fetch(`${app.baseUrl}${ME_PATH}`, { headers: kaputt })
+    const abmeldung = await fetch(`${app.baseUrl}${AUTH_LOGOUT_PATH}`, { method: 'POST', headers: kaputt })
+    const verwaltung = await fetch(`${app.baseUrl}${ADMIN_USERS_PATH}`, { headers: kaputt })
+
+    expect(profil.status).toBe(401)
+    expect(abmeldung.status).toBe(401)
+    expect(verwaltung.status).toBe(401)
   })
 
   it('verweigert ein manipuliertes Session-Cookie', async () => {
@@ -464,6 +516,38 @@ describe('WebSocket-Einstieg', () => {
     await expect(connectRealtime(createJar())).rejects.toThrow('upgrade-abgelehnt:401')
   })
 
+  it('weist einen Upgrade mit fehlerhaft prozentkodiertem Cookie ab', async () => {
+    await expect(connectRealtime(createJar(), { cookie: `${SESSION_COOKIE}=%` })).rejects.toThrow(
+      'upgrade-abgelehnt:401',
+    )
+  })
+
+  it('weist einen Upgrade mit fremder Herkunft ab', async () => {
+    const { jar } = await signedInAs('ada')
+
+    await expect(connectRealtime(jar, { origin: 'http://boese.example.com' })).rejects.toThrow('upgrade-abgelehnt:403')
+  })
+
+  it('nimmt einen Upgrade mit der eigenen Herkunft an', async () => {
+    const { jar, profile } = await signedInAs('ada')
+
+    const connection = await connectRealtime(jar, { origin: app.baseUrl })
+
+    expect(JSON.parse(await connection.next())).toEqual({ type: 'ready', userId: profile.user.id })
+    connection.socket.close()
+  })
+
+  it('schliesst eine offene Verbindung, sobald die Sitzung ablaeuft', async () => {
+    const { jar } = await signedInAs('ada')
+    const connection = await connectRealtime(jar)
+    await connection.next()
+    const closed = new Promise<number>((resolve) => connection.socket.once('close', resolve))
+
+    app.setNow(new Date(Date.now() + 13 * 3600 * 1000))
+
+    expect(await closed).toBe(SESSION_REVOKED_CLOSE_CODE)
+  })
+
   it('weist einen Upgrade nach dem Logout ab', async () => {
     const { jar, profile } = await signedInAs('ada')
     const token = jar.cookies.get(SESSION_COOKIE) ?? ''
@@ -505,6 +589,28 @@ describe('WebSocket-Einstieg', () => {
 
     expect(await closed).toBe(SESSION_REVOKED_CLOSE_CODE)
     await expect(connectRealtime(bob.jar)).rejects.toThrow('upgrade-abgelehnt:401')
+  })
+})
+
+describe('Sicherheitsheader', () => {
+  it('setzt CSP, nosniff und Referrer-Policy auf API-, Fehler- und Weiterleitungsantworten', async () => {
+    const antworten = [
+      await fetch(`${app.baseUrl}${ME_PATH}`),
+      await fetch(`${app.baseUrl}/api/health`),
+      await fetch(`${app.baseUrl}/api/auth/login`, { redirect: 'manual' }),
+    ]
+
+    for (const response of antworten) {
+      const csp = response.headers.get('content-security-policy') ?? ''
+      expect(csp).toContain("default-src 'self'")
+      expect(csp).toContain("frame-ancestors 'none'")
+      expect(csp).toContain("object-src 'none'")
+      expect(csp).toContain("base-uri 'self'")
+      expect(response.headers.get('x-content-type-options')).toBe('nosniff')
+      expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+      // HSTS gehoert zur TLS-Terminierung, nicht in die Anwendung.
+      expect(response.headers.get('strict-transport-security')).toBeNull()
+    }
   })
 })
 

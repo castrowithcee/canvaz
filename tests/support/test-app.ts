@@ -74,7 +74,8 @@ export async function startTestApp(options: {
   const now = () => frozenNow ?? new Date()
 
   const store = createIdentityStore(options.pool)
-  const realtime = createRealtimeGateway({ identity: store, logger, now })
+  // Kurzer Abstand der Ablaufpruefung: der Test soll auf das Schliessen nicht eine Minute warten.
+  const realtime = createRealtimeGateway({ config, identity: store, logger, now, expiryCheckIntervalMs: 25 })
   const context: AppContext = {
     config,
     pool: options.pool,

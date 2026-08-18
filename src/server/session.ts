@@ -18,6 +18,15 @@ import { appendSetCookie, clearCookie, parseCookies, serializeCookie } from './c
 
 export const SESSION_COOKIE = 'canvaz_session'
 
+/**
+ * Unter HTTPS traegt das Cookie den `__Host-`-Praefix. Der Browser nimmt ein so benanntes Cookie nur mit
+ * `Secure`, `Path=/` und ohne `Domain` an - eine Nachbardomain kann es damit nicht ueberschreiben. Ohne TLS
+ * waere der Praefix nicht setzbar, dort bleibt der schlichte Name.
+ */
+export function sessionCookieName(config: Pick<AppConfig, 'secureCookies'>): string {
+  return config.secureCookies ? `__Host-${SESSION_COOKIE}` : SESSION_COOKIE
+}
+
 const SESSION_TOKEN_BYTES = 32
 
 export function createSessionToken(): string {
@@ -58,16 +67,21 @@ function cookieOptions(config: AppConfig) {
 export function setSessionCookie(response: ServerResponse, config: AppConfig, token: string): void {
   appendSetCookie(
     response,
-    serializeCookie(SESSION_COOKIE, token, { ...cookieOptions(config), maxAgeSeconds: config.sessionTtlSeconds }),
+    serializeCookie(sessionCookieName(config), token, {
+      ...cookieOptions(config),
+      maxAgeSeconds: config.sessionTtlSeconds,
+    }),
   )
 }
 
 export function clearSessionCookie(response: ServerResponse, config: AppConfig): void {
-  appendSetCookie(response, clearCookie(SESSION_COOKIE, cookieOptions(config)))
+  appendSetCookie(response, clearCookie(sessionCookieName(config), cookieOptions(config)))
 }
 
-export function readSessionToken(request: IncomingMessage): string | null {
-  const token = parseCookies(request.headers.cookie)[SESSION_COOKIE]
+export function readSessionToken(request: IncomingMessage, config: Pick<AppConfig, 'secureCookies'>): string | null {
+  // Bewusst nur der zur Konfiguration passende Name: unter HTTPS wuerde ein zusaetzlich akzeptierter
+  // unpraefixierter Name genau den Schutz aushebeln, den der Praefix bringt.
+  const token = parseCookies(request.headers.cookie)[sessionCookieName(config)]
   return token === undefined || token.length === 0 ? null : token
 }
 
@@ -96,10 +110,11 @@ export async function startSession(
  */
 export async function resolveSession(
   store: IdentityStore,
+  config: Pick<AppConfig, 'secureCookies'>,
   request: IncomingMessage,
   now: Date,
 ): Promise<AuthenticatedSession | null> {
-  const token = readSessionToken(request)
+  const token = readSessionToken(request, config)
   if (token === null) {
     return null
   }

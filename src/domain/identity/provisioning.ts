@@ -41,8 +41,9 @@ export function parseIdentityClaims(raw: unknown): IdentityClaims | null {
     return null
   }
   const rawEmail = trimmedString(claims['email'])
-  // Eine unbestaetigte Adresse wird nicht als Profilmerkmal uebernommen; sie waere fremd befuellbar.
-  const email = rawEmail !== null && claims['email_verified'] !== false ? rawEmail.toLowerCase() : null
+  // Nur eine ausdruecklich bestaetigte Adresse wird uebernommen; jede andere waere fremd befuellbar. Ein
+  // fehlender `email_verified`-Claim ist keine Bestaetigung und zaehlt wie `false`.
+  const email = rawEmail !== null && claims['email_verified'] === true ? rawEmail.toLowerCase() : null
   return {
     issuer,
     subject,

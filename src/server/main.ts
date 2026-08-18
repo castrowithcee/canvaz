@@ -32,7 +32,7 @@ function loadConfigOrExit(): ReturnType<typeof loadConfig> {
 const config = loadConfigOrExit()
 const pool = createPool(config.databaseUrl)
 const identity = createIdentityStore(pool)
-const realtime = createRealtimeGateway({ identity, logger: consoleLogger, now: () => new Date() })
+const realtime = createRealtimeGateway({ config, identity, logger: consoleLogger, now: () => new Date() })
 const context: AppContext = {
   config,
   pool,

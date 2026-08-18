@@ -234,6 +234,49 @@ describe('Transaktion', () => {
   })
 })
 
+describe('Bootstrap-Entscheidung', () => {
+  it('meldet die leere Instanz und danach keine mehr', async () => {
+    expect(await store.transaction((tx) => tx.users.isFirstUser())).toBe(true)
+
+    await createUser('Ada')
+
+    expect(await store.transaction((tx) => tx.users.isFirstUser())).toBe(false)
+  })
+
+  it('gilt nur innerhalb einer Transaktion', async () => {
+    await expect(store.users.isFirstUser()).rejects.toThrow()
+  })
+
+  it('serialisiert gleichzeitige Erstanmeldungen, sodass nur eine eine leere Instanz sieht', async () => {
+    let angelegt!: () => void
+    let freigeben!: () => void
+    const hatAngelegt = new Promise<void>((resolve) => {
+      angelegt = resolve
+    })
+    const darfCommitten = new Promise<void>((resolve) => {
+      freigeben = resolve
+    })
+
+    const erste = store.transaction(async (tx) => {
+      const first = await tx.users.isFirstUser()
+      await tx.users.create({ displayName: 'Ada', email: null }, { isSystemAdmin: first })
+      angelegt()
+      await darfCommitten
+      return first
+    })
+    await hatAngelegt
+
+    // Die zweite Transaktion beginnt, waehrend die erste noch offen ist. Ohne Sperre liest sie unter READ
+    // COMMITTED eine leere Tabelle und wuerde einen zweiten Systemadmin anlegen.
+    const zweite = store.transaction((tx) => tx.users.isFirstUser())
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    freigeben()
+
+    expect(await erste).toBe(true)
+    expect(await zweite).toBe(false)
+  })
+})
+
 describe('Migrationen', () => {
   it('sind wiederholbar ohne Wirkung', async () => {
     expect(await migrate(pool)).toEqual([])

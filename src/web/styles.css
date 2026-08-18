@@ -93,3 +93,9 @@ button[disabled] {
   white-space: nowrap;
   width: 1px;
 }
+
+.hint {
+  color: color-mix(in srgb, currentColor 70%, transparent);
+  font-size: 0.85rem;
+  margin: 0.35rem 0 0;
+}

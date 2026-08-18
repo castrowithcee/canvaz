@@ -2,15 +2,23 @@
  * Bausteine der Anmeldung ohne IO: transienter Flow-Zustand, Session-Geheimnis, CSRF-Bindung, Cookies.
  */
 
-import type { IncomingMessage } from 'node:http'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { CSRF_HEADER } from '../../src/contracts/api.js'
 import type { AuthenticatedSession } from '../../src/domain/identity/model.js'
+import { loadConfig } from '../../src/server/config.js'
 import { clearCookie, parseCookies, serializeCookie } from '../../src/server/cookies.js'
-import { FLOW_TTL_SECONDS, openFlowState, sealFlowState } from '../../src/server/flow-state.js'
-import { createSessionToken, csrfTokenFor, hasValidCsrfToken, hashSessionToken } from '../../src/server/session.js'
+import { FLOW_COOKIE, FLOW_TTL_SECONDS, openFlowState, sealFlowState, setFlowCookie } from '../../src/server/flow-state.js'
+import {
+  SESSION_COOKIE,
+  createSessionToken,
+  csrfTokenFor,
+  hasValidCsrfToken,
+  hashSessionToken,
+  setSessionCookie,
+} from '../../src/server/session.js'
 
 const SECRET = 'ein-test-geheimnis-mit-mehr-als-32-zeichen'
 const flow = { state: 'state-1', nonce: 'nonce-1', codeVerifier: 'verifier-1' }
@@ -88,11 +96,74 @@ describe('Cookies', () => {
     expect(parseCookies(undefined)).toEqual({})
   })
 
+  it('ignoriert einen fehlerhaft prozentkodierten Wert wie ein fehlendes Cookie', () => {
+    expect(parseCookies('canvaz_session=%')).toEqual({})
+    expect(parseCookies('a=1; kaputt=%E0%A4%A; b=2')).toEqual({ a: '1', b: '2' })
+  })
+
   it('setzt die Sicherheitsattribute', () => {
     const cookie = serializeCookie('canvaz_session', 'geheim', { path: '/', maxAgeSeconds: 60, secure: true })
 
     expect(cookie).toBe('canvaz_session=geheim; Path=/; Max-Age=60; SameSite=Lax; HttpOnly; Secure')
     expect(serializeCookie('x', 'y', { path: '/', maxAgeSeconds: 60, secure: false })).not.toContain('Secure')
     expect(clearCookie('canvaz_session', { path: '/', secure: false })).toContain('Max-Age=0')
+  })
+})
+
+describe('Cookie-Namen', () => {
+  const httpsEnv = {
+    CANVAZ_BASE_URL: 'https://canvaz.example.com',
+    DATABASE_URL: 'postgres://canvaz:geheim@db:5432/canvaz',
+    CANVAZ_SESSION_SECRET: SECRET,
+    CANVAZ_OIDC_ISSUER: 'https://idp.example.com',
+    CANVAZ_OIDC_CLIENT_ID: 'canvaz',
+    CANVAZ_OIDC_CLIENT_SECRET: 'client-secret',
+    CANVAZ_OIDC_REDIRECT_URI: 'https://canvaz.example.com/api/auth/callback',
+  }
+  const httpEnv = {
+    ...httpsEnv,
+    CANVAZ_BASE_URL: 'http://localhost:3000',
+    CANVAZ_OIDC_REDIRECT_URI: 'http://localhost:3000/api/auth/callback',
+  }
+
+  /** Faengt die `Set-Cookie`-Zeilen einer Antwort ab, ohne einen Server zu starten. */
+  function setCookiesOf(write: (response: ServerResponse) => void): readonly string[] {
+    const headers = new Map<string, string | readonly string[]>()
+    const response = {
+      getHeader: (name: string) => headers.get(name),
+      setHeader: (name: string, value: string | readonly string[]) => headers.set(name, value),
+    } as unknown as ServerResponse
+    write(response)
+    const value = headers.get('set-cookie') ?? []
+    return Array.isArray(value) ? value : [String(value)]
+  }
+
+  it('traegt unter HTTPS den __Host--Praefix samt seiner Voraussetzungen', () => {
+    const config = loadConfig(httpsEnv)
+
+    const [session] = setCookiesOf((response) => {
+      setSessionCookie(response, config, 'geheim')
+    })
+    const [flow] = setCookiesOf((response) => {
+      setFlowCookie(response, config, 'versiegelt')
+    })
+
+    expect(session).toContain(`__Host-${SESSION_COOKIE}=geheim`)
+    expect(session).toContain('Path=/')
+    expect(session).toContain('Secure')
+    expect(session).not.toContain('Domain=')
+    expect(flow).toContain(`__Host-${FLOW_COOKIE}=versiegelt`)
+    expect(flow).toContain('Secure')
+  })
+
+  it('bleibt ohne TLS beim schlichten Namen, weil der Praefix dort nicht setzbar ist', () => {
+    const config = loadConfig(httpEnv)
+
+    const [session] = setCookiesOf((response) => {
+      setSessionCookie(response, config, 'geheim')
+    })
+
+    expect(session).toContain(`${SESSION_COOKIE}=geheim`)
+    expect(session).not.toContain('__Host-')
   })
 })

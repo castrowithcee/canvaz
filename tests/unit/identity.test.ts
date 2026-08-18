@@ -62,10 +62,21 @@ describe('Just-in-time-Provisionierung', () => {
     expect(parseIdentityClaims({ sub: 'sub-1' })).toBeNull()
     expect(parseIdentityClaims('nichts')).toBeNull()
     expect(
-      parseIdentityClaims({ iss: 'https://idp.example.com', sub: 'sub-1', email: 'Ada@Example.com' })?.email,
+      parseIdentityClaims({
+        iss: 'https://idp.example.com',
+        sub: 'sub-1',
+        email: 'Ada@Example.com',
+        email_verified: true,
+      })?.email,
     ).toBe('ada@example.com')
     expect(
       parseIdentityClaims({ iss: 'https://idp.example.com', sub: 'sub-1', email: 'a@b.c', email_verified: false })
+        ?.email,
+    ).toBeNull()
+    // Fehlt die Bestaetigung ganz, ist die Adresse ebenso unbestaetigt wie bei `false`.
+    expect(parseIdentityClaims({ iss: 'https://idp.example.com', sub: 'sub-1', email: 'a@b.c' })?.email).toBeNull()
+    expect(
+      parseIdentityClaims({ iss: 'https://idp.example.com', sub: 'sub-1', email: 'a@b.c', email_verified: 'true' })
         ?.email,
     ).toBeNull()
   })

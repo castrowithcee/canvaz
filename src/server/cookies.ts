@@ -7,6 +7,19 @@
 
 import type { ServerResponse } from 'node:http'
 
+/**
+ * `null` bedeutet: fehlerhaft prozentkodiert. Ein solcher Wert kann nicht von dieser Anwendung stammen und
+ * zaehlt wie ein fehlendes Cookie - `decodeURIComponent` wuerde sonst mitten im Guard werfen und aus einer
+ * unauthentisierten Anfrage einen Serverfehler machen.
+ */
+function decodeCookieValue(value: string): string | null {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return null
+  }
+}
+
 export function parseCookies(header: string | undefined): Readonly<Record<string, string>> {
   if (header === undefined) {
     return {}
@@ -18,9 +31,9 @@ export function parseCookies(header: string | undefined): Readonly<Record<string
       continue
     }
     const name = part.slice(0, separator).trim()
-    const value = part.slice(separator + 1).trim()
-    if (name.length > 0 && cookies[name] === undefined) {
-      cookies[name] = decodeURIComponent(value)
+    const value = decodeCookieValue(part.slice(separator + 1).trim())
+    if (name.length > 0 && value !== null && cookies[name] === undefined) {
+      cookies[name] = value
     }
   }
   return cookies

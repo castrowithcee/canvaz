@@ -12,6 +12,7 @@ import { AUTH_LOGIN_PATH, AUTH_LOGOUT_PATH, LOGIN_ERROR_PARAM, ME_PATH } from '.
 import type { UserId } from '../domain/identity/model.js'
 import type { IdentityClaims } from '../domain/identity/provisioning.js'
 import { decideProvisioning } from '../domain/identity/provisioning.js'
+import { IdentityConflictError } from '../domain/identity/repositories.js'
 import type { AppContext } from './context.js'
 import { clearFlowCookie, openFlowState, readFlowCookie, sealFlowState, setFlowCookie } from './flow-state.js'
 import { requireCsrfToken, requireSession, toUserView } from './guard.js'
@@ -45,12 +46,14 @@ type LoginOutcome =
  * Just-in-time-Provisionierung samt Session in einer Transaktion: Nutzer, Verknuepfung und Sitzung entstehen
  * gemeinsam oder gar nicht. Die Regel selbst steht in `decideProvisioning`.
  */
-async function provisionAndStartSession(context: AppContext, claims: IdentityClaims): Promise<LoginOutcome> {
+async function runProvisioning(context: AppContext, claims: IdentityClaims): Promise<LoginOutcome> {
   const now = context.now()
   return context.identity.transaction(async (store) => {
     const key = { issuer: claims.issuer, subject: claims.subject }
     const linked = await store.externalIdentities.findByKey(key)
-    const isFirstUser = linked === null && (await store.users.count()) === 0
+    // Nur der Weg in die Erstanlage fragt - und sperrt - die Bootstrap-Entscheidung; eine gewoehnliche
+    // Anmeldung laeuft unberuehrt daran vorbei.
+    const isFirstUser = linked === null && (await store.users.isFirstUser())
     const decision = decideProvisioning(claims, linked, { isFirstUser })
     if (decision.kind === 'deny') {
       return { kind: 'denied' }
@@ -68,6 +71,23 @@ async function provisionAndStartSession(context: AppContext, claims: IdentityCla
     const { token } = await startSession(store, context.config, userId, now)
     return { kind: 'ok', token, userId }
   })
+}
+
+/**
+ * Melden sich mehrere Geraete desselben Nutzers gleichzeitig zum ersten Mal an, gewinnt einer die Erstanlage
+ * und die anderen laufen in die Eindeutigkeit von Adresse oder externer Identitaet. Das ist ein erwarteter
+ * Konflikt: der zweite Anlauf findet den angelegten Nutzer vor und meldet ihn normal an.
+ */
+async function provisionAndStartSession(context: AppContext, claims: IdentityClaims): Promise<LoginOutcome> {
+  try {
+    return await runProvisioning(context, claims)
+  } catch (error) {
+    if (!(error instanceof IdentityConflictError)) {
+      throw error
+    }
+    context.logger('warn', 'auth.provisioning.conflict-retried', { subject: claims.subject })
+    return runProvisioning(context, claims)
+  }
 }
 
 export function createAuthRoutes(context: AppContext): readonly Route[] {
@@ -97,7 +117,7 @@ export function createAuthRoutes(context: AppContext): readonly Route[] {
       method: 'GET',
       path: callbackPath,
       handle: async ({ request, response, url }) => {
-        const sealed = readFlowCookie(request)
+        const sealed = readFlowCookie(request, config)
         // Einmalverwendung: der Zustand wird verworfen, bevor irgendetwas mit ihm geschieht.
         clearFlowCookie(response, config)
         const flow = sealed === null ? null : await openFlowState(sealed, config.sessionSecret)

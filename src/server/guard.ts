@@ -32,7 +32,7 @@ export async function requireSession(
   request: IncomingMessage,
   response: ServerResponse,
 ): Promise<AuthenticatedSession | null> {
-  const auth = await resolveSession(context.identity, request, context.now())
+  const auth = await resolveSession(context.identity, context.config, request, context.now())
   if (auth === null) {
     sendError(response, 401, 'Nicht angemeldet')
     return null

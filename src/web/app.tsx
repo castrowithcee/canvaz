@@ -120,6 +120,9 @@ function AdminUsers({ me }: { readonly me: MeResponse }) {
             {users.map((user) => {
               const isSelf = user.id === me.user.id
               const activate = user.status !== 'active'
+              // Ein gesperrter Knopf ist nicht fokussierbar, ein `title` daran wuerde nie vorgelesen. Die
+              // Begruendung steht deshalb als Text daneben und ist dem Knopf zugeordnet.
+              const reasonId = isSelf && !activate ? `sperrgrund-${user.id}` : undefined
               return (
                 <tr key={user.id}>
                   <td>{user.displayName}</td>
@@ -134,10 +137,15 @@ function AdminUsers({ me }: { readonly me: MeResponse }) {
                         toggle(user)
                       }}
                       disabled={(isSelf && !activate) || pendingId === user.id}
-                      title={isSelf && !activate ? 'Ein Systemadmin kann sich nicht selbst deaktivieren' : undefined}
+                      aria-describedby={reasonId}
                     >
                       {activate ? `${user.displayName} aktivieren` : `${user.displayName} deaktivieren`}
                     </button>
+                    {reasonId !== undefined && (
+                      <p className="hint" id={reasonId}>
+                        Ein Systemadmin kann sich nicht selbst deaktivieren.
+                      </p>
+                    )}
                   </td>
                 </tr>
               )

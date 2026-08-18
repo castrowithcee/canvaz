@@ -30,10 +30,27 @@ export type NewSession = {
   readonly expiresAt: Date
 }
 
+/**
+ * Ein gleichzeitiger Vorgang hat dieselbe Eindeutigkeit zuerst belegt - dieselbe Adresse oder dieselbe
+ * externe Identitaet. Fachlich ein erwarteter Konflikt, kein Fehler: der Aufrufer loest ihn auf, indem er
+ * den Vorgang noch einmal beginnt und den inzwischen vorhandenen Stand vorfindet.
+ */
+export class IdentityConflictError extends Error {
+  constructor(cause: unknown) {
+    super('Ein gleichzeitiger Vorgang hat dieselbe Eindeutigkeit belegt', { cause })
+    this.name = 'IdentityConflictError'
+  }
+}
+
 export interface UserRepository {
   findById(id: UserId): Promise<User | null>
-  /** Bootstrap-Entscheidung der Provisionierung: die erste Anmeldung einer leeren Instanz wird Systemadmin. */
   count(): Promise<number>
+  /**
+   * Bootstrap-Entscheidung der Provisionierung: die erste Anmeldung einer leeren Instanz wird Systemadmin.
+   * Die Antwort gilt serialisiert bis zum Ende der Transaktion, damit zwei gleichzeitige Erstanmeldungen
+   * nicht beide eine leere Instanz sehen. Nur innerhalb einer Transaktion gueltig.
+   */
+  isFirstUser(): Promise<boolean>
   /** Nutzerliste der Systemadministration, aelteste zuerst. */
   list(): Promise<readonly User[]>
   create(profile: UserProfileDraft, options: { readonly isSystemAdmin: boolean }): Promise<User>

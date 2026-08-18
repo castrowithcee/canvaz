@@ -24,6 +24,28 @@ export type Route = {
   readonly handle: RouteHandler
 }
 
+/**
+ * Content-Security-Policy der Instanz. Die SPA laedt ausschliesslich eigene Dateien; alles Fremde ist
+ * verboten. `data:`/`blob:` bleiben fuer Bilder offen, weil der Zeichenbereich Inhalte als Datenverweis
+ * einbettet und exportiert. `frame-ancestors 'none'` ersetzt `X-Frame-Options`. HSTS fehlt bewusst: die
+ * TLS-Terminierung ist eine Eingabe des Deployments, nicht dieser Anwendung.
+ */
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "object-src 'none'",
+  "frame-ancestors 'none'",
+  "form-action 'self'",
+  "img-src 'self' data: blob:",
+].join('; ')
+
+/** Gilt fuer jede Antwort, auch fuer statische Dateien, Weiterleitungen und Fehler. */
+export function applySecurityHeaders(response: ServerResponse): void {
+  response.setHeader('content-security-policy', CONTENT_SECURITY_POLICY)
+  response.setHeader('x-content-type-options', 'nosniff')
+  response.setHeader('referrer-policy', 'no-referrer')
+}
+
 export function sendJson(response: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body)
   response.writeHead(status, {
@@ -117,6 +139,7 @@ export function createRequestListener(routes: readonly Route[], webRoot: string)
   const indexPath = join(root, 'index.html')
 
   return (request, response) => {
+    applySecurityHeaders(response)
     void (async () => {
       const url = new URL(request.url ?? '/', 'http://localhost')
       const method = request.method ?? 'GET'

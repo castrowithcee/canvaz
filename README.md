@@ -46,16 +46,22 @@ sind kein Eigenbau.
 
 **Tokens des Identity Providers werden nie gespeichert.** Aus dem geprueften Token entsteht nur das lokale
 Profil. Die Sitzung ist serverseitig und widerrufbar: im HttpOnly-Cookie `canvaz_session` steht ein
-zufaelliges Geheimnis, in der Datenbank nur dessen SHA-256-Hash. Zustandsaendernde Endpunkte verlangen
-zusaetzlich das an die Sitzung gebundene CSRF-Token im Header `x-canvaz-csrf`; die SPA erhaelt es von
-`/api/me`.
+zufaelliges Geheimnis, in der Datenbank nur dessen SHA-256-Hash. Unter HTTPS heisst das Cookie
+`__Host-canvaz_session` (ebenso `__Host-canvaz_oidc_flow`), damit keine Nachbardomain es ueberschreiben
+kann. Zustandsaendernde Endpunkte verlangen zusaetzlich das an die Sitzung gebundene CSRF-Token im Header
+`x-canvaz-csrf`; die SPA erhaelt es von `/api/me`.
+
+Jede Antwort traegt `Content-Security-Policy` (`default-src 'self'`, `frame-ancestors 'none'`,
+`object-src 'none'`, `base-uri 'self'`), `X-Content-Type-Options: nosniff` und `Referrer-Policy: no-referrer`.
+HSTS setzt bewusst die TLS-Terminierung des Deployments, nicht die Anwendung.
 
 Der transiente Flow-Zustand (`state`, `nonce`, `code_verifier`) liegt in einem verschluesselten,
 kurzlebigen HttpOnly-Cookie (`canvaz_oidc_flow`, zehn Minuten). Der Callback verwirft es vor der
 Codeeinloesung, damit es genau einmal gilt.
 
-Der erste angemeldete Nutzer einer leeren Instanz wird Systemadmin. Es gibt keine fest codierten
-Zugangsdaten.
+Der erste angemeldete Nutzer einer leeren Instanz wird Systemadmin. Die Entscheidung faellt serialisiert
+(Advisory Lock in der Provisionierungstransaktion), sodass auch zwei gleichzeitige Erstanmeldungen genau
+einen Systemadmin ergeben. Es gibt keine fest codierten Zugangsdaten.
 
 | Methode | Pfad | Zugang |
 | --- | --- | --- |
@@ -69,7 +75,8 @@ Zugangsdaten.
 | GET (Upgrade) | `/api/realtime` | angemeldet; WebSocket-Einstieg fuer die spaetere Realtime-Strecke |
 
 Logout und Deaktivierung widerrufen Sitzungen serverseitig und schliessen offene WebSocket-Verbindungen
-sofort; ein Upgrade danach wird abgelehnt.
+sofort; ein Upgrade danach wird abgelehnt. Auch der Ablauf der Sitzung schliesst eine offene Verbindung.
+Ein Upgrade mit fremdem `Origin` wird abgewiesen, weil der CSRF-Header beim Handshake nicht greift.
 
 ## Identity Provider einrichten (Beispiel Authentik)
 
@@ -86,8 +93,9 @@ Discovery (`<issuer>/.well-known/openid-configuration`). Fuer Authentik:
 2. **Application anlegen** und dem Provider zuordnen. Ueber die Gruppenbindung der Application steuert
    Authentik, wer sich anmelden darf.
 3. **Claims**: Canvaz benoetigt `sub` und `iss` (zwingend) sowie `email`, `email_verified`, `name` und
-   `preferred_username` (optional, fuer Anzeigename und Adresse). Eine nicht bestaetigte Adresse
-   (`email_verified: false`) wird bewusst nicht uebernommen.
+   `preferred_username` (optional, fuer Anzeigename und Adresse). Die Adresse wird nur mit
+   `email_verified: true` uebernommen; fehlt der Claim oder steht er auf `false`, bleibt das Profil ohne
+   Adresse.
 4. **Werte uebernehmen**:
 
    | Umgebungsvariable | Wert aus Authentik |

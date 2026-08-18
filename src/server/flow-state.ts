@@ -23,6 +23,11 @@ import { appendSetCookie, clearCookie, parseCookies, serializeCookie } from './c
 
 export const FLOW_COOKIE = 'canvaz_oidc_flow'
 
+/** Wie beim Session-Cookie: unter HTTPS schuetzt der `__Host-`-Praefix vor einer fremden Nachbardomain. */
+function flowCookieName(config: AppConfig): string {
+  return config.secureCookies ? `__Host-${FLOW_COOKIE}` : FLOW_COOKIE
+}
+
 /** Zehn Minuten reichen fuer eine Anmeldung samt Zwei-Faktor-Schritt und begrenzen das Replay-Fenster. */
 export const FLOW_TTL_SECONDS = 600
 
@@ -70,15 +75,15 @@ function flowCookieOptions(config: AppConfig) {
 export function setFlowCookie(response: ServerResponse, config: AppConfig, sealed: string): void {
   appendSetCookie(
     response,
-    serializeCookie(FLOW_COOKIE, sealed, { ...flowCookieOptions(config), maxAgeSeconds: FLOW_TTL_SECONDS }),
+    serializeCookie(flowCookieName(config), sealed, { ...flowCookieOptions(config), maxAgeSeconds: FLOW_TTL_SECONDS }),
   )
 }
 
-export function readFlowCookie(request: IncomingMessage): string | null {
-  const value = parseCookies(request.headers.cookie)[FLOW_COOKIE]
+export function readFlowCookie(request: IncomingMessage, config: AppConfig): string | null {
+  const value = parseCookies(request.headers.cookie)[flowCookieName(config)]
   return value === undefined || value.length === 0 ? null : value
 }
 
 export function clearFlowCookie(response: ServerResponse, config: AppConfig): void {
-  appendSetCookie(response, clearCookie(FLOW_COOKIE, flowCookieOptions(config)))
+  appendSetCookie(response, clearCookie(flowCookieName(config), flowCookieOptions(config)))
 }
