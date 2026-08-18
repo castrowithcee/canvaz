@@ -32,6 +32,7 @@ import {
   WORKSPACE_ID_PARAM,
   WORKSPACE_MEMBER_ADD_PATH,
   WORKSPACE_MEMBER_CANDIDATES_PATH,
+  WORKSPACE_MEMBER_QUERY_PARAM,
   WORKSPACE_MEMBER_REMOVE_PATH,
   WORKSPACE_MEMBER_ROLE_PATH,
   WORKSPACE_MEMBERS_PATH,
@@ -122,8 +123,16 @@ export async function fetchWorkspaceMembers(workspaceId: string): Promise<Worksp
   return request<WorkspaceMembersResponse>(withWorkspace(WORKSPACE_MEMBERS_PATH, workspaceId))
 }
 
-export async function fetchMemberCandidates(workspaceId: string): Promise<WorkspaceCandidatesResponse> {
-  return request<WorkspaceCandidatesResponse>(withWorkspace(WORKSPACE_MEMBER_CANDIDATES_PATH, workspaceId))
+/** Gezielte Suche; ohne Suchbegriff gibt es serverseitig keine Treffer. */
+export async function fetchMemberCandidates(
+  workspaceId: string,
+  query: string,
+): Promise<WorkspaceCandidatesResponse> {
+  const params = new URLSearchParams({
+    [WORKSPACE_ID_PARAM]: workspaceId,
+    [WORKSPACE_MEMBER_QUERY_PARAM]: query,
+  })
+  return request<WorkspaceCandidatesResponse>(`${WORKSPACE_MEMBER_CANDIDATES_PATH}?${params.toString()}`)
 }
 
 export async function addWorkspaceMember(csrfToken: string, change: AddWorkspaceMemberRequest): Promise<void> {

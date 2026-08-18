@@ -15,6 +15,8 @@ import {
   WORKSPACE_ID_PARAM,
   WORKSPACE_MEMBER_ADD_PATH,
   WORKSPACE_MEMBER_CANDIDATES_PATH,
+  WORKSPACE_MEMBER_MAX_CANDIDATES,
+  WORKSPACE_MEMBER_QUERY_PARAM,
   WORKSPACE_MEMBER_REMOVE_PATH,
   WORKSPACE_MEMBER_ROLE_PATH,
   WORKSPACE_MEMBERS_PATH,
@@ -23,6 +25,7 @@ import {
   WORKSPACES_PATH,
 } from '../../src/contracts/api.js'
 import type {
+  DirectoryUserView,
   MeResponse,
   WorkspaceCandidatesResponse,
   WorkspaceMembersResponse,
@@ -77,9 +80,9 @@ beforeEach(async () => {
 
 type Account = { readonly jar: Jar; readonly profile: MeResponse }
 
-async function signedInAs(subject: string): Promise<Account> {
+async function signedInAs(subject: string, displayName?: string): Promise<Account> {
   const jar = createJar()
-  const result = await login(app, jar, { subject })
+  const result = await login(app, jar, displayName === undefined ? { subject } : { subject, name: displayName })
   expect(result.error).toBeNull()
   const response = await jar.fetch(`${app.baseUrl}${ME_PATH}`)
   expect(response.status).toBe(200)
@@ -115,6 +118,21 @@ async function addMember(
   role: WorkspaceRole,
 ): Promise<Response> {
   return post(owner, WORKSPACE_MEMBER_ADD_PATH, { workspaceId, userId, role })
+}
+
+/** Die Nutzersuche der Mitgliederaufnahme. Ohne `query` fehlt der Parameter vollstaendig. */
+function searchCandidates(account: Account, workspaceId: string, query?: string): Promise<Response> {
+  const params = new URLSearchParams({ [WORKSPACE_ID_PARAM]: workspaceId })
+  if (query !== undefined) {
+    params.set(WORKSPACE_MEMBER_QUERY_PARAM, query)
+  }
+  return account.jar.fetch(`${app.baseUrl}${WORKSPACE_MEMBER_CANDIDATES_PATH}?${params.toString()}`)
+}
+
+async function foundUsers(account: Account, workspaceId: string, query: string): Promise<readonly DirectoryUserView[]> {
+  const response = await searchCandidates(account, workspaceId, query)
+  expect(response.status).toBe(200)
+  return ((await response.json()) as WorkspaceCandidatesResponse).users
 }
 
 async function listWorkspaces(account: Account): Promise<readonly WorkspaceView[]> {
@@ -323,11 +341,69 @@ describe('Rollen im Workspace', () => {
 
     await post(root, ADMIN_USER_STATUS_PATH, { userId: bob.profile.user.id, status: 'deactivated' })
 
-    const candidates = (await (
-      await get(ada, WORKSPACE_MEMBER_CANDIDATES_PATH, workspace.id)
-    ).json()) as WorkspaceCandidatesResponse
-    expect(candidates.users.map((user) => user.id)).not.toContain(bob.profile.user.id)
+    // Auch die gezielte Suche nach seiner Adresse findet ihn nicht mehr.
+    expect(await foundUsers(ada, workspace.id, 'bob@example.com')).toEqual([])
     expect((await addMember(ada, workspace.id, bob.profile.user.id, 'member')).status).toBe(400)
+  })
+})
+
+describe('Nutzersuche fuer die Aufnahme', () => {
+  it('gibt ohne oder mit zu kurzem Suchbegriff keine Daten heraus', async () => {
+    await instanzMitAdmin()
+    const ada = await signedInAs('ada')
+    await signedInAs('bob')
+    const workspace = await createWorkspace(ada, 'Team Nord')
+
+    // Ein eigener Arbeitsbereich macht das Verzeichnis nicht abfragbar: ohne Suchbegriff gibt es nichts.
+    for (const query of [undefined, '', '   ', 'bo']) {
+      const response = await searchCandidates(ada, workspace.id, query)
+      expect(response.status).toBe(400)
+      expect(await response.text()).not.toContain('bob@example.com')
+    }
+  })
+
+  it('liefert nur genaue Treffer und deutet keine Platzhalter', async () => {
+    await instanzMitAdmin()
+    const ada = await signedInAs('ada')
+    const carla = await signedInAs('carla')
+    const workspace = await createWorkspace(ada, 'Team Nord')
+
+    // Weder ein Praefix noch ein Platzhalter noch ein SQL-Versuch macht aus der Suche eine Liste.
+    for (const query of ['car', '%%%', '___', "' or 1=1 --", '@example.com']) {
+      expect(await foundUsers(ada, workspace.id, query)).toEqual([])
+    }
+
+    const treffer = await foundUsers(ada, workspace.id, 'CARLA@example.com')
+    expect(treffer.map((user) => user.id)).toEqual([carla.profile.user.id])
+    // Wer nach der Adresse sucht, kennt sie bereits; nur dann steht sie auch im Treffer.
+    expect(treffer[0]?.email).toBe('carla@example.com')
+  })
+
+  it('gibt bei der Suche ueber den Anzeigenamen keine Adresse preis und begrenzt die Trefferzahl', async () => {
+    await instanzMitAdmin()
+    const ada = await signedInAs('ada')
+    const workspace = await createWorkspace(ada, 'Team Nord')
+    for (let index = 0; index <= WORKSPACE_MEMBER_MAX_CANDIDATES; index += 1) {
+      await signedInAs(`doppel-${String(index)}`, 'Doppel Gaenger')
+    }
+
+    const treffer = await foundUsers(ada, workspace.id, 'doppel gaenger')
+
+    expect(treffer).toHaveLength(WORKSPACE_MEMBER_MAX_CANDIDATES)
+    expect(treffer.every((user) => user.email === null)).toBe(true)
+  })
+
+  it('bietet ein bestehendes Mitglied nicht noch einmal an', async () => {
+    await instanzMitAdmin()
+    const ada = await signedInAs('ada')
+    const bob = await signedInAs('bob')
+    const workspace = await createWorkspace(ada, 'Team Nord')
+
+    expect((await foundUsers(ada, workspace.id, 'bob@example.com')).map((user) => user.id)).toEqual([
+      bob.profile.user.id,
+    ])
+    expect((await addMember(ada, workspace.id, bob.profile.user.id, 'member')).status).toBe(201)
+    expect(await foundUsers(ada, workspace.id, 'bob@example.com')).toEqual([])
   })
 })
 
@@ -352,6 +428,65 @@ describe('Entzug einer Mitgliedschaft', () => {
     expect((await post(bob, WORKSPACE_RENAME_PATH, { workspaceId: workspace.id, name: 'X' })).status).toBe(404)
     // Die Sitzung selbst bleibt gueltig: entzogen wurde die Mitgliedschaft, nicht die Anmeldung.
     expect((await bob.jar.fetch(`${app.baseUrl}${ME_PATH}`)).status).toBe(200)
+  })
+})
+
+describe('Gleichzeitige Deaktivierung des Zielnutzers', () => {
+  it('nimmt einen zeitgleich deaktivierten Nutzer nicht mehr auf', async () => {
+    await instanzMitAdmin()
+    const ada = await signedInAs('ada')
+    const bob = await signedInAs('bob')
+    const workspace = await createWorkspace(ada, 'Team Nord')
+
+    // Die Deaktivierung laeuft in einer noch offenen Transaktion: sie ist begonnen, aber nicht sichtbar.
+    // Wird der Status ausserhalb der schreibenden Transaktion gelesen, entsteht eine Karteileiche.
+    const blocker = await pool.connect()
+    let response: Response
+    try {
+      await blocker.query('begin')
+      await blocker.query(`update users set status = 'deactivated' where id = $1`, [bob.profile.user.id])
+      const pending = addMember(ada, workspace.id, bob.profile.user.id, 'member')
+      await new Promise((resolve) => setTimeout(resolve, 250))
+      await blocker.query('commit')
+      response = await pending
+    } finally {
+      blocker.release()
+    }
+
+    expect(response.status).toBe(400)
+    const members = (await (await get(ada, WORKSPACE_MEMBERS_PATH, workspace.id)).json()) as WorkspaceMembersResponse
+    expect(members.members.map((member) => member.userId)).toEqual([ada.profile.user.id])
+  })
+})
+
+describe('Antwort erst nach dem Commit', () => {
+  it('quittiert keinen Erfolg, wenn der Commit scheitert', async () => {
+    await instanzMitAdmin()
+    const ada = await signedInAs('ada')
+    const workspace = await createWorkspace(ada, 'Team Nord')
+
+    // Ein aufgeschobener Constraint-Trigger schlaegt genau beim Commit fehl - also nachdem der
+    // Transaktionsrumpf durchgelaufen ist. Genau dann darf der Client noch keine Erfolgsantwort haben.
+    await pool.query(
+      `create or replace function canvaz_test_commit_fails() returns trigger language plpgsql as
+       $$ begin raise exception 'Commit im Test abgelehnt'; end $$`,
+    )
+    await pool.query(
+      `create constraint trigger canvaz_test_commit_fails after update on workspaces
+       deferrable initially deferred for each row execute function canvaz_test_commit_fails()`,
+    )
+    let response: Response
+    try {
+      response = await post(ada, WORKSPACE_RENAME_PATH, { workspaceId: workspace.id, name: 'Umbenannt' })
+    } finally {
+      await pool.query('drop trigger if exists canvaz_test_commit_fails on workspaces')
+      await pool.query('drop function if exists canvaz_test_commit_fails()')
+    }
+
+    expect(response.status).toBe(500)
+    // Und die Aenderung ist zurueckgerollt: Antwort und Datenstand widersprechen sich nicht.
+    const members = (await (await get(ada, WORKSPACE_MEMBERS_PATH, workspace.id)).json()) as WorkspaceMembersResponse
+    expect(members.workspace.name).toBe('Team Nord')
   })
 })
 

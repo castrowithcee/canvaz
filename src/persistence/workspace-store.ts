@@ -8,7 +8,7 @@
 
 import type { Pool, PoolClient } from 'pg'
 
-import type { UserId } from '../domain/identity/model.js'
+import type { UserId, UserStatus } from '../domain/identity/model.js'
 import type {
   Workspace,
   WorkspaceAccess,
@@ -19,6 +19,8 @@ import type {
 } from '../domain/workspace/model.js'
 import type {
   AuditEvent,
+  CandidateUser,
+  MembershipTarget,
   NewAuditEvent,
   WorkspaceMember,
   WorkspaceStore,
@@ -212,18 +214,46 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Workspa
         return requireRow(result.rows[0], 'count lieferte keine Zeile').count
       },
 
-      async listCandidates(workspaceId: WorkspaceId) {
+      async searchCandidates(workspaceId: WorkspaceId, query: string, limit: number): Promise<readonly CandidateUser[]> {
+        // Genaue Treffer, sonst nichts: die vollstaendige Adresse oder der vollstaendige Anzeigename, jeweils
+        // ohne Ruecksicht auf Gross- und Kleinschreibung. Ein Praefix- oder Teilstringvergleich wuerde das
+        // Verzeichnis wieder durchsuchbar machen; ein `like` wuerde ausserdem `%` und `_` der Eingabe deuten.
         const result = await db.query<{ id: string; display_name: string; email: string | null }>(
           `select u.id, u.display_name, u.email
            from users u
            where u.status = 'active'
+             and (lower(u.email) = lower($2) or lower(btrim(u.display_name)) = lower(btrim($2)))
              and not exists (
                select 1 from workspace_memberships m where m.workspace_id = $1 and m.user_id = u.id
              )
-           order by u.display_name, u.id`,
-          [workspaceId],
+           order by u.display_name, u.id
+           limit $3`,
+          [workspaceId, query, limit],
         )
         return result.rows.map((row) => ({ id: row.id, displayName: row.display_name, email: row.email }))
+      },
+
+      async findUserForMembership(userId: UserId): Promise<MembershipTarget | null> {
+        if (!inTransaction) {
+          throw new Error('findUserForMembership ist nur innerhalb einer Transaktion gueltig')
+        }
+        // `for share` haelt die Nutzerzeile bis zum Commit: eine gleichzeitige Deaktivierung wartet, statt
+        // die Mitgliedschaft auf einem ueberholten Stand entstehen zu lassen. Gelesen wird nur, geschrieben
+        // wird die Zeile hier nie.
+        const result = await db.query<{ id: string; display_name: string; email: string | null; status: string }>(
+          'select id, display_name, email, status from users where id = $1 for share',
+          [userId],
+        )
+        const row = result.rows[0]
+        return row === undefined
+          ? null
+          : {
+              id: row.id,
+              displayName: row.display_name,
+              email: row.email,
+              // Der Check-Constraint laesst nur diese Werte zu.
+              status: row.status as UserStatus,
+            }
       },
 
       async addMember(workspaceId: WorkspaceId, userId: UserId, role: WorkspaceRole): Promise<WorkspaceMembership> {

@@ -10,13 +10,25 @@
  * Damit ist es gar nicht erst moeglich, einen geratenen Datensatz ohne Berechtigungsfilter zu erreichen.
  */
 
-import type { UserId } from '../identity/model.js'
+import type { UserId, UserStatus } from '../identity/model.js'
 import type { Workspace, WorkspaceAccess, WorkspaceId, WorkspaceMembership, WorkspaceRole } from './model.js'
 
 /** Mitglied samt Profilangaben fuer die Mitgliederliste. */
 export type WorkspaceMember = WorkspaceMembership & {
   readonly displayName: string
   readonly email: string | null
+}
+
+/** Treffer der Nutzersuche: das Minimum, das eine Aufnahme braucht. */
+export type CandidateUser = {
+  readonly id: UserId
+  readonly displayName: string
+  readonly email: string | null
+}
+
+/** Zielnutzer einer Aufnahme. Der Status entscheidet, ob sie ueberhaupt zulaessig ist. */
+export type MembershipTarget = CandidateUser & {
+  readonly status: UserStatus
 }
 
 /** Workspace samt eigener Rolle. In der Liste eines Nutzers ist die Rolle nie `null`. */
@@ -43,8 +55,18 @@ export interface WorkspaceRepository {
   listMembers(workspaceId: WorkspaceId): Promise<readonly WorkspaceMember[]>
   findMembership(workspaceId: WorkspaceId, userId: UserId): Promise<WorkspaceMembership | null>
   countOwners(workspaceId: WorkspaceId): Promise<number>
-  /** Aktive interne Nutzer, die noch nicht Mitglied sind. Grundlage der Mitgliederauswahl. */
-  listCandidates(workspaceId: WorkspaceId): Promise<readonly { readonly id: UserId; readonly displayName: string; readonly email: string | null }[]>
+  /**
+   * Gezielte Suche nach aufnehmbaren Nutzern: aktiv, noch kein Mitglied und **genau** passend zum
+   * Suchbegriff. Eine Vollliste gibt es bewusst nicht - das interne Verzeichnis ist keine Auskunft fuer
+   * jeden Angemeldeten, sondern bestaetigt nur, wen der Fragende ohnehin schon kennt.
+   */
+  searchCandidates(workspaceId: WorkspaceId, query: string, limit: number): Promise<readonly CandidateUser[]>
+  /**
+   * Zielnutzer einer Aufnahme, gelesen in derselben Transaktion wie der Schreibvorgang und mit einer
+   * Lesesperre auf seiner Zeile: eine gleichzeitige Deaktivierung wartet, statt eine Mitgliedschaft auf
+   * einem ueberholten Stand entstehen zu lassen. Nur innerhalb einer Transaktion gueltig.
+   */
+  findUserForMembership(userId: UserId): Promise<MembershipTarget | null>
   addMember(workspaceId: WorkspaceId, userId: UserId, role: WorkspaceRole): Promise<WorkspaceMembership>
   setRole(workspaceId: WorkspaceId, userId: UserId, role: WorkspaceRole): Promise<WorkspaceMembership>
   removeMember(workspaceId: WorkspaceId, userId: UserId): Promise<void>

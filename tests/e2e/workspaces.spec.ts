@@ -54,7 +54,15 @@ test('legt einen Arbeitsbereich an, nimmt ein Mitglied auf, wechselt die Rolle u
   await page.getByRole('button', { name: 'Team Nord verwalten' }).click()
   await expect(page.getByRole('heading', { name: 'Team Nord' })).toBeVisible()
 
-  await page.getByLabel('Nutzer').selectOption({ label: 'e2e-mitglied (e2e-mitglied@example.com)' })
+  // Es gibt keine Auswahlliste aller Nutzer, sondern nur eine gezielte Suche - und ein Praefix reicht nicht.
+  await expect(page.getByRole('button', { name: 'Mitglied hinzufuegen' })).toBeHidden()
+  await page.getByLabel(/Nutzer suchen/).fill('e2e-mit')
+  await page.getByRole('button', { name: 'Suchen' }).click()
+  await expect(page.getByText('Kein Treffer')).toBeVisible()
+
+  await page.getByLabel(/Nutzer suchen/).fill('e2e-mitglied@example.com')
+  await page.getByRole('button', { name: 'Suchen' }).click()
+  await page.getByRole('radio', { name: 'e2e-mitglied (e2e-mitglied@example.com)' }).check()
   await page.getByLabel('Rolle', { exact: true }).selectOption('member')
   await page.getByRole('button', { name: 'Mitglied hinzufuegen' }).click()
   await expect(page.getByLabel('Rolle von e2e-mitglied')).toBeVisible()
@@ -66,6 +74,7 @@ test('legt einen Arbeitsbereich an, nimmt ein Mitglied auf, wechselt die Rolle u
   await mitglied.getByRole('button', { name: 'Team Nord verwalten' }).click()
   // Ein Mitglied bekommt keine Verwaltung angeboten; die Grenze selbst liegt auf dem Server.
   await expect(mitglied.getByRole('button', { name: 'Mitglied hinzufuegen' })).toBeHidden()
+  await expect(mitglied.getByLabel(/Nutzer suchen/)).toBeHidden()
 
   await page.getByLabel('Rolle von e2e-mitglied').selectOption('admin')
   await page.getByRole('button', { name: 'Rolle von e2e-mitglied speichern' }).click()

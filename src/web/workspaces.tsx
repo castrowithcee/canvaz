@@ -16,6 +16,7 @@ import type {
   WorkspaceView,
   DirectoryUserView,
 } from '../contracts/api.js'
+import { WORKSPACE_MEMBER_MAX_CANDIDATES, WORKSPACE_MEMBER_QUERY_MIN_LENGTH } from '../contracts/api.js'
 import {
   ApiError,
   addWorkspaceMember,
@@ -110,6 +111,13 @@ function CreateWorkspace({ me, onCreated }: { readonly me: MeResponse; readonly 
   )
 }
 
+/**
+ * Aufnahme eines Mitglieds ueber eine gezielte Suche.
+ *
+ * Bewusst keine Auswahlliste aller Nutzer: das interne Verzeichnis ist keine Auskunft fuer jeden
+ * Angemeldeten. Gesucht wird nach der Adresse oder dem vollstaendigen Anzeigenamen, und der Server liefert
+ * nur genaue Treffer. Ohne Suche bleibt die Ansicht leer.
+ */
 function AddMember({
   me,
   workspace,
@@ -121,100 +129,145 @@ function AddMember({
   readonly canAssignOwner: boolean
   readonly onAdded: () => void
 }) {
-  const [candidates, setCandidates] = useState<readonly DirectoryUserView[] | null>(null)
+  const [query, setQuery] = useState('')
+  const [search, setSearch] = useState<
+    | { readonly kind: 'idle' }
+    | { readonly kind: 'searching' }
+    | { readonly kind: 'found'; readonly users: readonly DirectoryUserView[] }
+    | { readonly kind: 'failed'; readonly message: string }
+  >({ kind: 'idle' })
   const [userId, setUserId] = useState('')
   const [role, setRole] = useState<WorkspaceRoleView>('member')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  const load = useCallback(() => {
-    fetchMemberCandidates(workspace.id)
+  const term = query.trim()
+  const searchable = term.length >= WORKSPACE_MEMBER_QUERY_MIN_LENGTH
+
+  function runSearch(): void {
+    setError(null)
+    setUserId('')
+    setSearch({ kind: 'searching' })
+    fetchMemberCandidates(workspace.id, term)
       .then((response) => {
-        setCandidates(response.users)
+        setSearch({ kind: 'found', users: response.users })
         setUserId(response.users[0]?.id ?? '')
       })
       .catch((cause: unknown) => {
-        setCandidates([])
-        setError(messageOf(cause, 'Die Nutzerliste konnte nicht geladen werden.'))
+        setSearch({ kind: 'failed', message: messageOf(cause, 'Die Nutzersuche ist fehlgeschlagen.') })
       })
-  }, [workspace.id])
-
-  useEffect(load, [load])
-
-  if (candidates === null) {
-    return <p aria-live="polite">Auswaehlbare Nutzer werden geladen …</p>
-  }
-  if (candidates.length === 0) {
-    return (
-      <>
-        <p>Alle aktiven internen Nutzer gehoeren diesem Arbeitsbereich bereits an.</p>
-        {error !== null && <Notice text={error} />}
-      </>
-    )
   }
 
   const assignable = canAssignOwner ? ROLES : ROLES.filter((candidate) => candidate !== 'owner')
 
   return (
-    <form
-      className="stack"
-      onSubmit={(event) => {
-        event.preventDefault()
-        setBusy(true)
-        setError(null)
-        addWorkspaceMember(me.csrfToken, { workspaceId: workspace.id, userId, role })
-          .then(() => {
-            onAdded()
-            load()
-          })
-          .catch((cause: unknown) => {
-            setError(messageOf(cause, 'Das Mitglied konnte nicht hinzugefuegt werden.'))
-          })
-          .finally(() => {
-            setBusy(false)
-          })
-      }}
-    >
-      <div className="field">
-        <label htmlFor="member-user">Nutzer</label>
-        <select
-          id="member-user"
-          value={userId}
-          onChange={(event) => {
-            setUserId(event.target.value)
-          }}
-        >
-          {candidates.map((user) => (
-            <option key={user.id} value={user.id}>
-              {user.displayName}
-              {user.email === null ? '' : ` (${user.email})`}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div className="field">
-        <label htmlFor="member-role">Rolle</label>
-        <select
-          id="member-role"
-          value={role}
-          onChange={(event) => {
-            setRole(event.target.value as WorkspaceRoleView)
-          }}
-        >
-          {assignable.map((candidate) => (
-            <option key={candidate} value={candidate}>
-              {ROLE_LABELS[candidate]}
-            </option>
-          ))}
-        </select>
-      </div>
-      <p>
-        <button type="submit" disabled={busy || userId === ''}>
-          Mitglied hinzufuegen
-        </button>
+    <>
+      <form
+        className="stack"
+        onSubmit={(event) => {
+          event.preventDefault()
+          runSearch()
+        }}
+      >
+        <div className="field">
+          <label htmlFor="member-search">Nutzer suchen (E-Mail-Adresse oder vollstaendiger Anzeigename)</label>
+          <input
+            id="member-search"
+            type="search"
+            aria-describedby="member-search-hint"
+            value={query}
+            maxLength={320}
+            onChange={(event) => {
+              setQuery(event.target.value)
+            }}
+          />
+        </div>
+        <p className="hint" id="member-search-hint">
+          Mindestens {String(WORKSPACE_MEMBER_QUERY_MIN_LENGTH)} Zeichen. Es gibt bewusst keine Liste aller
+          Nutzer: angezeigt werden nur genaue Treffer, hoechstens {String(WORKSPACE_MEMBER_MAX_CANDIDATES)}.
+        </p>
+        <p>
+          <button type="submit" disabled={!searchable}>
+            Suchen
+          </button>
+        </p>
+      </form>
+
+      <p aria-live="polite">
+        {search.kind === 'searching' && 'Es wird gesucht …'}
+        {search.kind === 'found' &&
+          search.users.length === 0 &&
+          'Kein Treffer. Adresse oder Anzeigename muessen genau stimmen.'}
       </p>
-      {error !== null && <Notice text={error} />}
-    </form>
+      {search.kind === 'failed' && <Notice text={search.message} />}
+
+      {search.kind === 'found' && search.users.length > 0 && (
+        <form
+          className="stack"
+          onSubmit={(event) => {
+            event.preventDefault()
+            setBusy(true)
+            setError(null)
+            addWorkspaceMember(me.csrfToken, { workspaceId: workspace.id, userId, role })
+              .then(() => {
+                onAdded()
+                // Erneut suchen: der aufgenommene Nutzer ist jetzt Mitglied und faellt aus den Treffern.
+                runSearch()
+              })
+              .catch((cause: unknown) => {
+                setError(messageOf(cause, 'Das Mitglied konnte nicht hinzugefuegt werden.'))
+              })
+              .finally(() => {
+                setBusy(false)
+              })
+          }}
+        >
+          <fieldset>
+            <legend>Treffer</legend>
+            {search.users.map((user) => (
+              <p key={user.id}>
+                <input
+                  type="radio"
+                  id={`member-candidate-${user.id}`}
+                  name="member-candidate"
+                  value={user.id}
+                  checked={userId === user.id}
+                  onChange={() => {
+                    setUserId(user.id)
+                  }}
+                />{' '}
+                <label htmlFor={`member-candidate-${user.id}`}>
+                  {user.displayName}
+                  {user.email === null ? '' : ` (${user.email})`}
+                </label>
+              </p>
+            ))}
+          </fieldset>
+          <div className="field">
+            <label htmlFor="member-role">Rolle</label>
+            <select
+              id="member-role"
+              value={role}
+              onChange={(event) => {
+                setRole(event.target.value as WorkspaceRoleView)
+              }}
+            >
+              {assignable.map((candidate) => (
+                <option key={candidate} value={candidate}>
+                  {ROLE_LABELS[candidate]}
+                </option>
+              ))}
+            </select>
+          </div>
+          <p>
+            <button type="submit" disabled={busy || userId === ''}>
+              Mitglied hinzufuegen
+            </button>
+          </p>
+          {error !== null && <Notice text={error} />}
+        </form>
+      )}
+    </>
   )
 }
 

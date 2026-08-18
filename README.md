@@ -121,6 +121,16 @@ haengt an der Mitgliedschaft, nicht an dieser Stufe.
   herabgestuft werden.
 - Jede Aenderung sperrt zuerst die Workspacezeile (`select ... for update`). Dadurch sind gleichzeitige
   Mitgliedschaftsaenderungen serialisiert, und die Ownerzaehlung entscheidet nie auf einem veralteten Stand.
+- Die Antwort entsteht in der Transaktion und wird erst nach dem Commit gesendet. Scheitert der Commit,
+  bekommt der Client einen Fehler statt einer Erfolgsmeldung ueber eine zurueckgerollte Aenderung.
+
+### Bekannte Grenzen
+
+- `workspace_memberships.user_id` traegt `on delete cascade`: ein direktes Loeschen eines Nutzers in der
+  Datenbank kann einen Arbeitsbereich ownerlos machen. Ueber die Anwendung gibt es kein Loeschen, nur
+  Deaktivierung; die Ownerinvariante gilt in der Anwendungsschicht.
+- `audit_events.workspace_id` traegt `on delete cascade`: ein direktes Loeschen eines Arbeitsbereichs in der
+  Datenbank entfernt seine Nachweise. Ueber die Anwendung gibt es kein Loeschen, nur Archivierung.
 
 ### Endpunkte
 
@@ -133,7 +143,7 @@ Alle verlangen eine Sitzung; alle zustandsaendernden zusaetzlich das CSRF-Token 
 | POST | `/api/workspaces/rename` | `workspace:rename` | 404 unsichtbar, sonst 403 |
 | POST | `/api/workspaces/status` | `workspace:archive` / `workspace:unarchive` | 404 unsichtbar, sonst 403 |
 | GET | `/api/workspaces/members?workspaceId=` | `workspace:read` | 404 |
-| GET | `/api/workspaces/members/candidates?workspaceId=` | `member:add` | 404 unsichtbar, sonst 403 |
+| GET | `/api/workspaces/members/candidates?workspaceId=&q=` | `member:add` | 404 unsichtbar, sonst 403 |
 | POST | `/api/workspaces/members/add` | `member:add` | 404 unsichtbar, sonst 403 |
 | POST | `/api/workspaces/members/role` | `member:change-role` | 404 unsichtbar, sonst 403 |
 | POST | `/api/workspaces/members/remove` | `member:remove` | 404 unsichtbar, sonst 403 |
@@ -145,6 +155,14 @@ Mitgliedschaft ergeben 409.
 
 Mitglieder werden aus den vorhandenen internen Nutzern ausgewaehlt. Es gibt keine Einladung per E-Mail und
 keine externen Konten.
+
+**Das interne Nutzerverzeichnis ist keine Auskunft fuer jeden Angemeldeten.** Einen eigenen Arbeitsbereich
+legt jeder aktive Nutzer voraussetzungslos an; eine Vollliste hinter `member:add` waere damit fuer jeden
+erreichbar. Deshalb gibt es nur eine gezielte Suche: der Suchbegriff ist Pflicht (mindestens drei Zeichen)
+und muss die Adresse oder den Anzeigenamen **vollstaendig** treffen (Gross- und Kleinschreibung egal,
+Praefixe und Platzhalter nicht). Es werden hoechstens fuenf Treffer geliefert, bestehende Mitglieder und
+deaktivierte Nutzer nie. Die Adresse steht nur dann im Treffer, wenn genau nach ihr gesucht wurde - wer
+ueber den Anzeigenamen gefunden wird, gibt sie nicht preis.
 
 ### Nachweis
 

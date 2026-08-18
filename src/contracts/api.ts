@@ -27,6 +27,19 @@ export const WORKSPACE_MEMBER_CANDIDATES_PATH = `${API_BASE_PATH}/workspaces/mem
 export const WORKSPACE_ID_PARAM = 'workspaceId'
 
 /**
+ * Suchbegriff der Nutzersuche fuer die Aufnahme. Ohne ihn gibt es keine Treffer: das interne Verzeichnis
+ * ist keine Auskunft fuer jeden Angemeldeten, sondern nur eine Bestaetigung fuer den, der den Gesuchten
+ * bereits kennt.
+ */
+export const WORKSPACE_MEMBER_QUERY_PARAM = 'q'
+
+/** Kuerzere Eingaben werden abgewiesen, statt zu suchen. */
+export const WORKSPACE_MEMBER_QUERY_MIN_LENGTH = 3
+
+/** Hoechstzahl der Treffer. Auch mehrdeutige Namen ergeben nie eine Liste, sondern eine Handvoll Zeilen. */
+export const WORKSPACE_MEMBER_MAX_CANDIDATES = 5
+
+/**
  * Header des CSRF-Tokens. Ein Angreifer von einer fremden Herkunft kann ihn nicht setzen, ohne dass der
  * Browser vorher einen Preflight gegen diese Instanz stellt.
  */
@@ -119,7 +132,12 @@ export type WorkspaceMemberView = {
   readonly joinedAt: string
 }
 
-/** Minimalprofil fuer die Mitgliederauswahl: nur, was die Auswahl braucht. */
+/**
+ * Treffer der Nutzersuche: nur, was die Aufnahme braucht.
+ *
+ * `email` ist ausschliesslich dann gesetzt, wenn genau nach dieser Adresse gesucht wurde - dann kennt der
+ * Suchende sie ohnehin schon. Ein ueber den Anzeigenamen gefundener Nutzer gibt seine Adresse nicht preis.
+ */
 export type DirectoryUserView = {
   readonly id: string
   readonly displayName: string
