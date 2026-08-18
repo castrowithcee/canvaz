@@ -8,7 +8,7 @@
  */
 
 import { expect, test } from '@playwright/test'
-import type { Page } from '@playwright/test'
+import type { Page, WebSocketRoute } from '@playwright/test'
 import { Pool } from 'pg'
 
 import { E2E_DATABASE_URL, E2E_PROVIDER_URL } from '../../playwright.config.js'
@@ -131,6 +131,59 @@ test('zwei Browser sehen Zeichnung und Presence des jeweils anderen', async ({ p
   await expect(mitglied.getByText(/^Gespeichert um /)).toBeVisible()
 
   await zweiterKontext.close()
+})
+
+test('ein Verbindungsverlust ist sichtbar und der Stand wird nach der Wiederaufnahme abgeglichen', async ({
+  page,
+}) => {
+  // Die Realtime-Strecke laeuft ueber das Routing des Testtreibers, damit sie sich von aussen kappen laesst.
+  // Weitergeleitet wird unveraendert; die Anwendung merkt davon nichts und bekommt keinen Testhaken.
+  const verbindungen: WebSocketRoute[] = []
+  await page.routeWebSocket(/\/api\/realtime/, (ws) => {
+    ws.connectToServer()
+    verbindungen.push(ws)
+  })
+
+  await page.goto('/')
+  await signIn(page, 'e2e-owner')
+
+  await page.getByLabel('Name des neuen Arbeitsbereichs').fill('Team Abriss')
+  await page.getByRole('button', { name: 'Arbeitsbereich anlegen' }).click()
+  await page.getByRole('button', { name: 'Team Abriss verwalten' }).click()
+  await page.getByLabel('Titel des neuen Boards').fill('Wiederaufnahme')
+  await page.getByRole('button', { name: 'Board anlegen' }).click()
+  await page.getByRole('button', { name: 'Wiederaufnahme oeffnen' }).click()
+  await expect(page.getByRole('heading', { name: 'Wiederaufnahme' })).toBeVisible()
+  await expect(page.getByText('Live verbunden.')).toBeVisible()
+
+  await drawRectangle(page)
+  await expect(page.getByText(/^Gespeichert um /)).toBeVisible()
+
+  // Abbruch auf der Uebertragungsstrecke selbst, ohne Eingriff in den Anwendungscode: die geroutete
+  // Verbindung wird von aussen geschlossen, genau wie es ein Netzausfall oder ein Neustart taete.
+  await verbindungen.at(-1)?.close()
+  // Der laufende Wiederverbindungsversuch ist fuer den Menschen erkennbar und wird als Statusbereich auch
+  // von einer Sprachausgabe gemeldet.
+  await expect(page.getByText(/Verbindung verloren\. Wiederverbindung laeuft/)).toBeVisible()
+
+  // Waehrend der Trennung entsteht lokal eine weitere Zeichnung.
+  await drawRectangle(page, 200)
+
+  // Der erfolgreiche Abgleich ist ebenso sichtbar ...
+  await expect(page.getByText(/Stand nach Wiederaufnahme um .* abgeglichen/)).toBeVisible({ timeout: 30_000 })
+  // ... und was waehrend der Trennung entstand, ist danach persistiert: der Client schickt seine eigenen
+  // Elemente nach dem Wiederbeitritt erneut, statt sich auf verpasste Teilstuecke zu verlassen.
+  await expect
+    .poll(
+      async () => {
+        const rows = await pool.query<{ anzahl: number }>(
+          "select jsonb_array_length(scene -> 'elements') as anzahl from scene_versions order by version desc limit 1",
+        )
+        return rows.rows[0]?.anzahl ?? 0
+      },
+      { timeout: 30_000 },
+    )
+    .toBeGreaterThanOrEqual(2)
 })
 
 test('ein Teilnehmer ohne Schreibrecht empfaengt weiter, kann aber nicht mehr schreiben', async ({ page, browser }) => {

@@ -567,6 +567,91 @@ die naechste Version geschrieben - je Element entscheidet die Version, nicht der
 Wird der Checkpoint abgelehnt (etwa weil das Board inzwischen archiviert ist), bleibt der Raum unpersistiert
 statt an der Policy vorbei zu schreiben.
 
+### Wiederaufnahme nach einem Abbruch
+
+Bricht die Verbindung ab, baut der Browser sie selbst wieder auf: **exponentiell wachsender Abstand ab
+500 ms bis 15 s, zur Haelfte gewuerfelt**. Die Streuung ist kein Beiwerk - ohne sie traefen nach einem
+Serverneustart alle Browser im selben Augenblick wieder ein.
+
+Der Abgleich laeuft in genau zwei Schritten und braucht kein Nachfordern verpasster Teilstuecke:
+
+1. Der Server liefert beim Wiederbeitritt den **vollstaendigen** Raumzustand (`joined`).
+2. Der Client schickt danach **seine eigenen Elemente erneut**. Was waehrend der Trennung lokal entstanden
+   ist, kennt nur er.
+
+Beide Richtungen laufen durch dieselbe Reconciliation. Ein aelterer Stand kann deshalb keinen neueren
+verdraengen, egal in welcher Reihenfolge er eintrifft - eine verspaetete Nachricht nach dem Reconnect
+aendert nichts und loest auch keinen Fanout aus. Ausgehende Nachrichten werden auf 200 Elemente aufgeteilt,
+damit der Nachsendeschub nie die Rahmengrenze reisst.
+
+Faellt der Abbruch genau in einen laufenden Abschluss-Checkpoint, wartet der Wiederbeitritt auf dessen
+Ende, statt den Raum neben ihm aus einem aelteren Stand zu laden.
+
+Nach vier Schliessgruenden versucht es der Browser **nicht** erneut, weil sich daran nichts aendern wuerde:
+`4401` (Sitzung ungueltig), `4403` (Boardzugriff entzogen), `4429` (zu viele Verbindungen oder Nachrichten)
+und `1009` (Rahmen zu gross).
+
+### Herzschlag
+
+Alle **30 Sekunden** geht ein Ping an jede Verbindung; wer eine Runde nicht antwortet, wird beim naechsten
+Takt hart beendet. Damit ist ein halb offener Socket - Kabel gezogen, Laptop zugeklappt, Proxy ohne FIN -
+spaetestens nach einer Minute weg, statt Raumplatz und einen Presence-Eintrag als Karteileiche zu halten.
+Der Abstand orientiert sich an den ueblichen 60 Sekunden Leerlaufgrenze eines Reverse Proxys.
+
+### Grenzen an der Socketgrenze
+
+Alle Werte sind Implementierungsgrenzen mit Reserve gegenueber dem Lastziel und sind konfigurierbar
+(`createRealtimeGateway`, `createBoardRooms`; die Raumgroesse folgt `CANVAZ_MAX_SCENE_BYTES`). Keine davon
+fuehrt zu einem unbenannten Fehler, und keine hinterlaesst einen Raum, der nicht weiterarbeitet.
+
+| Grenze | Standard | Bei Ueberschreitung | Warum dieser Wert |
+| --- | --- | --- | --- |
+| Rahmengroesse (`maxPayload`) | `CANVAZ_MAX_SCENE_BYTES`, 5 MiB | `ws` verwirft den Rahmen und schliesst mit `1009` | Mehr kann auch ein gespeicherter Snapshot nie tragen |
+| Elemente je Nachricht | 2 000 | `zu-viele-elemente`, **nichts** uebernommen | Weit ueber jeder laufenden Aenderung; gekappt waere stiller Datenverlust |
+| Nachrichten je Verbindung | 120/s, Eimer 240 | `zu-viele-nachrichten`; bei Dauerflut Schliessen mit `4429` | Der Browser buendelt auf hoechstens 40/s - dreifache Reserve, zwei Sekunden Nachholschub |
+| Akkumulierter Raumzustand | `CANVAZ_MAX_SCENE_BYTES`, 5 MiB | `raum-zu-gross`, Aenderung verworfen, Raum bleibt benutzbar | Der Raum haelt genau das, was ein Checkpoint schreibt und die HTTP-Speicherung wieder annehmen muss |
+| Teilnehmer je Raum | 10 | `raum-voll` beim Beitritt, Anwesende unberuehrt | Der Reservewert des Produktvertrags |
+| Verbindungen je Nutzer | 5 | `zu-viele-verbindungen` und Schliessen mit `4429` | Fuenf Tabs sind grosszuegig; ein Konto darf die zehn Verbindungen nicht allein belegen |
+
+Geprueft wird die **projizierte** Groesse, nicht die aktuelle: eine Aenderung, die den Raum kleiner macht
+oder gleich gross laesst, kommt auch an der Grenze noch durch. Ein volles Board bleibt damit vollstaendig
+bedienbar - nur weiteres Wachstum wird benannt abgelehnt.
+
+### Backpressure
+
+Jede ausgehende Nachricht laeuft ueber genau eine Stelle (`deliver`), und genau dort steht die Leiter vom
+harmlosen zum harten Mittel. Die Reihenfolge folgt dem, was ein spaeterer Stand von selbst nachliefert:
+
+1. **Ab 64 KiB Rueckstau: Presence verwerfen.** Ein Teilnehmerfeld ist fluechtig und wird vom naechsten
+   vollstaendig ersetzt. Das Verwerfen kostet nichts.
+2. **Ab 1 MiB: auch Aenderungen verwerfen** - aber die Verbindung wird als abgleichbeduerftig vermerkt und
+   bekommt, sobald ihr Puffer abgeflossen ist, einen **vollstaendigen** `snapshot` statt der verpassten
+   Teilstuecke. Kein stiller Verlust. Ein Megabyte ist der Punkt, an dem einzelne Teilstuecke nicht mehr
+   billiger sind als ein frischer Gesamtstand.
+3. **Ab 4 MiB: trennen** (`4408`). Wer einen szenengrossen Puffer nicht abnimmt, liest nicht mehr; dann ist
+   ein neuer Aufbau mit Rueckzugstakt billiger als weiter zu puffern. Der Schliessgrund ist ausdruecklich
+   kein Endzustand - der Browser verbindet sich neu und gleicht ab.
+
+Nie verworfen werden `joined`, `snapshot`, `saved`, `access`, `left` und `error`: sie sind klein und tragen
+Bedeutung, die kein spaeterer Stand nachliefert. Eine Verbindung, die dauerhaft gar nichts mehr abnimmt,
+faellt ohnehin dem Herzschlag zum Opfer.
+
+### Gemessen
+
+`tests/integration/realtime-load.test.ts` misst gegen die Zielwerte des Produktvertrags, mit den
+**Standardtakten** und nicht mit verkuerzten Testwerten:
+
+| Messung | Aufbau | Ergebnis | Schwelle im Test |
+| --- | --- | --- | --- |
+| Zustellzeit einer Aenderung an **alle** neun Gegenstellen | 5 Bearbeiter, 10 Verbindungen, 100 Aenderungen im 50-ms-Takt | p50 8,3 ms, p95 9,7 ms, Spitze 22,0 ms | p95 < 150 ms, Spitze < 500 ms |
+| Checkpoint-Takt unter Dauerlast | 5 Bearbeiter, 575 Aenderungen in 11,5 s | 1 Checkpoint waehrend der Last, 1 weiterer nach der Ruhezeit | Obergrenze gegriffen, weniger als ein Zehntel der Aenderungen als Versionen |
+| Ressourcenverhalten | dieselbe Last | Raum haelt 5 Elemente statt 100 Nachrichten, `scene_versions` bleibt unter der Aufbewahrungsgrenze, Raumzahl faellt auf 0 | fest zugesichert |
+
+Die Schwellen sind Obergrenzen mit Reserve, keine Bestwerte: der Bezugspunkt ist die Wahrnehmung. Eine
+gemeinsame Zeichenflaeche fuehlt sich gleichzeitig an, solange eine fremde Aenderung innerhalb von etwa
+hundert Millisekunden erscheint; 150 ms fuer das 95. Perzentil lassen darueber hinaus Reserve fuer eine
+belastete Maschine, ohne einen echten Einbruch durchzulassen.
+
 ### Im Editor
 
 Der Editor zeigt Verbindungsstatus, Speicherstatus und die Mitbearbeiter namentlich. Es gibt immer genau
@@ -574,6 +659,16 @@ einen Weg, wie eine Zeichnung sicher wird:
 
 - **Live verbunden**: der Raum verteilt und persistiert; der Speicherstatus kommt vom Server (`saved`).
 - **Nicht verbunden**: die verzoegerte Speicherung ueber die HTTP-API uebernimmt wieder.
+
+Ein **laufender kurzer Wiederverbindungsversuch** ist bewusst keiner der beiden Faelle: solange er laeuft,
+speichert die Ansicht nicht selbst. Eine Speicherung gegen die Checkpoints des Raums erzeugte sonst einen
+Konflikt, den es fachlich gar nicht gibt. Erst nach fuenf Sekunden ohne Strecke uebernimmt die
+HTTP-Speicherung wieder.
+
+Sichtbar und als `role="status"` beziehungsweise `role="alert"` auch fuer eine Sprachausgabe hoerbar sind:
+der Verbindungsverlust, der laufende Versuch mit seiner Nummer, der erfolgreiche Abgleich nach der
+Wiederaufnahme mit Uhrzeit, jede benannt abgelehnte Nachricht (mit einer Schaltflaeche zum Ausblenden) und
+jedes Speicherproblem.
 
 Ein Verbindungsverlust ist damit sichtbar und fuehrt nicht zu stillem Datenverlust. Die
 Content-Security-Policy wurde dafuer **nicht** gelockert: `connect-src` faellt auf `default-src 'self'`
@@ -583,11 +678,13 @@ zurueck, und `'self'` deckt die gleichnamige WebSocket-Herkunft ab. Der Browsert
 
 - **Genau eine Instanz.** Raeume leben im Prozessspeicher; zwei Anwendungsserver haetten zwei getrennte
   Raeume fuer dasselbe Board. Horizontale Skalierung braucht eine eigene Entscheidung.
-- **Kein Reconnect.** Bricht die Verbindung ab, verbindet sich der Browser nicht von selbst neu; er meldet
-  den Zustand und speichert weiter ueber die HTTP-API. Reconnect, Resync-Protokoll, Heartbeat,
-  Nachrichtenlimits und Backpressure sind ein eigenes Paket. Die Nahtstellen dafuer stehen bereits:
-  `resync`/`snapshot`, die Groessengrenze am WebSocket-Server (`maxPayload = CANVAZ_MAX_SCENE_BYTES`) und die
-  eine Stelle, ueber die jede ausgehende Nachricht laeuft.
+- **Kein garantierter Offlinemodus.** Der Browser haelt waehrend einer Trennung seinen lokalen Stand und
+  schickt ihn nach der Wiederaufnahme erneut; wer den Tab dabei schliesst, verliert die Zeichnung, sofern
+  die HTTP-Speicherung sie nicht bereits uebernommen hat. Ein Zwischenspeicher im Browser ist bewusst nicht
+  gebaut.
+- **Volles Board bleibt voll.** Ist die Obergrenze des Raumzustands erreicht, wird Wachstum benannt
+  abgelehnt. Loeschen hilft nur begrenzt, weil ein Tombstone ungefaehr so gross ist wie das Element selbst.
+  Verdichtete Tombstones waeren der Ausbauweg, wenn das im Betrieb je auftritt.
 - **Keine Boardrollen.** In diesem Paket entscheidet die Workspace-Mitgliedschaft; einen Teilnehmer, der
   lesen aber nicht schreiben darf, gibt es nur ueber Archivierung. Echte Viewer und Gaeste kommen mit den
   Boardrollen.

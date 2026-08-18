@@ -9,30 +9,30 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import type { Pool } from 'pg'
-import { WebSocket } from 'ws'
 
 import {
   ADMIN_USER_STATUS_PATH,
   BOARD_SCENE_PATH,
   BOARD_STATUS_PATH,
-  BOARDS_PATH,
-  CSRF_HEADER,
-  ME_PATH,
-  REALTIME_PATH,
-  WORKSPACE_MEMBER_ADD_PATH,
   WORKSPACE_MEMBER_REMOVE_PATH,
   WORKSPACE_STATUS_PATH,
-  WORKSPACES_PATH,
 } from '../../src/contracts/api.js'
-import type { BoardView, MeResponse, WorkspaceView } from '../../src/contracts/api.js'
-import type { ServerMessage } from '../../src/contracts/realtime.js'
 import { BOARD_ACCESS_REVOKED_CLOSE_CODE, REALTIME_PROTOCOL_VERSION } from '../../src/contracts/realtime.js'
-import type { SceneSnapshot, SyncElement } from '../../src/contracts/scene.js'
+import type { SceneSnapshot } from '../../src/contracts/scene.js'
 import { migrate } from '../../src/persistence/migrate.js'
 import { createPool } from '../../src/persistence/pool.js'
-import { createJar } from '../support/browser-client.js'
-import type { Jar } from '../support/browser-client.js'
-import { login } from '../support/login-flow.js'
+import {
+  createBoard,
+  post,
+  signedInAs,
+  storedScene,
+  storedVersions,
+  teamMitBoard,
+  warteAufVersion,
+} from '../support/board-fixture.js'
+import type { Account } from '../support/board-fixture.js'
+import { change, element, ids, openRealtime, ruhe } from '../support/realtime-socket.js'
+import type { RealtimeTestClient } from '../support/realtime-socket.js'
 import { startTestProvider } from '../support/oidc-provider.js'
 import type { TestProvider } from '../support/oidc-provider.js'
 import { startTestApp } from '../support/test-app.js'
@@ -43,9 +43,6 @@ const DATABASE_URL =
 
 /** Eine erfundene, gueltig geformte Kennung. Sie darf sich von einer fremden nicht unterscheiden lassen. */
 const FREMDE_KENNUNG = '00000000-0000-4000-8000-000000000000'
-
-/** So lange wartet ein Test, bevor er behauptet, dass **nichts** angekommen ist. */
-const RUHE_MS = 200
 
 let pool: Pool
 let provider: TestProvider
@@ -79,173 +76,13 @@ afterAll(async () => {
 /* Testhilfen                                                                                            */
 /* ---------------------------------------------------------------------------------------------------- */
 
-type Account = { readonly jar: Jar; readonly profile: MeResponse }
-
-async function signedInAs(subject: string): Promise<Account> {
-  const jar = createJar()
-  expect((await login(app, jar, { subject })).error).toBeNull()
-  const response = await jar.fetch(`${app.baseUrl}${ME_PATH}`)
-  expect(response.status).toBe(200)
-  return { jar, profile: (await response.json()) as MeResponse }
-}
-
-function post(account: Account, path: string, body: unknown): Promise<Response> {
-  return account.jar.fetch(`${app.baseUrl}${path}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', [CSRF_HEADER]: account.profile.csrfToken },
-    body: JSON.stringify(body),
-  })
-}
-
-async function createWorkspace(account: Account, name: string): Promise<WorkspaceView> {
-  const response = await post(account, WORKSPACES_PATH, { name })
-  expect(response.status).toBe(201)
-  return (await response.json()) as WorkspaceView
-}
-
-async function createBoard(account: Account, workspaceId: string, title: string): Promise<BoardView> {
-  const response = await post(account, BOARDS_PATH, { workspaceId, title })
-  expect(response.status).toBe(201)
-  return (await response.json()) as BoardView
-}
-
-function ruhe(ms = RUHE_MS): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-type Client = {
-  readonly socket: WebSocket
-  /** Alles, was je angekommen ist. Auch die bereits abgeholten Nachrichten bleiben stehen. */
-  readonly log: readonly ServerMessage[]
-  send(message: unknown): void
-  /** Rohtext statt Vertrag - nur die Negativtests brauchen das. */
-  sendRaw(raw: string): void
-  /** Naechste noch nicht abgeholte Nachricht dieses Typs, die `passt` erfuellt. */
-  next<T extends ServerMessage['type']>(
-    type: T,
-    passt?: (message: Extract<ServerMessage, { type: T }>) => boolean,
-  ): Promise<Extract<ServerMessage, { type: T }>>
-  readonly closeCode: Promise<number>
-  close(): void
-}
-
-const clients: Client[] = []
+const clients: RealtimeTestClient[] = []
 
 /** Verbindet wie ein Browser: dasselbe Cookie, dieselbe Herkunft, kein Sonderweg. */
-async function connect(account: Account): Promise<Client> {
-  const socket = new WebSocket(`${app.baseUrl.replace('http:', 'ws:')}${REALTIME_PATH}`, {
-    headers: { cookie: account.jar.cookieHeader(), origin: app.baseUrl },
-  })
-  const log: ServerMessage[] = []
-  const taken = new Set<number>()
-  type Waiter = {
-    readonly type: string
-    readonly passt: (message: ServerMessage) => boolean
-    readonly resolve: (message: ServerMessage) => void
-  }
-  const waiters: Waiter[] = []
-
-  socket.on('message', (data: Buffer) => {
-    const message = JSON.parse(data.toString('utf8')) as ServerMessage
-    const index = log.length
-    log.push(message)
-    const waiting = waiters.findIndex((waiter) => waiter.type === message.type && waiter.passt(message))
-    if (waiting >= 0) {
-      taken.add(index)
-      waiters.splice(waiting, 1)[0]?.resolve(message)
-    }
-  })
-
-  const closeCode = new Promise<number>((resolve) => {
-    socket.once('close', resolve)
-  })
-  await new Promise<void>((resolve, reject) => {
-    socket.once('open', resolve)
-    socket.once('error', reject)
-  })
-
-  const client: Client = {
-    socket,
-    log,
-    send(message: unknown): void {
-      socket.send(JSON.stringify(message))
-    },
-    sendRaw(raw: string): void {
-      socket.send(raw)
-    },
-    next<T extends ServerMessage['type']>(
-      type: T,
-      passt: (message: Extract<ServerMessage, { type: T }>) => boolean = () => true,
-    ): Promise<Extract<ServerMessage, { type: T }>> {
-      const trifft = (message: ServerMessage): boolean =>
-        message.type === type && passt(message as Extract<ServerMessage, { type: T }>)
-      const index = log.findIndex((message, position) => !taken.has(position) && trifft(message))
-      if (index >= 0) {
-        taken.add(index)
-        return Promise.resolve(log[index] as Extract<ServerMessage, { type: T }>)
-      }
-      return new Promise((resolve) => {
-        waiters.push({ type, passt: trifft, resolve: resolve as (message: ServerMessage) => void })
-      })
-    },
-    closeCode,
-    close(): void {
-      socket.close()
-    },
-  }
+async function connect(account: Account): Promise<RealtimeTestClient> {
+  const client = await openRealtime(app.baseUrl, account.jar.cookieHeader())
   clients.push(client)
-  await client.next('ready')
   return client
-}
-
-async function join(client: Client, boardId: string) {
-  client.send({ type: 'join', protocolVersion: REALTIME_PROTOCOL_VERSION, boardId })
-  return client.next('joined')
-}
-
-function change(boardId: string, elements: readonly SyncElement[], fileIds: readonly string[] = []): unknown {
-  return { type: 'scene-change', boardId, elements, appState: null, fileIds }
-}
-
-/** Ein Element mit frei waehlbarer Version und Nonce; die Reconciliation entscheidet ueber genau diese. */
-function element(id: string, version: number, versionNonce: number, extra: Record<string, unknown> = {}): SyncElement {
-  return { id, version, versionNonce, type: 'rectangle', x: 10, y: 20, width: 30, height: 40, ...extra }
-}
-
-function ids(elements: readonly SyncElement[]): string[] {
-  return elements.map((entry) => entry.id)
-}
-
-async function storedScene(boardId: string): Promise<{ readonly version: number; readonly scene: SceneSnapshot }> {
-  const rows = await pool.query<{ version: number; scene: SceneSnapshot }>(
-    'select version, scene from scene_versions where board_id = $1 order by version desc limit 1',
-    [boardId],
-  )
-  const row = rows.rows[0]
-  if (row === undefined) {
-    throw new Error('Zu diesem Board wurde noch nichts gespeichert')
-  }
-  return { version: row.version, scene: row.scene }
-}
-
-async function storedVersions(boardId: string): Promise<number> {
-  const rows = await pool.query<{ count: string }>('select count(*) from scene_versions where board_id = $1', [boardId])
-  return Number(rows.rows[0]?.count ?? '0')
-}
-
-/** Wartet, bis ein Checkpoint die erwartete Version geschrieben hat. */
-async function warteAufVersion(boardId: string, version: number): Promise<void> {
-  for (let versuch = 0; versuch < 100; versuch += 1) {
-    const rows = await pool.query<{ current_scene_version: number }>(
-      'select current_scene_version from boards where id = $1',
-      [boardId],
-    )
-    if ((rows.rows[0]?.current_scene_version ?? 0) >= version) {
-      return
-    }
-    await ruhe(20)
-  }
-  throw new Error(`Version ${String(version)} wurde nicht persistiert`)
 }
 
 beforeEach(async () => {
@@ -270,30 +107,16 @@ afterEach(async () => {
   await ruhe(100)
 })
 
-/** Standardaufbau: Ada besitzt den Arbeitsbereich, Bob ist Mitglied, ein Board ist angelegt. */
-async function teamMitBoard() {
-  const ada = await signedInAs('ada')
-  const bob = await signedInAs('bob')
-  const workspace = await createWorkspace(ada, 'Team Nord')
-  expect((await post(ada, WORKSPACE_MEMBER_ADD_PATH, {
-    workspaceId: workspace.id,
-    userId: bob.profile.user.id,
-    role: 'member',
-  })).status).toBe(201)
-  const board = await createBoard(ada, workspace.id, 'Skizze')
-  return { ada, bob, workspace, board }
-}
-
 /* ---------------------------------------------------------------------------------------------------- */
 /* Beitritt                                                                                              */
 /* ---------------------------------------------------------------------------------------------------- */
 
 describe('Autorisierter Raumbeitritt', () => {
   it('laesst ein Mitglied beitreten und liefert den vollstaendigen Raumzustand', async () => {
-    const { ada, board } = await teamMitBoard()
+    const { ada, board } = await teamMitBoard(app)
     const client = await connect(ada)
 
-    const joined = await join(client, board.id)
+    const joined = await client.join(board.id)
 
     expect(joined.boardId).toBe(board.id)
     expect(joined.canWrite).toBe(true)
@@ -304,8 +127,8 @@ describe('Autorisierter Raumbeitritt', () => {
   })
 
   it('verraet einem Nichtmitglied nicht, ob das Board existiert', async () => {
-    const { board } = await teamMitBoard()
-    const mallory = await signedInAs('mallory')
+    const { board } = await teamMitBoard(app)
+    const mallory = await signedInAs(app, 'mallory')
     const client = await connect(mallory)
 
     client.send({ type: 'join', protocolVersion: REALTIME_PROTOCOL_VERSION, boardId: board.id })
@@ -319,20 +142,20 @@ describe('Autorisierter Raumbeitritt', () => {
   })
 
   it('laesst bei einem archivierten Board lesen, aber nicht schreiben', async () => {
-    const { ada, board } = await teamMitBoard()
-    expect((await post(ada, BOARD_STATUS_PATH, { boardId: board.id, status: 'archived' })).status).toBe(200)
+    const { ada, board } = await teamMitBoard(app)
+    expect((await post(app, ada, BOARD_STATUS_PATH, { boardId: board.id, status: 'archived' })).status).toBe(200)
     const client = await connect(ada)
 
-    const joined = await join(client, board.id)
+    const joined = await client.join(board.id)
 
     expect(joined.canWrite).toBe(false)
     client.send(change(board.id, [element('a', 1, 5)]))
     expect((await client.next('error')).code).toBe('kein-schreibrecht')
-    expect(await storedVersions(board.id)).toBe(0)
+    expect(await storedVersions(pool, board.id)).toBe(0)
   })
 
   it('weist eine abweichende Protokollversion ab', async () => {
-    const { ada, board } = await teamMitBoard()
+    const { ada, board } = await teamMitBoard(app)
     const client = await connect(ada)
 
     client.send({ type: 'join', protocolVersion: REALTIME_PROTOCOL_VERSION + 1, boardId: board.id })
@@ -341,29 +164,29 @@ describe('Autorisierter Raumbeitritt', () => {
   })
 
   it('weist einen zweiten Beitritt derselben Verbindung ab, ohne den Raum zu wechseln', async () => {
-    const { ada, workspace, board } = await teamMitBoard()
-    const zweites = await createBoard(ada, workspace.id, 'Zweites')
+    const { ada, workspace, board } = await teamMitBoard(app)
+    const zweites = await createBoard(app, ada, workspace.id, 'Zweites')
     const client = await connect(ada)
-    await join(client, board.id)
+    await client.join(board.id)
 
     client.send({ type: 'join', protocolVersion: REALTIME_PROTOCOL_VERSION, boardId: zweites.id })
     expect((await client.next('error')).code).toBe('falscher-zustand')
 
     // Der urspruengliche Raum traegt weiter: die Aenderung wird angenommen.
     client.send(change(board.id, [element('a', 1, 5)]))
-    await warteAufVersion(board.id, 1)
+    await warteAufVersion(pool, board.id, 1)
   })
 
   it('trennt den Raum beim Verlassen und laesst danach einen neuen Beitritt zu', async () => {
-    const { ada, workspace, board } = await teamMitBoard()
-    const zweites = await createBoard(ada, workspace.id, 'Zweites')
+    const { ada, workspace, board } = await teamMitBoard(app)
+    const zweites = await createBoard(app, ada, workspace.id, 'Zweites')
     const client = await connect(ada)
-    await join(client, board.id)
+    await client.join(board.id)
 
     client.send({ type: 'leave', boardId: board.id })
     expect((await client.next('left')).boardId).toBe(board.id)
 
-    expect((await join(client, zweites.id)).boardId).toBe(zweites.id)
+    expect((await client.join(zweites.id)).boardId).toBe(zweites.id)
   })
 })
 
@@ -373,12 +196,12 @@ describe('Autorisierter Raumbeitritt', () => {
 
 describe('Rechteaenderung wirkt auf die offene Verbindung', () => {
   it('beendet die Verbindung bei einem Mitgliedschaftsentzug', async () => {
-    const { ada, bob, workspace, board } = await teamMitBoard()
+    const { ada, bob, workspace, board } = await teamMitBoard(app)
     const client = await connect(bob)
-    await join(client, board.id)
+    await client.join(board.id)
 
     expect(
-      (await post(ada, WORKSPACE_MEMBER_REMOVE_PATH, { workspaceId: workspace.id, userId: bob.profile.user.id }))
+      (await post(app, ada, WORKSPACE_MEMBER_REMOVE_PATH, { workspaceId: workspace.id, userId: bob.profile.user.id }))
         .status,
     ).toBe(200)
 
@@ -387,14 +210,14 @@ describe('Rechteaenderung wirkt auf die offene Verbindung', () => {
   })
 
   it('beendet die Verbindung bei der Deaktivierung des Nutzers', async () => {
-    const { bob, board } = await teamMitBoard()
+    const { bob, board } = await teamMitBoard(app)
     // Der erste angemeldete Nutzer ist Systemadmin; hier legt ein eigener Admin Hand an.
-    const admin = await signedInAs('ada')
+    const admin = await signedInAs(app, 'ada')
     const client = await connect(bob)
-    await join(client, board.id)
+    await client.join(board.id)
 
     expect(
-      (await post(admin, ADMIN_USER_STATUS_PATH, { userId: bob.profile.user.id, status: 'deactivated' })).status,
+      (await post(app, admin, ADMIN_USER_STATUS_PATH, { userId: bob.profile.user.id, status: 'deactivated' })).status,
     ).toBe(200)
 
     // Die Sitzungsebene schliesst bereits; auf welchem Weg, entscheidet nicht der Raum.
@@ -402,24 +225,24 @@ describe('Rechteaenderung wirkt auf die offene Verbindung', () => {
   })
 
   it('stuft eine offene Verbindung herab, sobald das Board archiviert wird', async () => {
-    const { ada, bob, board } = await teamMitBoard()
+    const { ada, bob, board } = await teamMitBoard(app)
     const client = await connect(bob)
-    expect((await join(client, board.id)).canWrite).toBe(true)
+    expect((await client.join(board.id)).canWrite).toBe(true)
 
-    expect((await post(ada, BOARD_STATUS_PATH, { boardId: board.id, status: 'archived' })).status).toBe(200)
+    expect((await post(app, ada, BOARD_STATUS_PATH, { boardId: board.id, status: 'archived' })).status).toBe(200)
 
     expect(await client.next('access')).toEqual({ type: 'access', boardId: board.id, canWrite: false })
     client.send(change(board.id, [element('a', 1, 5)]))
     expect((await client.next('error')).code).toBe('kein-schreibrecht')
-    expect(await storedVersions(board.id)).toBe(0)
+    expect(await storedVersions(pool, board.id)).toBe(0)
   })
 
   it('stuft eine offene Verbindung herab, sobald der Arbeitsbereich archiviert wird', async () => {
-    const { ada, workspace, board } = await teamMitBoard()
+    const { ada, workspace, board } = await teamMitBoard(app)
     const client = await connect(ada)
-    await join(client, board.id)
+    await client.join(board.id)
 
-    expect((await post(ada, WORKSPACE_STATUS_PATH, { workspaceId: workspace.id, status: 'archived' })).status).toBe(200)
+    expect((await post(app, ada, WORKSPACE_STATUS_PATH, { workspaceId: workspace.id, status: 'archived' })).status).toBe(200)
 
     expect((await client.next('access')).canWrite).toBe(false)
   })
@@ -431,9 +254,9 @@ describe('Rechteaenderung wirkt auf die offene Verbindung', () => {
 
 describe('Manipulierte Nachrichten', () => {
   it('weist unbekannten Typ und fehlerhafte Struktur ab, ohne die Verbindung zu verlieren', async () => {
-    const { ada, board } = await teamMitBoard()
+    const { ada, board } = await teamMitBoard(app)
     const client = await connect(ada)
-    await join(client, board.id)
+    await client.join(board.id)
 
     client.send({ type: 'board:drop', boardId: board.id })
     expect((await client.next('error')).code).toBe('unbekannter-typ')
@@ -449,26 +272,26 @@ describe('Manipulierte Nachrichten', () => {
 
     // Die Verbindung ist danach unveraendert benutzbar.
     client.send(change(board.id, [element('a', 1, 5)]))
-    await warteAufVersion(board.id, 1)
+    await warteAufVersion(pool, board.id, 1)
   })
 
   it('weist eine Aenderung vor dem Beitritt ab', async () => {
-    const { ada, board } = await teamMitBoard()
+    const { ada, board } = await teamMitBoard(app)
     const client = await connect(ada)
 
     client.send(change(board.id, [element('a', 1, 5)]))
 
     expect((await client.next('error')).code).toBe('falscher-zustand')
-    expect(await storedVersions(board.id)).toBe(0)
+    expect(await storedVersions(pool, board.id)).toBe(0)
   })
 
   it('weist einen fremden Boardbezug in einer Nachricht ab und gibt nichts weiter', async () => {
-    const { ada, bob, workspace, board } = await teamMitBoard()
-    const fremdes = await createBoard(ada, workspace.id, 'Fremdes')
+    const { ada, bob, workspace, board } = await teamMitBoard(app)
+    const fremdes = await createBoard(app, ada, workspace.id, 'Fremdes')
     const schreiber = await connect(bob)
     const zuschauer = await connect(ada)
-    await join(schreiber, board.id)
-    const zuschauerRaum = await join(zuschauer, fremdes.id)
+    await schreiber.join(board.id)
+    const zuschauerRaum = await zuschauer.join(fremdes.id)
 
     // Bob ist in "board", nennt aber "fremdes" - beides sind Boards, die er sehen darf.
     schreiber.send(change(fremdes.id, [element('a', 1, 5)]))
@@ -476,34 +299,34 @@ describe('Manipulierte Nachrichten', () => {
     expect((await schreiber.next('error')).code).toBe('board-nicht-gefunden')
     await ruhe()
     expect(zuschauer.log.filter((message) => message.type === 'scene-change')).toEqual([])
-    expect(await storedVersions(fremdes.id)).toBe(0)
-    expect(await storedVersions(board.id)).toBe(0)
+    expect(await storedVersions(pool, fremdes.id)).toBe(0)
+    expect(await storedVersions(pool, board.id)).toBe(0)
     expect(zuschauerRaum.scene.elements).toEqual([])
   })
 
   it('verwirft eine nicht speicherbare Aenderung, statt sie weiterzugeben', async () => {
-    const { ada, bob, board } = await teamMitBoard()
+    const { ada, bob, board } = await teamMitBoard(app)
     const schreiber = await connect(bob)
     const zuschauer = await connect(ada)
-    await join(schreiber, board.id)
-    await join(zuschauer, board.id)
+    await schreiber.join(board.id)
+    await zuschauer.join(board.id)
 
     schreiber.send(change(board.id, [element('a', 1, 5, { text: 'kaputt ' })]))
 
     expect((await schreiber.next('error')).code).toBe('nicht-speicherbar')
     await ruhe()
     expect(zuschauer.log.filter((message) => message.type === 'scene-change')).toEqual([])
-    expect(await storedVersions(board.id)).toBe(0)
+    expect(await storedVersions(pool, board.id)).toBe(0)
   })
 
   it('verwirft den Schreibversuch eines Teilnehmers ohne Schreibrecht vollstaendig', async () => {
-    const { ada, bob, board } = await teamMitBoard()
+    const { ada, bob, board } = await teamMitBoard(app)
     const zuschauer = await connect(bob)
     const leser = await connect(ada)
-    await join(zuschauer, board.id)
-    await join(leser, board.id)
+    await zuschauer.join(board.id)
+    await leser.join(board.id)
     // Serverseitiger Entzug des Schreibrechts: das Board wird archiviert.
-    expect((await post(ada, BOARD_STATUS_PATH, { boardId: board.id, status: 'archived' })).status).toBe(200)
+    expect((await post(app, ada, BOARD_STATUS_PATH, { boardId: board.id, status: 'archived' })).status).toBe(200)
     expect((await zuschauer.next('access')).canWrite).toBe(false)
     await leser.next('access')
 
@@ -513,7 +336,7 @@ describe('Manipulierte Nachrichten', () => {
     expect((await zuschauer.next('error')).code).toBe('kein-schreibrecht')
     await ruhe()
     expect(leser.log.filter((message) => message.type === 'scene-change')).toEqual([])
-    expect(await storedVersions(board.id)).toBe(0)
+    expect(await storedVersions(pool, board.id)).toBe(0)
     leser.send({ type: 'resync', boardId: board.id })
     expect((await leser.next('snapshot')).scene.elements).toEqual([])
   })
@@ -525,11 +348,11 @@ describe('Manipulierte Nachrichten', () => {
 
 describe('Fanout und Presence', () => {
   it('verteilt eine Aenderung an die anderen, aber nicht an den Absender', async () => {
-    const { ada, bob, board } = await teamMitBoard()
+    const { ada, bob, board } = await teamMitBoard(app)
     const schreiber = await connect(ada)
     const empfaenger = await connect(bob)
-    await join(schreiber, board.id)
-    await join(empfaenger, board.id)
+    await schreiber.join(board.id)
+    await empfaenger.join(board.id)
 
     schreiber.send(change(board.id, [element('a', 1, 5)]))
 
@@ -540,11 +363,11 @@ describe('Fanout und Presence', () => {
   })
 
   it('meldet Beitritt, Zeiger, Auswahl und Verlassen als fluechtige Presence', async () => {
-    const { ada, bob, board } = await teamMitBoard()
+    const { ada, bob, board } = await teamMitBoard(app)
     const erster = await connect(ada)
     const zweiter = await connect(bob)
-    await join(erster, board.id)
-    await join(zweiter, board.id)
+    await erster.join(board.id)
+    await zweiter.join(board.id)
 
     const nachBeitritt = await erster.next('presence', (message) => message.peers.length === 2)
     expect(nachBeitritt.peers.map((peer) => peer.displayName).sort()).toEqual(['ada', 'bob'])
@@ -569,11 +392,11 @@ describe('Fanout und Presence', () => {
   })
 
   it('buendelt viele Zeigerbewegungen zu wenigen Nachrichten', async () => {
-    const { ada, bob, board } = await teamMitBoard()
+    const { ada, bob, board } = await teamMitBoard(app)
     const beobachter = await connect(ada)
     const beweger = await connect(bob)
-    await join(beobachter, board.id)
-    await join(beweger, board.id)
+    await beobachter.join(board.id)
+    await beweger.join(board.id)
     await beobachter.next('presence', (message) => message.peers.length === 2)
     const vorher = beobachter.log.length
 
@@ -596,18 +419,18 @@ describe('Fanout und Presence', () => {
 
 describe('Konfliktfaelle', () => {
   it('fuehrt die gleichzeitige Aenderung desselben Elements auf beiden Seiten und in der Persistenz gleich zusammen', async () => {
-    const { ada, bob, board } = await teamMitBoard()
+    const { ada, bob, board } = await teamMitBoard(app)
     const einer = await connect(ada)
     const anderer = await connect(bob)
-    await join(einer, board.id)
-    await join(anderer, board.id)
+    await einer.join(board.id)
+    await anderer.join(board.id)
 
     // Gleiche Version, verschiedener Nonce: der kleinere gewinnt - unabhaengig von der Reihenfolge.
     einer.send(change(board.id, [element('a', 7, 900, { text: 'verliert' })]))
     anderer.send(change(board.id, [element('a', 7, 100, { text: 'gewinnt' })]))
 
-    await warteAufVersion(board.id, 1)
-    const gespeichert = await storedScene(board.id)
+    await warteAufVersion(pool, board.id, 1)
+    const gespeichert = await storedScene(pool, board.id)
     expect(gespeichert.scene.elements).toHaveLength(1)
     expect(gespeichert.scene.elements[0]?.['text']).toBe('gewinnt')
 
@@ -621,11 +444,11 @@ describe('Konfliktfaelle', () => {
   })
 
   it('haelt eine Loeschung gegen eine gleichzeitige Aenderung als Tombstone fest', async () => {
-    const { ada, bob, board } = await teamMitBoard()
+    const { ada, bob, board } = await teamMitBoard(app)
     const einer = await connect(ada)
     const anderer = await connect(bob)
-    await join(einer, board.id)
-    await join(anderer, board.id)
+    await einer.join(board.id)
+    await anderer.join(board.id)
     einer.send(change(board.id, [element('a', 1, 500)]))
     await anderer.next('scene-change')
 
@@ -640,16 +463,16 @@ describe('Konfliktfaelle', () => {
     expect(stand.scene.elements).toHaveLength(1)
     expect(stand.scene.elements[0]?.['isDeleted']).toBe(true)
     expect(stand.scene.elements[0]?.['text']).toBeUndefined()
-    await warteAufVersion(board.id, 1)
-    expect((await storedScene(board.id)).scene.elements[0]?.['isDeleted']).toBe(true)
+    await warteAufVersion(pool, board.id, 1)
+    expect((await storedScene(pool, board.id)).scene.elements[0]?.['isDeleted']).toBe(true)
   })
 
   it('gibt eine verspaetete Nachricht mit aelterer Version nicht weiter', async () => {
-    const { ada, bob, board } = await teamMitBoard()
+    const { ada, bob, board } = await teamMitBoard(app)
     const einer = await connect(ada)
     const anderer = await connect(bob)
-    await join(einer, board.id)
-    await join(anderer, board.id)
+    await einer.join(board.id)
+    await anderer.join(board.id)
     einer.send(change(board.id, [element('a', 5, 100)]))
     await anderer.next('scene-change')
     const vorher = anderer.log.length
@@ -670,11 +493,11 @@ describe('Konfliktfaelle', () => {
 
 describe('Persistente Checkpoints', () => {
   it('schreibt bestaetigte Staende getaktet und meldet sie allen Teilnehmern', async () => {
-    const { ada, bob, board } = await teamMitBoard()
+    const { ada, bob, board } = await teamMitBoard(app)
     const schreiber = await connect(ada)
     const mitleser = await connect(bob)
-    await join(schreiber, board.id)
-    await join(mitleser, board.id)
+    await schreiber.join(board.id)
+    await mitleser.join(board.id)
 
     schreiber.send(change(board.id, [element('a', 1, 5)]))
     schreiber.send(change(board.id, [element('b', 1, 6)]))
@@ -682,30 +505,30 @@ describe('Persistente Checkpoints', () => {
     const gemeldet = await schreiber.next('saved')
     expect(gemeldet.version).toBe(1)
     expect((await mitleser.next('saved')).version).toBe(1)
-    const gespeichert = await storedScene(board.id)
+    const gespeichert = await storedScene(pool, board.id)
     expect(ids(gespeichert.scene.elements).sort()).toEqual(['a', 'b'])
     // Zwei Aenderungen, ein Checkpoint: es entsteht nicht je Aenderung eine Version.
-    expect(await storedVersions(board.id)).toBe(1)
+    expect(await storedVersions(pool, board.id)).toBe(1)
   })
 
   it('schreibt beim Verlassen des letzten Teilnehmers noch, was offen ist', async () => {
-    const { ada, board } = await teamMitBoard()
+    const { ada, board } = await teamMitBoard(app)
     const client = await connect(ada)
-    await join(client, board.id)
+    await client.join(board.id)
 
     client.send(change(board.id, [element('a', 1, 5)]))
     // Ohne auf den Takt zu warten: der Raum wird sofort geschlossen.
     client.close()
     await client.closeCode
 
-    await warteAufVersion(board.id, 1)
-    expect(ids((await storedScene(board.id)).scene.elements)).toEqual(['a'])
+    await warteAufVersion(pool, board.id, 1)
+    expect(ids((await storedScene(pool, board.id)).scene.elements)).toEqual(['a'])
   })
 
   it('ueberschreibt eine neuere Speicherung der HTTP-API nicht, sondern fuehrt sie zusammen', async () => {
-    const { ada, bob, board } = await teamMitBoard()
+    const { ada, bob, board } = await teamMitBoard(app)
     const client = await connect(bob)
-    await join(client, board.id)
+    await client.join(board.id)
     client.send(change(board.id, [element('raum', 1, 5)]))
     await client.next('saved')
 
@@ -719,13 +542,13 @@ describe('Persistente Checkpoints', () => {
       files: {},
       updatedAt: Date.now(),
     }
-    const antwort = await post(ada, BOARD_SCENE_PATH, { boardId: board.id, baseVersion: 1, scene: ueberHttp })
+    const antwort = await post(app, ada, BOARD_SCENE_PATH, { boardId: board.id, baseVersion: 1, scene: ueberHttp })
     expect(antwort.status).toBe(200)
 
     client.send(change(board.id, [element('spaeter', 1, 7)]))
-    await warteAufVersion(board.id, 3)
+    await warteAufVersion(pool, board.id, 3)
 
-    const gespeichert = await storedScene(board.id)
+    const gespeichert = await storedScene(pool, board.id)
     expect(gespeichert.version).toBe(3)
     // Nichts ist verloren: der fremde Stand steht neben dem des Raums.
     expect(ids(gespeichert.scene.elements).sort()).toEqual(['http', 'raum', 'spaeter'])

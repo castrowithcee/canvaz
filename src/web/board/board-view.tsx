@@ -13,8 +13,14 @@
  *   (409) beendet das automatische Speichern - einfach mit der neuen Ausgangsversion weiterzumachen waere
  *   genau das stille Ueberschreiben, das die Versionspruefung verhindern soll.
  *
+ * Ein **laufender Wiederverbindungsversuch** ist bewusst keiner der beiden Faelle: solange er laeuft und der
+ * Aussetzer kurz ist, wird nicht selbst gespeichert. Eine Speicherung gegen die Checkpoints des Raums
+ * erzeugte sonst einen Konflikt, den es fachlich gar nicht gibt. Erst wenn die Strecke laenger weg ist,
+ * uebernimmt die HTTP-Speicherung wieder.
+ *
  * Damit fuehrt ein Verbindungsverlust nie zu stillem Datenverlust: er ist sichtbar, und die Zeichnung wird
- * weiter gesichert.
+ * weiter gesichert. Sichtbar sind ausserdem der laufende Versuch, der erfolgreiche Abgleich nach der
+ * Wiederaufnahme und jede benannt abgelehnte Nachricht.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -69,10 +75,25 @@ function fremdePeers(peers: readonly PresenceView[], selbst: string | null): rea
     }))
 }
 
-const CONNECTION_TEXTS: Readonly<Record<RealtimeStatus, string>> = {
-  verbindet: 'Verbindung wird aufgebaut …',
-  verbunden: 'Live verbunden.',
-  getrennt: 'Nicht live verbunden. Aenderungen werden ueber die Speicherung gesichert.',
+/**
+ * Der Verbindungszustand in einem Satz.
+ *
+ * Bewusst ausformuliert statt als Symbol: die Zeile steht in einem `role="status"`-Bereich und wird von
+ * einer Sprachausgabe vorgelesen, sobald sie sich aendert.
+ */
+function connectionMessage(status: RealtimeStatus, attempt: number, resyncedAt: Date | null): string {
+  switch (status) {
+    case 'verbindet':
+      return 'Verbindung wird aufgebaut …'
+    case 'verbunden':
+      return resyncedAt === null
+        ? 'Live verbunden.'
+        : `Live verbunden. Stand nach Wiederaufnahme um ${resyncedAt.toLocaleTimeString('de-DE')} abgeglichen.`
+    case 'wiederverbinden':
+      return `Verbindung verloren. Wiederverbindung laeuft (Versuch ${String(attempt)}).`
+    case 'getrennt':
+      return 'Nicht live verbunden. Aenderungen werden ueber die Speicherung gesichert.'
+  }
 }
 
 function saveMessage(state: SaveState): string {
@@ -107,6 +128,12 @@ export function BoardEditor({
   const [save, setSave] = useState<SaveState>({ kind: 'idle' })
   const [adapter, setAdapter] = useState<BoardEditorPort | null>(null)
   const [connection, setConnection] = useState<RealtimeStatus>('verbindet')
+  /** Zaehler der erfolglosen Wiederverbindungsversuche; er macht den laufenden Versuch sichtbar. */
+  const [attempt, setAttempt] = useState(0)
+  /** Zeitpunkt des letzten erfolgreichen Abgleichs nach einer Wiederaufnahme. */
+  const [resyncedAt, setResyncedAt] = useState<Date | null>(null)
+  /** Zuletzt vom Server benannt abgelehnte Nachricht. */
+  const [rejected, setRejected] = useState<string | null>(null)
   /** Vom Server aufgeloestes Schreibrecht. Bis zum Beitritt entscheidet allein der geladene Boardzustand. */
   const [canWrite, setCanWrite] = useState(true)
   const [peers, setPeers] = useState<readonly EditorPeer[]>([])
@@ -133,6 +160,9 @@ export function BoardEditor({
     setAssetProblem(null)
     setAdapter(null)
     setConnection('verbindet')
+    setAttempt(0)
+    setResyncedAt(null)
+    setRejected(null)
     setCanWrite(true)
     setPeers([])
     setMountKey((current) => current + 1)
@@ -172,6 +202,12 @@ export function BoardEditor({
   /** Live heisst: der Raum nimmt Aenderungen an und persistiert sie. Dann speichert die Ansicht nicht selbst. */
   const live = connection === 'verbunden' && !viewOnly
   liveRef.current = live
+  /**
+   * Nur wenn auf die Strecke kein Verlass mehr ist, speichert die Ansicht selbst. Waehrend eines laufenden
+   * kurzen Wiederverbindungsversuchs bleibt die eigene Speicherung aus - der Raum hat den Stand gleich
+   * wieder, und eine Speicherung dazwischen erzeugte nur einen Konflikt mit den Checkpoints.
+   */
+  const speichertSelbst = connection === 'getrennt' && !viewOnly
 
   const persist = useCallback(() => {
     if (adapter === null || blockedRef.current) {
@@ -214,14 +250,14 @@ export function BoardEditor({
   // Verzoegertes Speichern: erst wenn eine Weile nichts mehr passiert ist. Solange der Raum traegt, gibt es
   // keine eigene Speicherung - sie wuerde gegen die Checkpoints des Servers laufen und Konflikte erzeugen.
   useEffect(() => {
-    if (save.kind !== 'dirty' || live) {
+    if (save.kind !== 'dirty' || !speichertSelbst) {
       return
     }
     const timer = window.setTimeout(persist, AUTOSAVE_DELAY_MS)
     return () => {
       window.clearTimeout(timer)
     }
-  }, [save, persist, live])
+  }, [save, persist, speichertSelbst])
 
   // Der gezeichnete Ausgangsstand steht bereits im Editor (`scene` an der Zeichenflaeche). Hier kommen die
   // Bilder dazu: ihre Bytes holt der autorisierte Abrufendpunkt, einzeln und mit der laufenden Sitzung.
@@ -309,13 +345,20 @@ export function BoardEditor({
     }
 
     const client = connectBoardRealtime(boardId, {
-      onStatus(status): void {
+      onStatus(status, versuch): void {
         setConnection(status)
+        setAttempt(versuch)
         if (status !== 'verbunden') {
           zeigePeers([])
+          setResyncedAt(null)
         }
       },
-      onJoined(message): void {
+      onJoined(message, wiederaufnahme): void {
+        if (wiederaufnahme) {
+          // Sichtbarer Beleg, dass der Stand nach dem Abbruch wieder zusammengefuehrt wurde.
+          setResyncedAt(new Date())
+          setRejected(null)
+        }
         versionRef.current = message.version
         filesRef.current = { ...filesRef.current, ...message.scene.files }
         setCanWrite(message.canWrite)
@@ -369,7 +412,12 @@ export function BoardEditor({
           setState({ kind: 'not-found' })
           return
         }
-        setSave({ kind: 'failed', message: message.message })
+        // Jede Ablehnung ist benannt und wird benannt gezeigt. Nur wo die Zeichnung dadurch **nicht**
+        // angekommen ist, wird zusaetzlich der Speicherstatus auf gescheitert gesetzt.
+        setRejected(message.message)
+        if (message.code === 'nicht-speicherbar' || message.code === 'raum-zu-gross' || message.code === 'zu-viele-elemente') {
+          setSave({ kind: 'failed', message: message.message })
+        }
       },
     })
     clientRef.current = client
@@ -427,7 +475,7 @@ export function BoardEditor({
           {viewOnly ? 'Nur Lesen: keine Schreibberechtigung.' : saveMessage(save)}
         </p>
         <p className="board__state" role="status">
-          {CONNECTION_TEXTS[connection]}
+          {connectionMessage(connection, attempt, resyncedAt)}
         </p>
         <p className="board__peers" role="status">
           {peers.length === 0
@@ -456,6 +504,14 @@ export function BoardEditor({
       {assetProblem !== null && (
         <p className="notice notice--error" role="alert">
           {assetProblem}
+        </p>
+      )}
+      {rejected !== null && (
+        <p className="notice notice--error" role="alert">
+          Der Server hat eine Nachricht abgelehnt: {rejected}{' '}
+          <button type="button" onClick={() => setRejected(null)}>
+            Hinweis ausblenden
+          </button>
         </p>
       )}
       {save.kind === 'conflict' && (

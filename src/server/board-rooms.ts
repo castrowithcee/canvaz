@@ -18,11 +18,16 @@
  * `boardRole` und die Gastberechtigung in den `PolicySubject`, und dort wuerde ein Gast statt einer internen
  * Serversession stehen. Das Protokoll aendert sich dafuer nicht.
  *
- * ## Was hier bewusst noch nicht steht
+ * ## Grenzen dieser Ebene
  *
- * Reconnect-Haertung, Heartbeat, feingranulare Nachrichtenlimits und Backpressure liefert das folgende
- * Paket. Die Nahtstellen dafuer sind `resync`/`snapshot`, die Groessengrenze am WebSocket-Server und die
- * eine Stelle `send`, ueber die jede ausgehende Nachricht laeuft.
+ * Alles, was einen Raum kennt, wird hier begrenzt: die Nachrichtenrate je Verbindung, der **akkumulierte
+ * Raumzustand** in Bytes, die Zahl gleichzeitiger Teilnehmer und der ausgehende Puffer je Verbindung. Jede
+ * ueberschrittene Grenze ergibt eine benannte Ablehnung oder ein benanntes Schliessen; der Raum bleibt
+ * danach fuer alle anderen unveraendert benutzbar. Rahmengroesse, Verbindungen je Nutzer und Herzschlag
+ * haengen an der Verbindung und stehen in `realtime.ts`.
+ *
+ * Jede ausgehende Nachricht laeuft ueber genau eine Stelle - `deliver` -, und genau dort sitzt der
+ * Backpressure-Schutz.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -34,6 +39,8 @@ import {
   BOARD_ACCESS_REVOKED_CLOSE_CODE,
   REALTIME_ERROR_MESSAGES,
   REALTIME_PROTOCOL_VERSION,
+  SLOW_CLIENT_CLOSE_CODE,
+  TOO_MANY_CLOSE_CODE,
   parseClientMessage,
 } from '../contracts/realtime.js'
 import type { BinaryFileRef, PersistedAppState, SceneSnapshot, SyncElement } from '../contracts/scene.js'
@@ -77,6 +84,56 @@ const PRESENCE_INTERVAL_MS = 100
  */
 const ACCESS_CHECK_INTERVAL_MS = 2_000
 
+/**
+ * Nachrichtenrate je Verbindung.
+ *
+ * Der Browserclient buendelt auf hoechstens 20 Sendungen je Sekunde und schickt dabei hoechstens eine
+ * Aenderung und einen Zeigerstand - also rund 40 Nachrichten je Sekunde im dichtesten gedachten Fall. 120
+ * je Sekunde lassen dreifachen Spielraum, der Eimer von 240 traegt zusaetzlich einen Nachholschub von zwei
+ * Sekunden, wie ihn ein wieder aufgewachter Tab erzeugt.
+ */
+const MESSAGES_PER_SECOND = 120
+const MESSAGE_BURST = 240
+
+/**
+ * Hoechstzahl gleichzeitiger Teilnehmer eines Raums.
+ *
+ * Genau der Reservewert des Produktvertrags: fuenf gleichzeitige Bearbeiter, zehn Verbindungen. Darueber
+ * hinaus wird nicht optimiert, sondern benannt abgelehnt.
+ */
+const MAX_ROOM_PARTICIPANTS = 10
+
+/**
+ * Obergrenze des akkumulierten Raumzustands in Bytes.
+ *
+ * Der Raum haelt denselben Inhalt, den ein Checkpoint als Snapshot schreibt. Die HTTP-Speicherung nimmt
+ * einen Koerper von hoechstens `CANVAZ_MAX_SCENE_BYTES` an; waere der Raum groesser, entstuende ein Stand,
+ * den dieselbe Anwendung ueber ihren anderen Weg nicht mehr annehmen wuerde. Der Standard ist deshalb
+ * derselbe Wert, und `main.ts` reicht die Konfiguration durch.
+ *
+ * Gezaehlt wird fortlaufend je Element statt durch Serialisieren des ganzen Raums: das waere bei jeder
+ * Aenderung ein Durchlauf ueber die vollstaendige Szene.
+ */
+const DEFAULT_MAX_ROOM_BYTES = 5 * 1024 * 1024
+
+/**
+ * Backpressure-Schwellen des ausgehenden Puffers je Verbindung.
+ *
+ * `PRESENCE` zuerst: ein Teilnehmerfeld ist fluechtig und wird vom naechsten vollstaendig ersetzt, das
+ * Verwerfen kostet nichts. `CHANGE` danach: eine verworfene Aenderung waere Datenverlust, deshalb wird die
+ * Verbindung als abgleichbeduerftig vermerkt und bekommt beim Abfliessen einen vollstaendigen `snapshot`
+ * statt der verpassten Teilstuecke. `CLOSE` zuletzt: wer einen vollen Szenenpuffer nicht abnimmt, liest
+ * nicht mehr - dann ist ein neuer Aufbau billiger als weiter zu puffern.
+ *
+ * Die Werte: ein Teilnehmerfeld mit zehn Teilnehmern liegt bei rund zwei Kilobyte, 64 KiB sind also etwa
+ * drei Sekunden Rueckstand. 1 MiB ist der Punkt, an dem einzelne Teilstuecke nicht mehr billiger sind als
+ * ein frischer Gesamtstand (ein Fuenftel der zulaessigen Szenengroesse). 4 MiB heisst: eine ganze Szene
+ * steht ungelesen im Puffer.
+ */
+const PRESENCE_DROP_BYTES = 64 * 1024
+const CHANGE_DROP_BYTES = 1024 * 1024
+const SLOW_CLOSE_BYTES = 4 * 1024 * 1024
+
 export type BoardRoomOptions = {
   readonly boards: BoardStore
   readonly logger: Logger
@@ -86,6 +143,14 @@ export type BoardRoomOptions = {
   readonly checkpointMaxMs?: number
   readonly presenceIntervalMs?: number
   readonly accessCheckIntervalMs?: number
+  /** Grenzwerte. Ohne Angabe gelten die begruendeten Standardwerte oben. */
+  readonly maxRoomBytes?: number
+  readonly maxRoomParticipants?: number
+  readonly messagesPerSecond?: number
+  readonly messageBurst?: number
+  readonly presenceDropBytes?: number
+  readonly changeDropBytes?: number
+  readonly slowCloseBytes?: number
 }
 
 export type BoardRooms = {
@@ -102,6 +167,16 @@ type Room = {
   elements: readonly SyncElement[]
   appState: PersistedAppState
   files: Record<string, BinaryFileRef>
+  /**
+   * Fortgeschriebene Groesse des Raumzustands in Bytes und die Groesse je Element, aus der sie entsteht.
+   *
+   * Ohne diese Buchfuehrung muesste jede Aenderung den gesamten Raum serialisieren, nur um die Obergrenze
+   * zu pruefen. Der Wert ist eine Schaetzung im Rahmen weniger Prozent - er zaehlt die Nutzlast, nicht die
+   * Trennzeichen der Umhuellung.
+   */
+  bytes: number
+  readonly elementBytes: Map<string, number>
+  appStateBytes: number
   /** Zuletzt **persistierte** Version. Der Raum kennt keine eigene Zaehlung. */
   version: number
   dirty: boolean
@@ -127,6 +202,18 @@ type Participant = {
   canWrite: boolean
   pointer: PresenceView['pointer']
   selectedElementIds: readonly string[]
+  /**
+   * Wegen Rueckstaus wurde mindestens eine Aenderung nicht zugestellt. Sobald der Puffer abgeflossen ist,
+   * bekommt diese Verbindung einen vollstaendigen `snapshot` - nicht die verpassten Teilstuecke.
+   */
+  needsResync: boolean
+  /** Eimer der Nachrichtenrate: verbleibende Marken und Zeitpunkt der letzten Nachfuellung. */
+  tokens: number
+  refilledAt: number
+  /** Verworfene Nachrichten seit der letzten angenommenen; Grundlage fuer das Schliessen bei Dauerflut. */
+  dropped: number
+  /** Zeitpunkt der letzten Ratenmeldung. Die Ablehnung selbst darf die Verbindung nicht fluten. */
+  noticedAt: number
 }
 
 function send(socket: WebSocket, message: ServerMessage): void {
@@ -137,6 +224,25 @@ function send(socket: WebSocket, message: ServerMessage): void {
 
 function sendError(socket: WebSocket, code: RealtimeErrorCode): void {
   send(socket, { type: 'error', code, message: REALTIME_ERROR_MESSAGES[code] })
+}
+
+/** Groesse eines Werts als serialisiertes JSON in Bytes. `undefined` hat keine Darstellung und zaehlt null. */
+function byteSize(value: unknown): number {
+  const serialized = JSON.stringify(value)
+  return serialized === undefined ? 0 : Buffer.byteLength(serialized, 'utf8')
+}
+
+/** Zaehlt den Raum vollstaendig neu aus. Nur beim Laden und nach einer Zusammenfuehrung noetig. */
+function measure(room: Room): void {
+  room.elementBytes.clear()
+  let elements = 0
+  for (const element of room.elements) {
+    const size = byteSize(element)
+    room.elementBytes.set(element.id, size)
+    elements += size
+  }
+  room.appStateBytes = byteSize(room.appState)
+  room.bytes = elements + room.appStateBytes + byteSize(room.files)
 }
 
 function presenceOf(participant: Participant): PresenceView {
@@ -181,9 +287,25 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
   const checkpointMaxMs = options.checkpointMaxMs ?? CHECKPOINT_MAX_MS
   const presenceIntervalMs = options.presenceIntervalMs ?? PRESENCE_INTERVAL_MS
 
+  const maxRoomBytes = options.maxRoomBytes ?? DEFAULT_MAX_ROOM_BYTES
+  const maxRoomParticipants = options.maxRoomParticipants ?? MAX_ROOM_PARTICIPANTS
+  const messagesPerSecond = options.messagesPerSecond ?? MESSAGES_PER_SECOND
+  const messageBurst = options.messageBurst ?? MESSAGE_BURST
+  const presenceDropBytes = options.presenceDropBytes ?? PRESENCE_DROP_BYTES
+  const changeDropBytes = options.changeDropBytes ?? CHANGE_DROP_BYTES
+  const slowCloseBytes = options.slowCloseBytes ?? SLOW_CLOSE_BYTES
+
   const rooms = new Map<BoardId, Room>()
   /** Gleichzeitige Beitritte in denselben, noch nicht geladenen Raum sollen ihn nicht doppelt laden. */
   const loading = new Map<BoardId, Promise<Room | RealtimeErrorCode>>()
+  /**
+   * Raeume, deren letzter Teilnehmer gegangen ist und deren Abschluss-Checkpoint noch laeuft.
+   *
+   * Genau das Zeitfenster, in dem eine Wiederverbindung nach einem Abbruch landet. Ohne dieses Warten
+   * laedt der neue Beitritt den Stand **vor** dem laufenden Checkpoint und arbeitet auf einer veralteten
+   * Szene weiter.
+   */
+  const closing = new Map<BoardId, Promise<void>>()
   let closed = false
 
   /**
@@ -205,6 +327,47 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
     return { read: true, write: decideBoardAccess(subject, access.workspace, access.board, 'scene:write').allowed }
   }
 
+  /**
+   * Einzige Stelle, an der eine Nachricht an einen Teilnehmer geht.
+   *
+   * Reihenfolge des Backpressure-Schutzes von harmlos nach hart: Presence verwerfen, dann Aenderungen
+   * verwerfen **und** einen Abgleich vormerken, zuletzt trennen. Alles Uebrige (`joined`, `snapshot`,
+   * `saved`, `access`, `left`, `error`) ist klein und traegt Bedeutung, die kein spaeterer Stand
+   * nachliefert - es wird nie verworfen.
+   */
+  function deliver(participant: Participant, message: ServerMessage): void {
+    const socket = participant.socket
+    if (socket.readyState !== socket.OPEN) {
+      return
+    }
+    const buffered = socket.bufferedAmount
+    if (buffered > slowCloseBytes) {
+      logger('warn', 'realtime.backpressure.closed', {
+        userId: participant.auth.user.id,
+        boardId: participant.room?.boardId ?? '',
+        buffered,
+      })
+      leaveRoom(participant)
+      sendError(socket, 'zu-langsam')
+      socket.close(SLOW_CLIENT_CLOSE_CODE, 'Verbindung zu langsam')
+      return
+    }
+    if (message.type === 'presence' && buffered > presenceDropBytes) {
+      return
+    }
+    if (message.type === 'scene-change' && buffered > changeDropBytes) {
+      // Kein stiller Verlust: der vollstaendige Stand kommt, sobald der Puffer abgeflossen ist.
+      participant.needsResync = true
+      logger('warn', 'realtime.backpressure.deferred', {
+        userId: participant.auth.user.id,
+        boardId: participant.room?.boardId ?? '',
+        buffered,
+      })
+      return
+    }
+    socket.send(JSON.stringify(message))
+  }
+
   function schedulePresence(room: Room): void {
     if (room.presenceTimer !== null) {
       return
@@ -212,8 +375,9 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
     room.presenceTimer = setTimeout(() => {
       room.presenceTimer = null
       const peers = [...room.participants].map(presenceOf)
-      for (const participant of room.participants) {
-        send(participant.socket, { type: 'presence', boardId: room.boardId, peers })
+      // Kopie: `deliver` kann einen zu langsamen Teilnehmer aus dem Raum entfernen.
+      for (const participant of [...room.participants]) {
+        deliver(participant, { type: 'presence', boardId: room.boardId, peers })
       }
     }, presenceIntervalMs)
     room.presenceTimer.unref()
@@ -272,6 +436,8 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
           if (latest !== null) {
             room.elements = reconcileElements(latest.snapshot.elements, room.elements).elements
             room.files = { ...latest.snapshot.files, ...room.files }
+            // Der Raum hat fremden Inhalt aufgenommen; die fortgeschriebene Groesse gilt nicht mehr.
+            measure(room)
           }
           room.version = access.board.sceneVersion
         }
@@ -292,8 +458,8 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
       room.dirty = false
       room.firstDirtyAt = null
       const savedAt = result.savedAt.toISOString()
-      for (const participant of room.participants) {
-        send(participant.socket, { type: 'saved', boardId: room.boardId, version: result.version, savedAt })
+      for (const participant of [...room.participants]) {
+        deliver(participant, { type: 'saved', boardId: room.boardId, version: result.version, savedAt })
       }
       logger('info', 'board.checkpoint.saved', { boardId: room.boardId, version: result.version })
     } catch (error) {
@@ -323,11 +489,14 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
       return 'szene-beschaedigt'
     }
     const snapshot = latest?.snapshot ?? createEmptySnapshot(boardId, now().getTime())
-    return {
+    const room: Room = {
       boardId,
       elements: snapshot.elements,
       appState: snapshot.appState,
       files: { ...snapshot.files },
+      bytes: 0,
+      elementBytes: new Map(),
+      appStateBytes: 0,
       version: latest?.version ?? 0,
       dirty: false,
       saving: false,
@@ -337,12 +506,24 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
       presenceTimer: null,
       participants: new Set(),
     }
+    measure(room)
+    return room
   }
 
   async function obtainRoom(boardId: BoardId): Promise<Room | RealtimeErrorCode> {
     const existing = rooms.get(boardId)
     if (existing !== undefined) {
       return existing
+    }
+    // Wiederverbindung genau waehrend des Abschluss-Checkpoints: erst wenn er durch ist, ist der geladene
+    // Stand der vollstaendige.
+    const abschluss = closing.get(boardId)
+    if (abschluss !== undefined) {
+      await abschluss
+      const wieder = rooms.get(boardId)
+      if (wieder !== undefined) {
+        return wieder
+      }
     }
     const inflight = loading.get(boardId)
     if (inflight !== undefined) {
@@ -387,8 +568,13 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
     rooms.delete(room.boardId)
     if (room.dirty) {
       // Der letzte Teilnehmer geht: was noch nicht persistiert ist, wird jetzt geschrieben und nicht erst
-      // beim naechsten Takt - den gaebe es nicht mehr.
-      void checkpoint(room)
+      // beim naechsten Takt - den gaebe es nicht mehr. Solange das laeuft, wartet ein neuer Beitritt.
+      const abschluss = checkpoint(room).finally(() => {
+        if (closing.get(room.boardId) === abschluss) {
+          closing.delete(room.boardId)
+        }
+      })
+      closing.set(room.boardId, abschluss)
     }
   }
 
@@ -420,10 +606,21 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
       }
       return
     }
+    if (room.participants.size >= maxRoomParticipants) {
+      // Benannte Ablehnung, kein Schliessen: die Verbindung bleibt bestehen und kann es spaeter oder auf
+      // einem anderen Board erneut versuchen. Die bereits Anwesenden merken nichts davon.
+      logger('warn', 'realtime.join.denied', { userId: participant.auth.user.id, boardId, reason: 'raum-voll' })
+      if (room.participants.size === 0) {
+        rooms.delete(room.boardId)
+      }
+      sendError(participant.socket, 'raum-voll')
+      return
+    }
     participant.room = room
     participant.canWrite = permission.write
     room.participants.add(participant)
-    send(participant.socket, {
+    participant.needsResync = false
+    deliver(participant, {
       type: 'joined',
       boardId,
       clientId: participant.clientId,
@@ -460,6 +657,10 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
         storageKey: asset.storageKey,
       }
       room.files = { ...room.files, [ref.id]: ref }
+      // Dateiverweise werden nach der Groessenpruefung aufgeloest; je Nachricht sind hoechstens
+      // `MAX_CHANGE_FILE_IDS` Verweise von je rund 150 Bytes moeglich, die Grenze kann also um wenige
+      // Kilobyte ueberschritten werden. Die naechste Aenderung sieht den vollen Wert und wird abgelehnt.
+      room.bytes += byteSize(ref)
       added.push(ref)
     }
     return added
@@ -478,7 +679,7 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
     }
     if (permission.write !== participant.canWrite) {
       participant.canWrite = permission.write
-      send(participant.socket, { type: 'access', boardId: room.boardId, canWrite: permission.write })
+      deliver(participant, { type: 'access', boardId: room.boardId, canWrite: permission.write })
       schedulePresence(room)
     }
     if (!permission.write) {
@@ -496,7 +697,43 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
     }
     const { elements, appliedIds } = reconcileElements(room.elements, message.elements)
     const appStateChanged = message.appState !== null && !sameAppState(room.appState, message.appState)
+
+    /**
+     * Obergrenze des akkumulierten Raumzustands.
+     *
+     * Geprueft wird der **projizierte** Stand, nicht der aktuelle: eine Aenderung, die den Raum kleiner
+     * macht oder gleich gross laesst, kommt auch an der Grenze noch durch. Wird abgelehnt, bleibt der Raum
+     * unveraendert - kein halb uebernommener Stand, keine Weitergabe, kein Checkpoint. Die anderen
+     * Teilnehmer merken davon nichts.
+     */
+    const groessen = new Map<string, number>()
+    let projiziert = room.bytes
+    for (const element of message.elements) {
+      if (!appliedIds.has(element.id)) {
+        continue
+      }
+      const size = byteSize(element)
+      groessen.set(element.id, size)
+      projiziert += size - (room.elementBytes.get(element.id) ?? 0)
+    }
+    const appStateBytes = appStateChanged ? byteSize(message.appState) : room.appStateBytes
+    projiziert += appStateBytes - room.appStateBytes
+    if (projiziert > maxRoomBytes) {
+      logger('warn', 'realtime.room.too-large', {
+        boardId: room.boardId,
+        userId: participant.auth.user.id,
+        bytes: projiziert,
+      })
+      sendError(participant.socket, 'raum-zu-gross')
+      return
+    }
+
     room.elements = elements
+    for (const [id, size] of groessen) {
+      room.elementBytes.set(id, size)
+    }
+    room.bytes = projiziert
+    room.appStateBytes = appStateBytes
     if (message.appState !== null) {
       room.appState = message.appState
     }
@@ -517,12 +754,56 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
       appState: message.appState,
       files,
     }
-    for (const peer of room.participants) {
+    for (const peer of [...room.participants]) {
       // Nie an den Absender zurueck: er hat den Stand bereits und wuerde ihn nur erneut verarbeiten.
       if (peer !== participant) {
-        send(peer.socket, broadcast)
+        deliver(peer, broadcast)
       }
     }
+  }
+
+  /** Vollstaendiger Raumzustand an eine Verbindung. Antwort auf `resync` und Ende eines Rueckstaus. */
+  function sendSnapshot(participant: Participant, room: Room): void {
+    participant.needsResync = false
+    deliver(participant, {
+      type: 'snapshot',
+      boardId: room.boardId,
+      version: room.version,
+      scene: snapshotOf(room, now().getTime()),
+    })
+  }
+
+  /**
+   * Marken der Nachrichtenrate.
+   *
+   * Eimer mit Nachfuellung: `messagesPerSecond` Marken je Sekunde, hoechstens `messageBurst` auf Vorrat.
+   * Eine abgelehnte Nachricht wird verworfen und benannt gemeldet - hoechstens einmal je Sekunde, sonst
+   * waere die Ablehnung selbst die naechste Flut. Erst wer ununterbrochen ueber der Rate bleibt, wird
+   * getrennt.
+   */
+  function allowMessage(participant: Participant, at: number): boolean {
+    const nachgefuellt = ((at - participant.refilledAt) * messagesPerSecond) / 1000
+    participant.tokens = Math.min(messageBurst, participant.tokens + nachgefuellt)
+    participant.refilledAt = at
+    if (participant.tokens >= 1) {
+      participant.tokens -= 1
+      participant.dropped = 0
+      return true
+    }
+    participant.dropped += 1
+    if (participant.dropped > messageBurst) {
+      logger('warn', 'realtime.rate.closed', { userId: participant.auth.user.id, dropped: participant.dropped })
+      leaveRoom(participant)
+      sendError(participant.socket, 'zu-viele-nachrichten')
+      participant.socket.close(TOO_MANY_CLOSE_CODE, 'Zu viele Nachrichten')
+      return false
+    }
+    if (at - participant.noticedAt >= 1000) {
+      participant.noticedAt = at
+      logger('warn', 'realtime.rate.exceeded', { userId: participant.auth.user.id })
+      sendError(participant.socket, 'zu-viele-nachrichten')
+    }
+    return false
   }
 
   /** Zugriff entzogen: der Raum ist verloren, die Sitzung selbst bleibt gueltig. */
@@ -554,15 +835,10 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
     switch (message.type) {
       case 'leave':
         leaveRoom(participant)
-        send(participant.socket, { type: 'left', boardId: room.boardId })
+        deliver(participant, { type: 'left', boardId: room.boardId })
         return
       case 'resync':
-        send(participant.socket, {
-          type: 'snapshot',
-          boardId: room.boardId,
-          version: room.version,
-          scene: snapshotOf(room, now().getTime()),
-        })
+        sendSnapshot(participant, room)
         return
       case 'presence':
         // Presence aendert den Boardzustand nicht; sie setzt Raummitgliedschaft voraus, die beim Beitritt
@@ -593,8 +869,13 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
         }
         if (permission.write !== participant.canWrite) {
           participant.canWrite = permission.write
-          send(participant.socket, { type: 'access', boardId: room.boardId, canWrite: permission.write })
+          deliver(participant, { type: 'access', boardId: room.boardId, canWrite: permission.write })
           schedulePresence(room)
+        }
+        // Derselbe Lauf loest den Rueckstau auf: wessen Puffer wieder frei ist, bekommt den vollstaendigen
+        // Stand nachgeliefert. Ein eigener Taktgeber dafuer waere ein zweiter Timer fuer dieselbe Runde.
+        if (participant.needsResync && participant.socket.bufferedAmount <= changeDropBytes) {
+          sendSnapshot(participant, room)
         }
       }
     }
@@ -617,6 +898,11 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
         canWrite: false,
         pointer: null,
         selectedElementIds: [],
+        needsResync: false,
+        tokens: messageBurst,
+        refilledAt: now().getTime(),
+        dropped: 0,
+        noticedAt: 0,
       }
       /**
        * Nachrichten einer Verbindung werden **nacheinander** abgearbeitet.
@@ -627,6 +913,10 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
        */
       let pending: Promise<void> = Promise.resolve()
       socket.on('message', (data: Buffer, isBinary: boolean) => {
+        // Vor dem Auswerten: eine verworfene Nachricht soll nicht erst noch geparst werden.
+        if (!allowMessage(participant, now().getTime())) {
+          return
+        }
         if (isBinary) {
           sendError(socket, 'ungueltige-nachricht')
           return

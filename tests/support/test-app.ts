@@ -59,13 +59,17 @@ export async function startTestApp(options: {
   readonly sessionTtlHours?: number
   /** Ersetzt die Boardraeume; nur der Test des Andockpunkts nutzt das. */
   readonly onConnection?: RealtimeOptions['onConnection']
-  /** Kurze Takte fuer Checkpoint, Presence und Berechtigungspruefung. */
+  /** Kurze Takte und enge Grenzwerte fuer Checkpoint, Presence, Berechtigungspruefung und Limits. */
   readonly rooms?: Omit<BoardRoomOptions, 'boards' | 'logger' | 'now'>
+  /** Kurzer Herzschlag und enge Verbindungsgrenze; nur die Haertungstests brauchen das. */
+  readonly gateway?: Pick<RealtimeOptions, 'heartbeatIntervalMs' | 'maxConnectionsPerUser'>
   /**
    * Storage-Umgebung. Ohne Angabe laeuft der Dateisystem-Adapter in einem Verzeichnis unter `tmpdir()`.
    * Der Assettest reicht hier die Werte beider Adapter herein - der Anwendungscode bleibt derselbe.
    */
   readonly storage?: Readonly<Record<string, string>>
+  /** Weitere Umgebungswerte, etwa eine enge `CANVAZ_MAX_SCENE_BYTES` fuer die Groessengrenze am Rahmen. */
+  readonly env?: Readonly<Record<string, string>>
 }): Promise<TestApp> {
   const server: Server = createServer()
   await new Promise<void>((resolve) => {
@@ -87,6 +91,7 @@ export async function startTestApp(options: {
     CANVAZ_OIDC_REDIRECT_URI: `${baseUrl}/api/auth/callback`,
     CANVAZ_STORAGE_FILESYSTEM_ROOT: join(tmpdir(), 'canvaz-test-assets'),
     ...options.storage,
+    ...options.env,
   })
 
   const logs: LogEntry[] = []
@@ -99,7 +104,7 @@ export async function startTestApp(options: {
   const store = createIdentityStore(options.pool)
   const workspaces = createWorkspaceStore(options.pool)
   const boards = createBoardStore(options.pool)
-  const rooms = createBoardRooms({ boards, logger, now, ...options.rooms })
+  const rooms = createBoardRooms({ boards, logger, now, maxRoomBytes: config.maxSceneBytes, ...options.rooms })
   // Kurzer Abstand der Ablaufpruefung: der Test soll auf das Schliessen nicht eine Minute warten.
   const realtime = createRealtimeGateway({
     config,
@@ -108,6 +113,7 @@ export async function startTestApp(options: {
     logger,
     now,
     expiryCheckIntervalMs: 25,
+    ...options.gateway,
     onConnection: options.onConnection ?? rooms.onConnection,
   })
   const context: AppContext = {

@@ -39,7 +39,14 @@ const identity = createIdentityStore(pool)
 const workspaces = createWorkspaceStore(pool)
 const boards = createBoardStore(pool)
 const storage = createAssetStorage(config.storage)
-const rooms = createBoardRooms({ boards, logger: consoleLogger, now: () => new Date() })
+// Dieselbe Obergrenze wie fuer einen gespeicherten Snapshot: der Raum haelt genau den Inhalt, den ein
+// Checkpoint schreibt und den die HTTP-Speicherung wieder annehmen koennen muss.
+const rooms = createBoardRooms({
+  boards,
+  logger: consoleLogger,
+  now: () => new Date(),
+  maxRoomBytes: config.maxSceneBytes,
+})
 const realtime = createRealtimeGateway({
   config,
   identity,

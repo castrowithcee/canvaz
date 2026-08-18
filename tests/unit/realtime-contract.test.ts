@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  MAX_CHANGE_ELEMENTS,
   MAX_CHANGE_FILE_IDS,
   MAX_PRESENCE_SELECTION,
   REALTIME_PROTOCOL_VERSION,
@@ -92,7 +93,23 @@ describe('parseClientMessage', () => {
     })
   })
 
-  it('kappt uebergrosse Listen, statt die Nachricht zu verwerfen', () => {
+  it('lehnt zu viele Elemente benannt ab, statt die Liste zu kappen', () => {
+    const element = (index: number) => ({ id: `e${String(index)}`, version: 1, versionNonce: index + 1 })
+    const gerade = Array.from({ length: MAX_CHANGE_ELEMENTS }, (_, index) => element(index))
+    const einesZuViel = [...gerade, element(MAX_CHANGE_ELEMENTS)]
+
+    const angenommen = parse({ type: 'scene-change', boardId: 'b1', elements: gerade, appState: null, fileIds: [] })
+    expect(angenommen.ok && angenommen.message.type === 'scene-change' && angenommen.message.elements).toHaveLength(
+      MAX_CHANGE_ELEMENTS,
+    )
+    // Gekappt waere hier stiller Datenverlust: der Absender haelt seinen Stand fuer uebertragen.
+    expect(parse({ type: 'scene-change', boardId: 'b1', elements: einesZuViel, appState: null, fileIds: [] })).toEqual({
+      ok: false,
+      code: 'zu-viele-elemente',
+    })
+  })
+
+  it('kappt uebergrosse Listen von Anzeigehilfen, statt die Nachricht zu verwerfen', () => {
     const viele = Array.from({ length: MAX_PRESENCE_SELECTION + 50 }, (_, index) => `e${String(index)}`)
     const dateien = Array.from({ length: MAX_CHANGE_FILE_IDS + 10 }, (_, index) => `f${String(index)}`)
 

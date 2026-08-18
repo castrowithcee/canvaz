@@ -30,11 +30,50 @@ import { parsePersistedAppState, parseSyncElements } from './scene.js'
 
 export const REALTIME_PROTOCOL_VERSION = 1 as const
 
+/* ---------------------------------------------------------------------------------------------------- */
+/* Schliessgruende                                                                                       */
+/* ---------------------------------------------------------------------------------------------------- */
+
 /**
- * Anwendungsdefinierter Schliessgrund: die Berechtigung fuer dieses Board ist entfallen. Bewusst getrennt
- * von `SESSION_REVOKED_CLOSE_CODE` - die Sitzung selbst bleibt gueltig, nur der Raum ist verloren.
+ * Alle anwendungsdefinierten Schliessgruende stehen hier, weil beide Seiten sie brauchen: der Server setzt
+ * sie, und der Client entscheidet daran, ob er einen Wiederverbindungsversuch startet oder aufgibt.
+ */
+
+/** Die Sitzung wurde serverseitig ungueltig (Logout, Deaktivierung, Ablauf). Neu anmelden, nicht neu verbinden. */
+export const SESSION_REVOKED_CLOSE_CODE = 4401
+
+/**
+ * Die Berechtigung fuer dieses Board ist entfallen. Bewusst getrennt von `SESSION_REVOKED_CLOSE_CODE` -
+ * die Sitzung selbst bleibt gueltig, nur der Raum ist verloren.
  */
 export const BOARD_ACCESS_REVOKED_CLOSE_CODE = 4403
+
+/**
+ * Der ausgehende Puffer dieser Verbindung ist nicht mehr abgeflossen. Ausdruecklich **kein** Endzustand:
+ * genau dafuer gibt es den Rueckzugstakt und den vollstaendigen Abgleich beim Wiederbeitritt.
+ */
+export const SLOW_CLIENT_CLOSE_CODE = 4408
+
+/** Eine Mengengrenze ist erreicht (Verbindungen je Nutzer, Nachrichtenrate). Ein Sofortversuch hilft nicht. */
+export const TOO_MANY_CLOSE_CODE = 4429
+
+/**
+ * Standardcode fuer einen zu grossen Rahmen. Nicht von dieser Anwendung gesetzt, sondern von `ws` selbst,
+ * sobald `maxPayload` ueberschritten wird - er steht hier, weil der Client ihn erkennen muss.
+ */
+export const MESSAGE_TOO_BIG_CLOSE_CODE = 1009
+
+/**
+ * Schliessgruende, nach denen ein erneuter Verbindungsversuch nichts aendern wuerde.
+ *
+ * Alles andere ist ein Netzproblem oder ein Neustart des Servers und wird mit Rueckzugstakt wiederholt.
+ */
+export const TERMINAL_CLOSE_CODES: readonly number[] = [
+  SESSION_REVOKED_CLOSE_CODE,
+  BOARD_ACCESS_REVOKED_CLOSE_CODE,
+  TOO_MANY_CLOSE_CODE,
+  MESSAGE_TOO_BIG_CLOSE_CODE,
+]
 
 /**
  * Hoechstzahl uebertragener Auswahlkennungen je Presence-Nachricht. Presence ist eine Anzeigehilfe; wer
@@ -44,6 +83,19 @@ export const MAX_PRESENCE_SELECTION = 200
 
 /** Hoechstzahl neuer Dateikennungen je Aenderungsnachricht. Ueblich ist null oder eine. */
 export const MAX_CHANGE_FILE_IDS = 64
+
+/**
+ * Hoechstzahl Elemente je Aenderungsnachricht.
+ *
+ * Anders als bei Presence und Dateikennungen wird hier **nicht gekappt**: eine gekuerzte Elementliste waere
+ * stiller Datenverlust. Die Nachricht wird benannt abgelehnt, und der Client teilt seinen Stand in mehrere
+ * Nachrichten auf - der Wiederaufnahmefall nach einem Abbruch ist der einzige, in dem ueberhaupt viele
+ * Elemente auf einmal anfallen.
+ *
+ * Der Wert liegt weit ueber jeder laufenden Aenderung (Excalidraw meldet einzelne Elemente) und weit unter
+ * dem, was `maxPayload` ohnehin durchlaesst.
+ */
+export const MAX_CHANGE_ELEMENTS = 2_000
 
 export type RealtimeErrorCode =
   /** Der Client spricht eine andere Protokollversion. */
@@ -62,6 +114,18 @@ export type RealtimeErrorCode =
   | 'nicht-speicherbar'
   /** Der gespeicherte Stand liess sich nicht in den Szenenvertrag lesen. */
   | 'szene-beschaedigt'
+  /** Mehr Elemente in einer Nachricht als `MAX_CHANGE_ELEMENTS`. Nichts wurde uebernommen. */
+  | 'zu-viele-elemente'
+  /** Die Nachrichtenrate dieser Verbindung ist ueberschritten. Die Nachricht wurde verworfen. */
+  | 'zu-viele-nachrichten'
+  /** Der Raumzustand wuerde durch diese Aenderung seine Obergrenze ueberschreiten. */
+  | 'raum-zu-gross'
+  /** Der Raum hat bereits die hoechstzulaessige Zahl gleichzeitiger Teilnehmer. */
+  | 'raum-voll'
+  /** Dieses Konto haelt bereits die hoechstzulaessige Zahl offener Verbindungen. */
+  | 'zu-viele-verbindungen'
+  /** Der ausgehende Puffer dieser Verbindung ist nicht mehr abgeflossen. */
+  | 'zu-langsam'
 
 export const REALTIME_ERROR_MESSAGES: Readonly<Record<RealtimeErrorCode, string>> = {
   'protokoll-version': 'Diese Seite ist veraltet. Bitte neu laden.',
@@ -72,6 +136,12 @@ export const REALTIME_ERROR_MESSAGES: Readonly<Record<RealtimeErrorCode, string>
   'kein-schreibrecht': 'Keine Berechtigung, dieses Board zu aendern',
   'nicht-speicherbar': 'Die Aenderung enthaelt einen Wert, der sich nicht speichern laesst',
   'szene-beschaedigt': 'Die gespeicherte Szene ist beschaedigt und kann nicht geoeffnet werden',
+  'zu-viele-elemente': 'Die Nachricht enthaelt zu viele Elemente auf einmal',
+  'zu-viele-nachrichten': 'Zu viele Nachrichten in zu kurzer Zeit',
+  'raum-zu-gross': 'Dieses Board hat seine Hoechstgroesse erreicht. Die Aenderung wurde nicht uebernommen.',
+  'raum-voll': 'Dieses Board hat bereits die hoechstzulaessige Zahl gleichzeitiger Teilnehmer',
+  'zu-viele-verbindungen': 'Dieses Konto hat bereits die hoechstzulaessige Zahl offener Verbindungen',
+  'zu-langsam': 'Die Verbindung kommt nicht mehr hinterher und wird neu aufgebaut',
 }
 
 export type PointerPosition = {
@@ -132,7 +202,7 @@ export type PresenceMessage = {
   readonly selectedElementIds: readonly string[]
 }
 
-/** Bitte um den vollstaendigen Raumzustand. Andockpunkt der Reconnect-Haertung des naechsten Pakets. */
+/** Bitte um den vollstaendigen Raumzustand. Traegt den Abgleich nach einem Abbruch und nach Backpressure. */
 export type ResyncMessage = {
   readonly type: 'resync'
   readonly boardId: string
@@ -318,6 +388,10 @@ export function parseClientMessage(raw: string): ParsedClientMessage {
       }
       if (rawAppState !== null && appState === null) {
         return INVALID
+      }
+      if (elements.length > MAX_CHANGE_ELEMENTS) {
+        // Bewusst eine Ablehnung statt einer Kappung: eine halbe Elementliste waere stiller Datenverlust.
+        return { ok: false, code: 'zu-viele-elemente' }
       }
       return { ok: true, message: { type: 'scene-change', boardId, elements, appState, fileIds } }
     }
