@@ -28,7 +28,9 @@ import { loadConfig } from '../../src/server/config.js'
 import type { AppContext } from '../../src/server/context.js'
 import { createRequestListener } from '../../src/server/http.js'
 import type { LogFields, LogLevel } from '../../src/server/log.js'
+import { createMetrics } from '../../src/server/metrics.js'
 import { createOidcClient } from '../../src/server/oidc.js'
+import { createRateLimiter } from '../../src/server/rate-limit.js'
 import { createRealtimeGateway } from '../../src/server/realtime.js'
 import type { RealtimeGateway, RealtimeOptions } from '../../src/server/realtime.js'
 import type { TestProvider } from './oidc-provider.js'
@@ -90,6 +92,9 @@ export async function startTestApp(options: {
     CANVAZ_OIDC_CLIENT_SECRET: options.provider.clientSecret,
     CANVAZ_OIDC_REDIRECT_URI: `${baseUrl}/api/auth/callback`,
     CANVAZ_STORAGE_FILESYSTEM_ROOT: join(tmpdir(), 'canvaz-test-assets'),
+    // Die Testfaelle fahren viele Anfragen in Sekunden; die Ratengrenze des Betriebs wuerde sie treffen.
+    // Der Fall, der sie prueft, setzt sie ausdruecklich wieder herunter.
+    CANVAZ_RATE_LIMIT_PER_MINUTE: '600000',
     ...options.storage,
     ...options.env,
   })
@@ -124,6 +129,7 @@ export async function startTestApp(options: {
     ...options.gateway,
     onConnection: options.onConnection ?? rooms.onConnection,
   })
+  const metrics = createMetrics()
   const context: AppContext = {
     config,
     pool: options.pool,
@@ -135,9 +141,19 @@ export async function startTestApp(options: {
     realtime,
     rooms,
     logger,
+    metrics,
     now,
   }
-  server.on('request', createRequestListener(createRoutes(context), config.webRoot))
+  server.on(
+    'request',
+    createRequestListener(createRoutes(context), {
+      webRoot: config.webRoot,
+      rateLimit: createRateLimiter({ perMinute: config.rateLimitPerMinute }),
+      trustedProxy: config.trustedProxy,
+      metrics,
+      logger,
+    }),
+  )
   realtime.attach(server)
 
   return {

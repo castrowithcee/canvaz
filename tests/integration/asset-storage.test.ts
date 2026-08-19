@@ -106,6 +106,11 @@ function assetStorageContract(storage: () => AssetStoragePort): void {
     }
   })
 
+  it('meldet den erreichbaren Speicher als bereit', async () => {
+    // Die Grundlage der Bereitschaftspruefung: erreichbar und beschreibbar, ohne dabei etwas abzulegen.
+    await expect(storage().probe()).resolves.toBeUndefined()
+  })
+
   it('haelt einen abgelegten Inhalt ueber eine neue Adapterinstanz hinweg', async () => {
     const key = frischerSchluessel()
     await storage().put(key, bytes('bleibt'))

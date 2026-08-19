@@ -12,7 +12,8 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 
 import type { AssetStoragePort } from '../domain/storage/asset-storage-port.js'
@@ -69,6 +70,16 @@ export function createFilesystemAssetStorage(root: string): AssetStoragePort {
 
     async delete(key: string): Promise<void> {
       await rm(pathOf(key), { force: true })
+    },
+
+    /**
+     * Die Wurzel muss vorhanden und beschreibbar sein. `mkdir` legt sie beim ersten Start an; danach ist der
+     * Aufruf ein Blick ins Dateisystem ohne Schreibvorgang. Fehlt das Volume oder gehoert es einem anderen
+     * Nutzer, scheitert genau hier die Bereitschaft - statt spaeter beim ersten Upload.
+     */
+    async probe(): Promise<void> {
+      await mkdir(base, { recursive: true })
+      await access(base, constants.W_OK)
     },
   }
 }

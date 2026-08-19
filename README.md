@@ -15,6 +15,7 @@ Planung, Architekturentscheidungen und Betriebswissen liegen im getrennten Repos
 | `src/persistence` | Adapter zur Aussenwelt: Pool, SQL-Migrationen, Repository- und Storage-Umsetzungen. |
 | `src/web` | React/Vite-SPA inklusive Editor-Port und Excalidraw-Adapter. |
 | `tests` | `unit` (ohne IO), `integration` (echte Datenbank), `support` (Testhilfen). |
+| `Dockerfile`, `compose.prod.yml`, `docker/` | Laufzeitimage, Produktionsbereitstellung, Reverse Proxy und Betriebswerkzeug. |
 
 Excalidraw (exakt `0.18.1`) erscheint ausschliesslich in `src/web/board/excalidraw-adapter.ts`. Die
 Reconciliation in `src/domain/board/reconcile.ts` ist Eigencode.
@@ -61,7 +62,14 @@ Gastcookie liegt.
 
 Jede Antwort traegt `Content-Security-Policy` (`default-src 'self'`, `frame-ancestors 'none'`,
 `object-src 'none'`, `base-uri 'self'`), `X-Content-Type-Options: nosniff` und `Referrer-Policy: no-referrer`.
-HSTS setzt bewusst die TLS-Terminierung des Deployments, nicht die Anwendung.
+HSTS setzt bewusst die TLS-Terminierung des Deployments, nicht die Anwendung; in der mitgelieferten
+Produktionsbereitstellung setzt es der Reverse Proxy (`docker/Caddyfile`).
+
+Jeder Pfad unter `/api/` liegt zusaetzlich hinter einer **Ratengrenze je Client**
+(`CANVAZ_RATE_LIMIT_PER_MINUTE`, Standard 600 Anfragen je Minute, Eimer mit gleichmaessiger Nachfuellung).
+Darueber antwortet die Instanz mit `429` und `Retry-After`. Hinter einem Reverse Proxy zaehlt sie den
+letzten Eintrag aus `x-forwarded-for` - den, den der Proxy selbst angehaengt hat - und nur dann, wenn
+`CANVAZ_TRUSTED_PROXY=true` gesetzt ist; ohne Proxy waere die Kopfzeile frei erfunden.
 
 Der transiente Flow-Zustand (`state`, `nonce`, `code_verifier`) liegt in einem verschluesselten,
 kurzlebigen HttpOnly-Cookie (`canvaz_oidc_flow`, zehn Minuten). Der Callback verwirft es vor der
@@ -73,7 +81,9 @@ einen Systemadmin ergeben. Es gibt keine fest codierten Zugangsdaten.
 
 | Methode | Pfad | Zugang |
 | --- | --- | --- |
-| GET | `/api/health` | oeffentlich |
+| GET | `/api/health` | oeffentlich; Lebendigkeit samt Datenbankkontakt |
+| GET | `/api/ready` | oeffentlich; Bereitschaft, siehe [Betrieb auf einem VPS](#betrieb-auf-einem-vps) |
+| GET | `/api/metrics` | nur im internen Netz; der Reverse Proxy beantwortet ihn nach aussen mit 404 |
 | GET | `/api/auth/login` | oeffentlich, leitet zum Identity Provider |
 | GET | `/api/auth/callback` | oeffentlich, Pfad stammt aus `CANVAZ_OIDC_REDIRECT_URI` |
 | POST | `/api/auth/logout` | angemeldet + CSRF-Token |
@@ -1108,6 +1118,165 @@ Authentik tut das.
 Ein Nachweis gegen eine laufende Authentik-Instanz steht noch aus; dafuer fehlen Instanz und Zugangsdaten.
 Die automatisierten Tests laufen gegen einen standardkonformen Test-Provider mit echtem JWKS.
 
+## Betrieb auf einem VPS
+
+Zielbild ist ein **einzelner gewoehnlicher Linux-VPS** mit Docker Engine und Compose v2 - kein Cluster, keine
+providerabhaengige Sonderfunktion und keine Host- oder Festplattenverschluesselung. Die Instanz besteht aus
+drei Diensten: einem Reverse Proxy mit TLS, dem Anwendungsserver und PostgreSQL. Der Objektspeicher kommt
+nur dazu, wer den Adapter `s3` faehrt.
+
+| Datei | Rolle |
+| --- | --- |
+| `Dockerfile` | Zweistufiges Laufzeitimage: gebaute SPA und gebauter Server, ohne Werkzeugkette und ohne Quelltext. Laeuft unprivilegiert. |
+| `compose.prod.yml` | Die Bereitstellung. `compose.yml` daneben bleibt die Entwicklungsumgebung und startet nur Datenbank und MinIO. |
+| `docker/Caddyfile` | TLS, HSTS, Bereitschaftspruefung des Upstreams, Abriegelung des Metrikendpunkts. |
+| `docker/canvaz-ops.sh` | `backup`, `restore`, `check`. |
+| `.env.production.example` | Vorlage der Laufzeitkonfiguration. Die ausgefuellte `.env.production` bleibt auf dem Host. |
+
+### Voraussetzungen
+
+- Linux-VPS mit Docker Engine und Docker Compose v2, `gpg` und `tar` auf dem Host.
+- Ein persistentes Volume in der Standardkonfiguration des Anbieters. Die Anwendung setzt **keine**
+  Hostverschluesselung, kein LUKS, kein KMS und keinen verschluesselten Bootvorgang voraus; portabel wird
+  ein Sicherungsarchiv dadurch, dass es verschluesselt geschrieben wird, nicht durch den Datentraeger.
+- Ein DNS-Eintrag auf den Host und die Ports 80/443 erreichbar - Caddy holt darueber das Zertifikat.
+- Ein registrierter OIDC-Client (siehe [Identity Provider einrichten](#identity-provider-einrichten-beispiel-authentik)).
+- Kapazitaetsziel sind 30 angelegte Nutzer, fuenf gleichzeitige Bearbeiter auf einem Board und zehn
+  gleichzeitige Verbindungen. Dafuer traegt **ein** Anwendungsprozess; die Messung dazu steht unter
+  [Gemessen](#gemessen).
+
+### Installation
+
+```sh
+cp .env.production.example .env.production   # Platzhalter ersetzen, Datei bleibt auf dem Host
+export COMPOSE_FILE=compose.prod.yml
+export COMPOSE_ENV_FILES=.env.production
+
+docker compose pull                                          # veroeffentlichtes Image aus CANVAZ_IMAGE
+docker compose up --detach
+docker compose run --rm app node dist/persistence/migrate-cli.js
+```
+
+Danach antwortet `https://<CANVAZ_SITE_ADDRESS>/api/ready` mit `200`. Der erste angemeldete Nutzer wird
+Systemadmin; feste Zugangsdaten gibt es nicht.
+
+Nach aussen offen sind ausschliesslich die beiden Ports des Reverse Proxy. Anwendungsserver, Datenbank und
+ein etwaiges MinIO haben keinen veroeffentlichten Port und sind nur im Compose-Netz erreichbar. Kein
+Geheimnis steht im Repository: alle Werte kommen aus `.env.production`, und der Server startet gar nicht
+erst, wenn einer davon fehlt.
+
+### Getrennte Konfiguration
+
+| Umgebung | Woher | Besonderheit |
+| --- | --- | --- |
+| Entwicklung | `.env` aus `.env.example`, `compose.yml` | Datenbank und MinIO auf hohen Hostports, Klartext-HTTP. |
+| Test | `CANVAZ_TEST_DATABASE_URL`, `CANVAZ_TEST_S3_ENDPOINT`, sonst Werte im Testaufbau | eigene Datenbank `canvaz_test`. |
+| Produktion | `.env.production` aus `.env.production.example`, `compose.prod.yml` | TLS, Reverse Proxy, persistente Volumes, `CANVAZ_TRUSTED_PROXY=true`. |
+
+### Gesundheit, Bereitschaft, Metriken und Logs
+
+`/api/health` beantwortet die Frage **lebt dieser Prozess** (mit Datenbankkontakt) und haengt am
+Container-Healthcheck. `/api/ready` beantwortet die Frage **darf diese Instanz Verkehr bekommen**: sie
+prueft Datenbank *und* konfigurierten Assetspeicher und antwortet sonst mit `503` samt Angabe, welche der
+beiden fehlt. Der Reverse Proxy fragt genau diesen Pfad (`health_uri /api/ready`, alle fuenf Sekunden) und
+nimmt die Instanz aus dem Verkehr, solange sie nicht bereit ist. Der Grund steht als eine Logzeile
+(`ready.failed`) im Serverlog, nie in der oeffentlich erreichbaren Antwort.
+
+Die Echtzeitstrecke haengt am selben HTTP-Server wie die API; ihr Upgrade laeuft durch denselben Proxy und
+faellt damit unter dieselbe Bereitschaft. Wie viele Verbindungen und Raeume offen sind, steht in den
+Metriken.
+
+`/api/metrics` liefert das Prometheus-Textformat mit den Kernwerten: Laufzeit, beantwortete Anfragen je
+Statusklasse, wegen der Ratengrenze abgelehnte Anfragen, offene WebSocket-Verbindungen, offene Boardraeume
+und die Verbindungen des Datenbankpools. Es gibt bewusst **kein** Pfad-, Nutzer- oder Boardlabel: eine
+Metrik mit solchen Werten waere eine zweite, unbeaufsichtigte Ausgabe von Nutzungsdaten. Der Endpunkt hat
+keinen eigenen Zugriffsschutz und gehoert deshalb ins interne Netz - der Reverse Proxy beantwortet ihn von
+aussen mit `404`.
+
+Logs sind eine JSON-Zeile je Ereignis auf stdout, eingesammelt vom Docker-Logtreiber mit begrenzter Groesse
+(`max-size: 10m`, fuenf Dateien) - ein unbegrenztes Log fuellt sonst die Platte und nimmt die Datenbank mit.
+Ein Fehler wird auf Name und Meldung reduziert; weder OIDC- noch Freigabetokens noch Boardinhalte kommen
+darin vor.
+
+### Alarme
+
+`docker/canvaz-ops.sh check` prueft in einem Lauf, ob der Anwendungscontainer laeuft, ob die Instanz bereit
+ist, ob seit dem letzten Lauf ungewoehnlich viele `5xx` entstanden sind, ob die Volumes volllaufen und ob
+die juengste Sicherung noch innerhalb des RPO liegt. Jeder Befund ist eine JSON-Zeile auf stderr in
+derselben Form wie das Anwendungslog, und der Aufruf endet mit Exitcode 1 - genau das, was ein Cronjob als
+Alarm weitergibt.
+
+```cron
+*/10 * * * *  cd /opt/canvaz && docker/canvaz-ops.sh check
+15 3 * * *    cd /opt/canvaz && docker/canvaz-ops.sh backup
+```
+
+### Sicherung und Wiederherstellung
+
+`docker/canvaz-ops.sh backup` schreibt **einen** verschluesselten Stand aus Datenbank und Assets:
+
+- `pg_dump --format=custom` der Datenbank, **zuerst**, dann die Assets. Die Reihenfolge ist die
+  Konsistenzzusage: Assets werden nur angelegt, nie geloescht, deshalb liegt ein zwischenzeitlich
+  hochgeladenes Bild danach ohne Datensatz im Speicher und stoert niemanden - andersherum verwiese ein
+  Datensatz auf Bytes, die im Archiv fehlen.
+- Die Assets als `tar`, im Modus `filesystem` aus dem Volume, im Modus `s3` ueber `mc mirror`. Beide Modi
+  ergeben dieselbe Archivform; ein Stand aus dem einen laesst sich in den anderen zurueckspielen.
+- Ein `meta`-Eintrag mit Zeitpunkt, Adapter, Image und angewendeter Schemaversion.
+- Verschluesselt mit `gpg --symmetric` (AES-256) **bevor** das Archiv seinen Platz hat. Die Passphrase steht
+  in einer Datei ausserhalb des Repositories (`CANVAZ_BACKUP_PASSPHRASE_FILE`). Aufbewahrung sind 14 Tage;
+  aeltere Archive entfernt derselbe Lauf.
+
+`docker/canvaz-ops.sh restore <archiv>` haelt die Anwendung an, spielt Datenbank und Assets zurueck und
+startet sie wieder. Bestaetigt sind **RPO 24 Stunden** (taegliche Sicherung) und **RTO 4 Stunden**; der
+Drill in einer leeren Umgebung - Stack hochfahren, migrieren, wiederherstellen - dauert bei diesem
+Datenumfang Sekunden und ist von der Sicherungsgroesse, nicht vom Verfahren begrenzt.
+
+### Assetspeicher wechseln
+
+Der Wechsel zwischen `filesystem` und `s3` ist ausschliesslich Konfiguration - `CANVAZ_STORAGE_ADAPTER` und
+die zugehoerigen Werte. Kein Anwendungscode kennt den Unterschied, und die Datenbank bleibt unberuehrt: die
+Speicherschluessel sind in beiden Modi dieselben.
+
+```sh
+docker/canvaz-ops.sh backup                    # Stand im alten Modus
+# CANVAZ_STORAGE_ADAPTER und die S3-Werte in .env.production umstellen
+COMPOSE_PROFILES=s3 docker compose up --detach  # nur fuer das mitgelieferte MinIO
+docker compose run --rm mc 'mc alias set c "$CANVAZ_S3_ENDPOINT" "$CANVAZ_S3_ACCESS_KEY_ID" "$CANVAZ_S3_SECRET_ACCESS_KEY" && mc mb --ignore-existing "c/$CANVAZ_S3_BUCKET"'
+docker/canvaz-ops.sh restore <archiv>          # traegt die Bytes in den neuen Speicher
+```
+
+Den Bucket legt der Betreiber an, nicht die Anwendung: sie braeuchte dafuer dauerhaft Rechte, die sie im
+Betrieb nicht hat. Fehlt er, meldet `/api/ready` `storage: error` und der Proxy haelt den Verkehr zurueck.
+
+### Update und Rollback
+
+```sh
+docker/canvaz-ops.sh backup                                     # Stand vor dem Update
+# CANVAZ_IMAGE in .env.production auf die neue Version setzen
+docker compose pull && docker compose up --detach
+docker compose run --rm app node dist/persistence/migrate-cli.js
+curl https://<CANVAZ_SITE_ADDRESS>/api/ready
+```
+
+Der Rueckweg ist derselbe Weg mit der alten Versionsnummer in `CANVAZ_IMAGE`. Solange das Update keine
+Migration mitgebracht hat, genuegt das - das Schema ist unveraendert und der alte Stand arbeitet auf
+denselben Daten weiter. Hat es eine Migration mitgebracht, gehoert die vor dem Update genommene Sicherung
+dazu: erst `restore`, dann das alte Image. Deshalb steht die Sicherung im Ablauf **vor** dem Update und
+nicht daneben.
+
+### Bekannte Grenzen
+
+- **Eine** Anwendungsinstanz. Ein Neustart ist eine kurze Unterbrechung, kein unterbrechungsfreier Wechsel;
+  Hochverfuegbarkeit und eine zweite Realtime-Instanz sind ausdruecklich nicht Teil dieses Stands.
+- Die Bereitschaftspruefung des Proxy laeuft alle fuenf Sekunden. In diesem Fenster kann eine Anfrage noch
+  eine gerade unbereit gewordene Instanz erreichen und einen Fehler bekommen, statt vom Proxy gehalten zu
+  werden.
+- Das Laufzeitimage traegt die Bibliotheken der SPA mit, obwohl der Serverprozess sie nie laedt (siehe den
+  Vermerk im `Dockerfile`).
+- Der Metrikendpunkt hat keinen eigenen Zugriffsschutz; seine Grenze ist das interne Netz.
+- Die Sicherung ist ein Vollstand. Bei deutlich groesseren Datenmengen als dem Kapazitaetsziel waere ein
+  inkrementelles Verfahren noetig.
+
 ## Pruefungen
 
 ```sh
@@ -1150,6 +1319,11 @@ verhindern. `tests/unit/board-guest.test.ts` durchlaeuft dazu die Gasttabelle vo
 Gastrollen gegen jede Aktion sowie jeden Board- und Workspacezustand, einschliesslich des Falls, der einen
 Gast ausmacht: ein anderes Board als das seines Links.
 
+`tests/integration/operations.test.ts` prueft die Betriebsendpunkte gegen echte Fehlerlagen statt gegen
+Attrappen: eine Datenbank, die nicht antwortet, und ein Assetspeicher, den es nicht gibt, muessen `/api/ready`
+auf `503` bringen; der Abbruch einer leerlaufenden Datenbankverbindung wird echt herbeigefuehrt
+(`pg_terminate_backend`) und darf den Prozess nicht beenden.
+
 Pruefungen an der echten Oberflaeche laufen nicht als Suite im Repo, sondern manuell mit der
 `agent-browser`-CLI.
 
@@ -1162,4 +1336,22 @@ falsch verhaelt. Der Anwendungscode hat keinen Testmodus und keinen Sonderpfad.
 
 Versionierte SQL-Dateien in `src/persistence/migrations`, angewendete Versionen stehen in
 `schema_migrations`. Jede Datei laeuft in einer eigenen Transaktion, ein Advisory Lock verhindert
-Parallelanwendung. Anwenden mit `npm run db:migrate`; der Anwendungsserver migriert nicht von selbst.
+Parallelanwendung. Anwenden mit `npm run db:migrate`; im Betrieb mit
+`docker compose run --rm app node dist/persistence/migrate-cli.js`. Der Anwendungsserver migriert nicht von
+selbst - ein Neustart soll nie unbeabsichtigt das Schema aendern.
+
+**Der Rueckweg ist die Sicherung, nicht ein zweites SQL-Skript.** Es gibt bewusst keine `down`-Dateien: eine
+Migration, die Daten zusammenfuehrt oder eine Spalte entfernt, laesst sich nicht sinnvoll rueckwaerts
+schreiben, und ein Rueckweg, der im Ernstfall nicht traegt, ist schlimmer als keiner. Der belastbare Weg
+zurueck ist deshalb der Stand vor dem Update:
+
+```sh
+docker/canvaz-ops.sh backup                  # vor jeder Migration
+docker compose run --rm app node dist/persistence/migrate-cli.js
+# falls das Update zurueckgenommen werden muss:
+docker/canvaz-ops.sh restore <archiv>        # Schema und Daten wieder auf dem alten Stand
+# CANVAZ_IMAGE auf die alte Version, docker compose up --detach
+```
+
+Additive Migrationen - neue Tabellen, neue Spalten mit Standardwert - brauchen ihn nicht: die vorherige
+Anwendungsversion laeuft auf dem neuen Schema weiter, und der Rueckweg ist allein das alte Image.

@@ -1,6 +1,15 @@
 version: 2
 
 updates:
+  # Basisimages des Laufzeitimages. Ein Sicherheitsupdate des Node- oder Alpine-Stands erreicht die Instanz
+  # sonst erst beim naechsten unabhaengigen Anlass.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+
   - package-ecosystem: github-actions
     directory: /
     schedule:

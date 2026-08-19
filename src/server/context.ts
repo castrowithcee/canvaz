@@ -14,6 +14,7 @@ import type { WorkspaceStore } from '../domain/workspace/repositories.js'
 import type { BoardRooms } from './board-rooms.js'
 import type { AppConfig } from './config.js'
 import type { Logger } from './log.js'
+import type { Metrics } from './metrics.js'
 import type { OidcClient } from './oidc.js'
 import type { RealtimeGateway } from './realtime.js'
 
@@ -35,6 +36,8 @@ export type AppContext = {
    */
   readonly rooms: BoardRooms
   readonly logger: Logger
+  /** Zaehler des Betriebs. Der Metrikendpunkt liest sie, sonst schreibt nur der Request-Listener hinein. */
+  readonly metrics: Metrics
   /** Injizierbare Uhr: Tests pruefen Ablauf und Widerruf ohne Wartezeit. */
   readonly now: () => Date
 }

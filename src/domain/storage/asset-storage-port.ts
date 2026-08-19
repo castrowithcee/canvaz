@@ -65,4 +65,13 @@ export interface AssetStoragePort {
   get(key: string): Promise<Uint8Array | null>
   /** Entfernt `key`. Ein unbekannter Schluessel ist kein Fehler. */
   delete(key: string): Promise<void>
+  /**
+   * Prueft, dass der Speicher erreichbar und beschreibbar ist, und wirft sonst.
+   *
+   * Ein `get` taugt dafuer nicht: ein fehlender Schluessel ist am Port ein gueltiges Ergebnis, und ein nicht
+   * eingehaengtes Volume laege deshalb genauso aus wie ein leerer Speicher. Die Bereitschaftspruefung
+   * braucht aber genau diesen Unterschied. Die Pruefung legt bewusst nichts ab: sie laeuft im Takt des
+   * Reverse Proxy und darf keinen Schreibverkehr erzeugen.
+   */
+  probe(): Promise<void>
 }

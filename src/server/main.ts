@@ -17,8 +17,10 @@ import { createBoardRooms } from './board-rooms.js'
 import { ConfigError, loadConfig } from './config.js'
 import type { AppContext } from './context.js'
 import { createRequestListener } from './http.js'
-import { consoleLogger } from './log.js'
+import { consoleLogger, describeError } from './log.js'
+import { createMetrics } from './metrics.js'
 import { createOidcClient } from './oidc.js'
+import { createRateLimiter } from './rate-limit.js'
 import { createRealtimeGateway } from './realtime.js'
 
 function loadConfigOrExit(): ReturnType<typeof loadConfig> {
@@ -34,7 +36,9 @@ function loadConfigOrExit(): ReturnType<typeof loadConfig> {
 }
 
 const config = loadConfigOrExit()
-const pool = createPool(config.databaseUrl)
+const pool = createPool(config.databaseUrl, (error: unknown) => {
+  consoleLogger('error', 'database.connection.lost', { error: describeError(error) })
+})
 const identity = createIdentityStore(pool)
 const workspaces = createWorkspaceStore(pool)
 const boards = createBoardStore(pool)
@@ -57,6 +61,7 @@ const realtime = createRealtimeGateway({
   now: () => new Date(),
   onConnection: rooms.onConnection,
 })
+const metrics = createMetrics()
 const context: AppContext = {
   config,
   pool,
@@ -68,9 +73,18 @@ const context: AppContext = {
   realtime,
   rooms,
   logger: consoleLogger,
+  metrics,
   now: () => new Date(),
 }
-const server = createServer(createRequestListener(createRoutes(context), config.webRoot))
+const server = createServer(
+  createRequestListener(createRoutes(context), {
+    webRoot: config.webRoot,
+    rateLimit: createRateLimiter({ perMinute: config.rateLimitPerMinute }),
+    trustedProxy: config.trustedProxy,
+    metrics,
+    logger: consoleLogger,
+  }),
+)
 realtime.attach(server)
 
 server.listen(config.port, () => {

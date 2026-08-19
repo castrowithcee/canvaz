@@ -56,6 +56,16 @@ export type AppConfig = {
   readonly maxImportBytes: number
   /** Verzeichnis mit der gebauten SPA. */
   readonly webRoot: string
+  /** Anfragen je Minute und Client auf die HTTP-API. */
+  readonly rateLimitPerMinute: number
+  /**
+   * Steht die Instanz hinter einem Reverse Proxy?
+   *
+   * Nur dann wird `x-forwarded-for` ueberhaupt gelesen. Ohne Proxy waere die Kopfzeile frei erfunden und
+   * wuerde die Ratengrenze wertlos machen; mit Proxy waere ihr Fehlen genauso schlimm, weil dann alle
+   * Clients in einem Eimer landen.
+   */
+  readonly trustedProxy: boolean
 }
 
 /** Sammelt alle Konfigurationsprobleme, damit ein Fehlstart nicht Variable fuer Variable aufgeloest wird. */
@@ -201,6 +211,18 @@ const DEFAULT_MAX_IMPORT_BYTES = 20 * 1024 * 1024
 const MIN_MAX_IMPORT_BYTES = 64 * 1024
 const MAX_MAX_IMPORT_BYTES = 128 * 1024 * 1024
 
+/**
+ * Anfragen je Minute und Client.
+ *
+ * 600 sind zehn je Sekunde und damit deutlich mehr, als eine geoeffnete Boardliste, ein Import oder ein
+ * schneller Wechsel zwischen Boards ausloest - und deutlich weniger, als eine Flut braucht, um die
+ * Datenbank zu beschaeftigen. Die Untergrenze liegt bei 60, weil alles darunter den normalen Gebrauch
+ * traefe.
+ */
+const DEFAULT_RATE_LIMIT_PER_MINUTE = 600
+const MIN_RATE_LIMIT_PER_MINUTE = 60
+const MAX_RATE_LIMIT_PER_MINUTE = 600_000
+
 export function loadConfig(env: Env = process.env): AppConfig {
   const problems: string[] = []
 
@@ -263,6 +285,15 @@ export function loadConfig(env: Env = process.env): AppConfig {
       problems,
     ),
     webRoot: env['CANVAZ_WEB_ROOT']?.trim() ?? 'dist/web',
+    rateLimitPerMinute: readInteger(
+      env,
+      'CANVAZ_RATE_LIMIT_PER_MINUTE',
+      DEFAULT_RATE_LIMIT_PER_MINUTE,
+      MIN_RATE_LIMIT_PER_MINUTE,
+      MAX_RATE_LIMIT_PER_MINUTE,
+      problems,
+    ),
+    trustedProxy: readBoolean(env, 'CANVAZ_TRUSTED_PROXY', false, problems),
   }
 
   // Die Redirect-URI zeigt auf diese Instanz zurueck. Eine fremde Herkunft waere ein offener Umleitungspunkt

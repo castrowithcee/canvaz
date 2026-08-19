@@ -52,6 +52,20 @@ export type HealthResponse = {
   readonly database: 'ok'
 }
 
+/**
+ * Antwort der Bereitschaftspruefung.
+ *
+ * Getrennt von `HealthResponse`, weil beide verschiedene Fragen beantworten: `health` sagt, dass der Prozess
+ * lebt und die Datenbank antwortet; `ready` sagt, dass diese Instanz Verkehr annehmen darf - also dass
+ * zusaetzlich der konfigurierte Assetspeicher erreichbar und beschreibbar ist. Der Reverse Proxy fragt
+ * `ready` und haelt Verkehr zurueck, solange die Antwort nicht 200 ist.
+ */
+export type ReadyResponse = {
+  readonly status: 'ready' | 'unready'
+  readonly database: 'ok' | 'error'
+  readonly storage: 'ok' | 'error'
+}
+
 export type ErrorResponse = {
   readonly error: string
 }

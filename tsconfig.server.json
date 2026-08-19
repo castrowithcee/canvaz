@@ -1,0 +1,13 @@
+{
+  // Bauplan des Servers. `tsconfig.json` prueft das ganze Paket ohne Ausgabe; diese Datei erzeugt daraus
+  // genau die Dateien, die das Laufzeitimage ausfuehrt - ohne SPA, ohne Tests, ohne DOM-Typen.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": "src",
+    "outDir": "dist",
+    "sourceMap": true,
+    "lib": ["ES2023"]
+  },
+  "include": ["src/contracts", "src/domain", "src/persistence", "src/server"]
+}

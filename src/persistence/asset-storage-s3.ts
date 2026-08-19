@@ -157,6 +157,18 @@ export function createS3AssetStorage(config: S3StorageConfig): AssetStoragePort 
       }
       await response.arrayBuffer()
     },
+
+    /**
+     * Eine signierte Anfrage auf den Bucket selbst. Sie prueft in einem Zug Erreichbarkeit des Endpunkts,
+     * Gueltigkeit der Zugangsdaten und Existenz des Buckets - und legt dabei nichts ab.
+     */
+    async probe(): Promise<void> {
+      const response = await send(config, 'GET', '', null)
+      if (!response.ok) {
+        await fail(config, 'GET', '', response)
+      }
+      await response.arrayBuffer()
+    },
   }
 }
 

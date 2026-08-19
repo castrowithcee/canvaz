@@ -10,7 +10,13 @@ import { stat } from 'node:fs/promises'
 import type { IncomingMessage, RequestListener, ServerResponse } from 'node:http'
 import { extname, join, normalize, resolve, sep } from 'node:path'
 
+import { API_BASE_PATH } from '../contracts/api.js'
 import type { ErrorResponse } from '../contracts/api.js'
+import { describeError } from './log.js'
+import type { Logger } from './log.js'
+import type { Metrics } from './metrics.js'
+import type { RateLimiter } from './rate-limit.js'
+import { clientKey } from './rate-limit.js'
 
 export type RouteHandler = (context: {
   readonly request: IncomingMessage
@@ -226,19 +232,46 @@ function streamFile(response: ServerResponse, filePath: string): void {
   createReadStream(filePath).pipe(response)
 }
 
+export type RequestListenerOptions = {
+  /** Verzeichnis mit der gebauten SPA. */
+  readonly webRoot: string
+  readonly rateLimit: RateLimiter
+  /** Steht ein Reverse Proxy davor, zaehlt die Ratengrenze dessen `x-forwarded-for` statt der Proxyadresse. */
+  readonly trustedProxy: boolean
+  readonly metrics: Metrics
+  readonly logger: Logger
+}
+
 /**
  * Baut den Request-Listener aus Routen und SPA-Wurzel. Unbekannte GET-Pfade fallen auf `index.html`
  * zurueck, damit clientseitige Routen nach einem Neuladen weiter funktionieren.
+ *
+ * Hier haengen die drei Dinge, die jede Anfrage betreffen und deshalb an keiner einzelnen Route stehen
+ * duerfen: Sicherheitskopfzeilen, die Ratengrenze der API und die Zaehlung der Statusklasse.
  */
-export function createRequestListener(routes: readonly Route[], webRoot: string): RequestListener {
-  const root = resolve(webRoot)
+export function createRequestListener(routes: readonly Route[], options: RequestListenerOptions): RequestListener {
+  const root = resolve(options.webRoot)
   const indexPath = join(root, 'index.html')
 
   return (request, response) => {
     applySecurityHeaders(response)
+    response.on('finish', () => {
+      options.metrics.recordResponse(response.statusCode)
+    })
+    const url = new URL(request.url ?? '/', 'http://localhost')
     void (async () => {
-      const url = new URL(request.url ?? '/', 'http://localhost')
       const method = request.method ?? 'GET'
+      // Nur die API: statische Dateien der SPA kommen beim ersten Laden im Dutzend und sind kein Angriffsweg.
+      const istApi = url.pathname.startsWith(`${API_BASE_PATH}/`)
+      if (istApi && !options.rateLimit.take(clientKey(request, options.trustedProxy))) {
+        options.metrics.recordRateLimited()
+        // Ohne Kennung des Clients: die Adresse steht im Zugriffsprotokoll des Reverse Proxy, und das Log der
+        // Anwendung soll keine zweite Sammlung davon werden.
+        options.logger('warn', 'http.rate.exceeded', { path: url.pathname })
+        response.setHeader('retry-after', '1')
+        sendError(response, 429, 'Zu viele Anfragen')
+        return
+      }
       // Erst nach Pfad, dann nach Methode: derselbe Pfad kann mehrere Methoden tragen (`/api/workspaces`
       // listet und legt an), und ein bekannter Pfad mit falscher Methode bleibt eine 405.
       const candidates = routes.filter((candidate) => candidate.path === url.pathname)
@@ -267,7 +300,10 @@ export function createRequestListener(routes: readonly Route[], webRoot: string)
       }
       streamFile(response, index)
     })().catch((error: unknown) => {
-      console.error('Unbehandelter Anfragefehler', error)
+      // Nur Name und Meldung: ein durchgereichtes Fehlerobjekt kann die ausgefuehrte Abfrage samt Parametern
+      // tragen, und damit Boardinhalte.
+      // Nur der Pfad, nie die Anfragezeile: der Suchbegriff der Nutzersuche steht als Query dahinter.
+      options.logger('error', 'http.unhandled', { path: url.pathname, error: describeError(error) })
       if (!response.headersSent) {
         sendError(response, 500, 'Interner Fehler')
       }
