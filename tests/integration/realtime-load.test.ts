@@ -56,6 +56,19 @@ const P95_MS = 150
 const MAX_MS = 500
 
 /**
+ * Obergrenzen der Zustellzeit einer Zeigerbewegung an **alle** anderen Teilnehmer.
+ *
+ * Anders als eine Aenderung wird Presence serverseitig gebuendelt: `schedulePresence` in
+ * `src/server/board-rooms.ts` sammelt bis zu hundert Millisekunden, bevor der Raum den Stand verschickt.
+ * Diese hundert Millisekunden sind also kein Ausreisser, sondern der planmaessige Anteil der Zustellzeit.
+ * Die Reserve fuer eine belastete Maschine kommt deshalb obendrauf, nicht anstelle davon: 150 ms wie bei der
+ * Aenderungszustellung plus die hundert Millisekunden Buendelung ergeben 250 ms fuer das 95. Perzentil, und
+ * 500 ms plus Buendelung ergeben 600 ms als Spitzenwert.
+ */
+const PRESENCE_P95_MS = 250
+const PRESENCE_MAX_MS = 600
+
+/**
  * Der Checkpoint-Takt: zwei Sekunden Ruhe, spaetestens zehn Sekunden. Gemessen wird mit Zuschlag, weil die
  * Zeitgeber von Node keine Echtzeitgarantie geben.
  */
@@ -205,6 +218,84 @@ describe('Lastziel: fuenf Bearbeiter, zehn Verbindungen', () => {
     const gespeichert = await storedScene(pool, board.id)
     expect(gespeichert.scene.elements).toHaveLength(EDITOREN)
     expect(await storedVersions(pool, board.id)).toBeLessThanOrEqual(SCENE_VERSION_RETENTION)
+  })
+
+  it('stellt jede Zeigerbewegung allen anderen Verbindungen innerhalb der Zielzeit zu', async () => {
+    const { konten, board } = await team()
+    const offen = await verbinde(konten, VERBINDUNGEN_JE_KONTO)
+    expect(offen).toHaveLength(EDITOREN * VERBINDUNGEN_JE_KONTO)
+    for (const client of offen) {
+      await client.join(board.id)
+    }
+    // Dieselben ersten fuenf Verbindungen bewegen den Zeiger wie beim Zeichnen oben.
+    const schreiber = offen.slice(0, EDITOREN)
+
+    /** Zeitpunkt des Absendens je Zeigerstand; der Schluessel ist eindeutig ueber alle Runden. */
+    const gesendet = new Map<string, number>()
+    /** Zustellzeiten je Zeigerstand, ein Eintrag je empfangender Verbindung. */
+    const zugestellt = new Map<string, number[]>()
+    for (const client of offen) {
+      client.socket.on('message', (data: Buffer) => {
+        const message = JSON.parse(data.toString('utf8')) as ServerMessage
+        if (message.type !== 'presence') {
+          return
+        }
+        for (const peer of message.peers) {
+          if (peer.pointer === null) {
+            continue
+          }
+          // Runde und Bearbeiter stecken in den Koordinaten, so wie `element` Runde und Bearbeiter im
+          // Versionsstand unterbringt.
+          const bearbeiterIndex = peer.pointer.y
+          const runde = peer.pointer.x
+          if (client === schreiber[bearbeiterIndex]) {
+            // Presence geht anders als eine Aenderung auch an die sendende Verbindung selbst zurueck - das
+            // ist keine Zustellung an eine **andere** Verbindung und zaehlt hier nicht mit.
+            continue
+          }
+          const schluessel = `editor-${String(bearbeiterIndex)}#${String(runde)}`
+          const start = gesendet.get(schluessel)
+          if (start !== undefined) {
+            zugestellt.get(schluessel)?.push(performance.now() - start)
+          }
+        }
+      })
+    }
+
+    // Fuenf Bearbeiter bewegen abwechselnd den Zeiger. Der Rundenabstand bleibt bewusst oberhalb der
+    // hundert Millisekunden Presence-Buendelung, sonst verschmilzt eine Runde mit der naechsten und laesst
+    // sich nicht mehr einzeln nachweisen.
+    const runden = 20
+    for (let runde = 1; runde <= runden; runde += 1) {
+      for (const [index, client] of schreiber.entries()) {
+        const schluessel = `editor-${String(index)}#${String(runde)}`
+        zugestellt.set(schluessel, [])
+        gesendet.set(schluessel, performance.now())
+        client.send({ type: 'presence', boardId: board.id, pointer: { x: runde, y: index }, selectedElementIds: [] })
+      }
+      await ruhe(150)
+    }
+    await ruhe(500)
+
+    // Jede Bewegung muss bei allen **anderen** Verbindungen angekommen sein - der Absender zaehlt nicht mit.
+    const empfaenger = offen.length - 1
+    const schlechteste: number[] = []
+    for (const [schluessel, zeiten] of zugestellt) {
+      expect(zeiten, `Zeigerbewegung ${schluessel} kam nicht ueberall an`).toHaveLength(empfaenger)
+      schlechteste.push(Math.max(...zeiten))
+    }
+    expect(schlechteste).toHaveLength(runden * EDITOREN)
+
+    const p95 = perzentil(schlechteste, 0.95)
+    const spitze = Math.max(...schlechteste)
+    console.log(
+      `Presence-Zustellzeit an alle ${String(empfaenger)} Gegenstellen: p50 ${perzentil(schlechteste, 0.5).toFixed(1)} ms, ` +
+        `p95 ${p95.toFixed(1)} ms, Spitze ${spitze.toFixed(1)} ms`,
+    )
+    expect(p95).toBeLessThan(PRESENCE_P95_MS)
+    expect(spitze).toBeLessThan(PRESENCE_MAX_MS)
+
+    await schliesseAlle()
   })
 
   it('haelt den Checkpoint-Takt unter Dauerlast ein', async () => {

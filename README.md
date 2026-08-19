@@ -644,6 +644,7 @@ faellt ohnehin dem Herzschlag zum Opfer.
 | Messung | Aufbau | Ergebnis | Schwelle im Test |
 | --- | --- | --- | --- |
 | Zustellzeit einer Aenderung an **alle** neun Gegenstellen | 5 Bearbeiter, 10 Verbindungen, 100 Aenderungen im 50-ms-Takt | p50 8,3 ms, p95 9,7 ms, Spitze 22,0 ms | p95 < 150 ms, Spitze < 500 ms |
+| Zustellzeit einer Zeigerbewegung an **alle** neun Gegenstellen | 5 Bearbeiter, 10 Verbindungen, 100 Bewegungen im 150-ms-Takt | p50 102,2 ms, p95 104,2 ms, Spitze 104,6 ms | p95 < 250 ms, Spitze < 600 ms |
 | Checkpoint-Takt unter Dauerlast | 5 Bearbeiter, 575 Aenderungen in 11,5 s | 1 Checkpoint waehrend der Last, 1 weiterer nach der Ruhezeit | Obergrenze gegriffen, weniger als ein Zehntel der Aenderungen als Versionen |
 | Ressourcenverhalten | dieselbe Last | Raum haelt 5 Elemente statt 100 Nachrichten, `scene_versions` bleibt unter der Aufbewahrungsgrenze, Raumzahl faellt auf 0 | fest zugesichert |
 
