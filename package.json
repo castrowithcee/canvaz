@@ -19,7 +19,6 @@
     "test": "vitest run",
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
-    "test:e2e": "playwright test",
     "db:up": "docker compose up --detach --wait postgres minio",
     "db:down": "docker compose down",
     "db:migrate": "tsx --env-file-if-exists=.env src/persistence/migrate-cli.ts"
@@ -35,7 +34,6 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@playwright/test": "^1.62.1",
     "@types/node": "^24.10.1",
     "@types/pg": "^8.15.6",
     "@types/react": "^19.2.0",

@@ -1,6 +1,5 @@
 import { defineConfig } from 'vitest/config'
 
-// Die Spezifikationen unter tests/e2e gehoeren zu Playwright und duerfen nicht von Vitest gestartet werden.
 export default defineConfig({
   test: {
     include: ['tests/unit/**/*.test.ts', 'tests/integration/**/*.test.ts'],

@@ -14,7 +14,7 @@ Planung, Architekturentscheidungen und Betriebswissen liegen im getrennten Repos
 | `src/server` | Konfiguration, HTTP, Routentabelle, OIDC-Anmeldung, Guards, WebSocket-Einstieg, Boardraeume, Composition Root. |
 | `src/persistence` | Adapter zur Aussenwelt: Pool, SQL-Migrationen, Repository- und Storage-Umsetzungen. |
 | `src/web` | React/Vite-SPA inklusive Editor-Port und Excalidraw-Adapter. |
-| `tests` | `unit` (ohne IO), `integration` (echte Datenbank), `e2e` (Playwright), `support` (Testhilfen). |
+| `tests` | `unit` (ohne IO), `integration` (echte Datenbank), `support` (Testhilfen). |
 
 Excalidraw (exakt `0.18.1`) erscheint ausschliesslich in `src/web/board/excalidraw-adapter.ts`. Die
 Reconciliation in `src/domain/board/reconcile.ts` ist Eigencode.
@@ -278,8 +278,8 @@ eigenen strukturellen Elementvertrag.
 im eigenen Build: `vite.config.ts` kopiert sie nach `dist/web/excalidraw-assets/fonts`, und
 `src/web/board/excalidraw-assets.ts` setzt `window.EXCALIDRAW_ASSET_PATH` darauf. Excalidraw haengt an jede
 Schriftquelle zusaetzlich einen fest verdrahteten CDN-Rueckfall an; er steht hinter der eigenen Quelle, wird
-nie benutzt und wird von der Policy blockiert. Der Browsertest belegt beides: keine Anfrage erreicht eine
-fremde Herkunft, und die Schriften kommen nachweislich aus dem eigenen Build.
+nie benutzt und wird von der Policy blockiert. Beides ist im Browser nachpruefbar: keine Anfrage erreicht
+eine fremde Herkunft, und die Schriften kommen aus dem eigenen Build.
 
 Der Editor wird erst beim Oeffnen eines Boards nachgeladen. Das haelt den Einstieg klein (rund 215 kB, 67 kB
 gzip) und stellt sicher, dass der eigene Assetpfad vor dem Schriftregister von Excalidraw steht.
@@ -388,14 +388,14 @@ gehoert in keinen geteilten und in keinen privaten Zwischenspeicher.
 
 **Die Content-Security-Policy wurde dafuer nicht angefasst.** Der Editor holt die Bytes ueber `fetch` von
 der eigenen Herkunft (`default-src 'self'`) und bettet sie als `data:`-Verweis ein, was `img-src 'self'
-data: blob:` seit Beginn erlaubt. Der Browsertest belegt es: ein Bild wird eingefuegt, hochgeladen,
+data: blob:` seit Beginn erlaubt. Im Browser nachpruefbar: ein Bild wird eingefuegt, hochgeladen,
 gespeichert und nach dem Neuladen wieder dargestellt.
 
 Mit dem Bild kommt allerdings ein zweiter, **gewollt blockierter** Verstoss dazu: Excalidraw kompiliert fuer
 die Schriftreduktion ein Harfbuzz-WebAssembly und braeuchte dafuer `'wasm-unsafe-eval'` in `script-src`. Die
-Policy erlaubt es **nicht**. Zeichnen, Bilder, Speichern und Laden funktionieren ohne - der Browsertest
-zeigt beides in einem Lauf. Betroffen waere allein der Export mit reduzierten Schriften, und das ist kein
-Gegenstand dieses Pakets; die Lockerung waere eine eigene Entscheidung mit eigener Begruendung.
+Policy erlaubt es **nicht**. Zeichnen, Bilder, Speichern und Laden funktionieren ohne; im Browser sind beide
+Befunde in einem Durchgang sichtbar. Betroffen waere allein der Export mit reduzierten Schriften, und das
+ist kein Gegenstand dieses Pakets; die Lockerung waere eine eigene Entscheidung mit eigener Begruendung.
 
 #### Aufraeumen und Archivieren
 
@@ -672,7 +672,7 @@ jedes Speicherproblem.
 
 Ein Verbindungsverlust ist damit sichtbar und fuehrt nicht zu stillem Datenverlust. Die
 Content-Security-Policy wurde dafuer **nicht** gelockert: `connect-src` faellt auf `default-src 'self'`
-zurueck, und `'self'` deckt die gleichnamige WebSocket-Herkunft ab. Der Browsertest belegt es.
+zurueck, und `'self'` deckt die gleichnamige WebSocket-Herkunft ab.
 
 ### Bekannte Grenzen
 
@@ -734,7 +734,6 @@ npm run typecheck
 npm run build
 npm test              # Unit- und Integrationstests
 npm run test:unit     # nur ohne Datenbank
-npm run test:e2e      # Playwright, benoetigt einmalig `npx playwright install chromium`
 npm audit --audit-level=high
 ```
 
@@ -750,10 +749,12 @@ Anwendungsprozess vollstaendig ersetzen, abrufen, Bytes vergleichen.
 
 `tests/integration/realtime.test.ts` faehrt die Echtzeitstrecke ueber **echte WebSocket-Verbindungen**:
 Beitritt mit und ohne Berechtigung, Entzug und Archivierung waehrend bestehender Verbindung, manipulierte
-Nachrichten, Konfliktfaelle und Checkpoints. `tests/e2e/realtime.spec.ts` setzt zwei getrennte
-Browserkontexte auf dasselbe Board und liest die Zeichenflaeche des jeweils anderen aus.
+Nachrichten, Konfliktfaelle und Checkpoints.
 
-Integrations- und Browsertests sprechen einen echten OIDC-Provider an: `tests/support/oidc-provider.ts`
+Pruefungen an der echten Oberflaeche laufen nicht als Suite im Repo, sondern manuell mit der
+`agent-browser`-CLI.
+
+Die Integrationstests sprechen einen echten OIDC-Provider an: `tests/support/oidc-provider.ts`
 signiert ID-Tokens mit RSA und liefert ein echtes JWKS aus. Fehlerlagen (falscher Issuer, falsche Audience,
 abgelaufener Token, falsche Nonce, nicht erreichbarer Provider) entstehen dadurch, dass sich dieser Provider
 falsch verhaelt. Der Anwendungscode hat keinen Testmodus und keinen Sonderpfad.
