@@ -13,6 +13,44 @@ export type BoardId = string
 /** Archiviert heisst: lesbar, aber unveraenderlich. Nur das Entarchivieren selbst bleibt moeglich. */
 export type BoardStatus = 'active' | 'archived'
 
+/**
+ * Rolle eines internen Nutzers auf genau einem Board.
+ *
+ * Eine eigene Ebene unterhalb der Workspace-Mitgliedschaft: `viewer` liest, `editor` liest und speichert,
+ * `owner` verwaltet zusaetzlich die Freigaben und uebertraegt die Ownerschaft. Sie wirkt **zusaetzlich** zur
+ * Mitgliedschaft und nie an ihr vorbei - wer den Arbeitsbereich nicht sehen darf, sieht auch kein Board
+ * darin, gleich welche Boardrolle in der Datenbank steht.
+ */
+export type BoardRole = 'owner' | 'editor' | 'viewer'
+
+/**
+ * Die delegierbaren Boardrollen - also alles ausser der Ownerschaft.
+ *
+ * Die Ownerschaft ist keine Freigabe, sondern die Spalte `boards.owner_user_id`. Sie wird uebertragen und
+ * nicht vergeben; dadurch hat ein Board immer genau einen Owner, ohne dass die Anwendung zaehlen muss.
+ */
+export type BoardGrantRole = Exclude<BoardRole, 'owner'>
+
+export const BOARD_GRANT_ROLES: readonly BoardGrantRole[] = ['editor', 'viewer']
+
+export function parseBoardGrantRole(raw: unknown): BoardGrantRole | null {
+  return BOARD_GRANT_ROLES.find((candidate) => candidate === raw) ?? null
+}
+
+/**
+ * Effektive Boardrolle eines Nutzers aus den beiden Quellen, die es dafuer gibt.
+ *
+ * Der fachliche Owner steht in `boards.owner_user_id` und schlaegt jede Freigabezeile; alles andere kommt
+ * aus `board_grants`. `null` heisst: keine eigene Boardrolle - dann entscheidet allein die Mitgliedschaft.
+ */
+export function resolveBoardRole(
+  ownerId: UserId,
+  userId: UserId,
+  granted: BoardGrantRole | null,
+): BoardRole | null {
+  return ownerId === userId ? 'owner' : granted
+}
+
 export type Board = {
   readonly id: BoardId
   readonly workspaceId: WorkspaceId

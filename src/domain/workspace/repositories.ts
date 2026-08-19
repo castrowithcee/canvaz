@@ -79,7 +79,7 @@ export interface WorkspaceRepository {
 export type NewAuditEvent = {
   readonly actorId: UserId
   readonly action: string
-  readonly targetType: 'workspace' | 'membership' | 'board'
+  readonly targetType: 'workspace' | 'membership' | 'board' | 'board-grant'
   readonly targetId: string
   readonly workspaceId: WorkspaceId
   readonly details: Readonly<Record<string, string | number | boolean | null>>

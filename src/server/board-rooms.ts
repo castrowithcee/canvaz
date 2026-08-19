@@ -12,11 +12,13 @@
  * zwischengespeichert; ein Rollenentzug wirkt deshalb auf die naechste Nachricht und spaetestens mit dem
  * Wiederholungslauf auf jede stille Verbindung.
  *
- * ## Andockpunkt fuer Issue 6
+ * ## Eine Stelle loest auf
  *
- * `resolveAccess` ist die einzige Stelle, an der aus einer Verbindung eine Berechtigung wird. Dort kommen
- * `boardRole` und die Gastberechtigung in den `PolicySubject`, und dort wuerde ein Gast statt einer internen
- * Serversession stehen. Das Protokoll aendert sich dafuer nicht.
+ * `resolveAccess` ist die einzige Stelle, an der aus einer Verbindung eine Berechtigung wird. Sie liefert
+ * Workspacerolle **und** Boardrolle in denselben `BoardSubject`, den auch die Routen bauen; eine
+ * Herabstufung wirkt deshalb auf die naechste Nachricht und spaetestens mit dem Wiederholungslauf auf jede
+ * stille Verbindung. Eine Gastberechtigung kaeme als weiteres Feld genau hierher - das Protokoll aendert
+ * sich dafuer nicht.
  *
  * ## Grenzen dieser Ebene
  *
@@ -47,6 +49,7 @@ import type { BinaryFileRef, PersistedAppState, SceneSnapshot, SyncElement } fro
 import { SCENE_SCHEMA_VERSION, createEmptySnapshot, findUnstorableValue } from '../contracts/scene.js'
 import type { BoardId } from '../domain/board/model.js'
 import { SCENE_VERSION_RETENTION } from '../domain/board/model.js'
+import type { BoardSubject } from '../domain/board/policy.js'
 import { decideBoardAccess } from '../domain/board/policy.js'
 import type { BoardStore } from '../domain/board/repositories.js'
 import { CorruptSceneError, SceneConflictError } from '../domain/board/repositories.js'
@@ -315,15 +318,16 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
   /**
    * Einzige Stelle, an der aus einer Verbindung eine Berechtigung wird.
    *
-   * Liest bei **jedem** Aufruf frisch und speichert nichts zwischen. Issue 6 ergaenzt hier `boardRole` und
-   * die Gastberechtigung im `PolicySubject`; Aufrufform und Protokoll bleiben unveraendert.
+   * Liest bei **jedem** Aufruf frisch und speichert nichts zwischen: Mitgliedschaft und Boardrolle kommen
+   * aus demselben Datensatz. Ein Entzug der Mitgliedschaft nimmt damit die Leseberechtigung und beendet die
+   * Verbindung, eine Herabstufung auf `viewer` nimmt nur das Schreibrecht.
    */
   async function resolveAccess(auth: AuthenticatedSession, boardId: BoardId): Promise<BoardPermission> {
     const access = await store.boards.findForUser(boardId, auth.user.id)
     if (access === null) {
       return NO_ACCESS
     }
-    const subject = { user: auth.user, workspaceRole: access.role }
+    const subject: BoardSubject = { user: auth.user, workspaceRole: access.role, boardRole: access.boardRole }
     if (!decideBoardAccess(subject, access.workspace, access.board, 'board:read').allowed) {
       // Wer nicht lesen darf, erfaehrt nicht, ob es das Board gibt.
       return NO_ACCESS
@@ -446,11 +450,11 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
           if (found === null) {
             continue
           }
-          // Dieselbe Entscheidung wie in der HTTP-Route, mit demselben Subjekt aus Nutzer und
-          // Workspacerolle. Die Rolle wird hier frisch unter der Zeilensperre gelesen; eine Deaktivierung
-          // schliesst die Verbindung bereits ueber die Sitzungsebene.
+          // Dieselbe Entscheidung wie in der HTTP-Route, mit demselben Subjekt aus Nutzer, Workspacerolle
+          // und Boardrolle. Beide Rollen werden hier frisch unter der Zeilensperre gelesen; eine
+          // Deaktivierung schliesst die Verbindung bereits ueber die Sitzungsebene.
           const decision = decideBoardAccess(
-            { user: candidate, workspaceRole: found.role },
+            { user: candidate, workspaceRole: found.role, boardRole: found.boardRole },
             found.workspace,
             found.board,
             'scene:write',

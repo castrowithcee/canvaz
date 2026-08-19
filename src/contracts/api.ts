@@ -202,6 +202,14 @@ export const BOARD_STATUS_PATH = `${API_BASE_PATH}/boards/status`
 /** Laden (GET) und Speichern (POST) der Szene eines Boards. */
 export const BOARD_SCENE_PATH = `${API_BASE_PATH}/boards/scene`
 
+/** Interne Freigaben eines Boards: lesen (GET), anlegen, aendern und entziehen (POST). */
+export const BOARD_GRANTS_PATH = `${API_BASE_PATH}/boards/grants`
+export const BOARD_GRANT_ADD_PATH = `${API_BASE_PATH}/boards/grants/add`
+export const BOARD_GRANT_ROLE_PATH = `${API_BASE_PATH}/boards/grants/role`
+export const BOARD_GRANT_REMOVE_PATH = `${API_BASE_PATH}/boards/grants/remove`
+/** Uebertragung der Ownerschaft. Eigener Pfad, weil die Ownerschaft keine Freigabe ist. */
+export const BOARD_OWNER_PATH = `${API_BASE_PATH}/boards/owner`
+
 /** Kennung des Boards als Query-Parameter der lesenden Boardendpunkte. */
 export const BOARD_ID_PARAM = 'boardId'
 /** Titelfilter der Boardliste. Ein Teilstring ohne Platzhalterdeutung; leer heisst: kein Filter. */
@@ -274,6 +282,60 @@ export type SaveSceneResponse = {
  */
 export type SceneConflictResponse = ErrorResponse & {
   readonly currentVersion: number
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+/* Interne Boardfreigaben                                                                                */
+/* ---------------------------------------------------------------------------------------------------- */
+
+export type BoardRoleView = 'owner' | 'editor' | 'viewer'
+
+/**
+ * Die vergebbaren Boardrollen. `owner` fehlt bewusst: die Ownerschaft wird uebertragen und nicht vergeben,
+ * damit ein Board immer genau einen Owner hat.
+ */
+export type BoardGrantRoleView = Exclude<BoardRoleView, 'owner'>
+
+export type BoardGrantView = {
+  readonly userId: string
+  readonly displayName: string
+  readonly email: string | null
+  readonly role: BoardGrantRoleView
+  /** ISO-8601, Zeitpunkt der Freigabe. */
+  readonly grantedAt: string
+}
+
+/**
+ * Freigabeliste eines Boards. Der Owner steht nicht darin, sondern in `board.ownerUserId` - er ist keine
+ * Freigabe, sondern der Verantwortliche.
+ */
+export type BoardGrantsResponse = {
+  readonly board: BoardView
+  readonly grants: readonly BoardGrantView[]
+}
+
+export type ShareBoardRequest = {
+  readonly boardId: string
+  readonly userId: string
+  readonly role: BoardGrantRoleView
+}
+
+export type ChangeBoardGrantRoleRequest = ShareBoardRequest
+
+export type RevokeBoardGrantRequest = {
+  readonly boardId: string
+  readonly userId: string
+}
+
+/** Antwort auf eine Freigabe, Rollenaenderung oder einen Entzug. `role === null` heisst: keine Freigabe mehr. */
+export type BoardGrantChangeResponse = {
+  readonly userId: string
+  readonly role: BoardGrantRoleView | null
+}
+
+export type TransferBoardOwnershipRequest = {
+  readonly boardId: string
+  readonly userId: string
 }
 
 /* ---------------------------------------------------------------------------------------------------- */

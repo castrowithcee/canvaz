@@ -12,17 +12,20 @@ import type { Pool } from 'pg'
 import type { SceneSnapshot } from '../contracts/scene.js'
 import { parseSceneSnapshot } from '../contracts/scene.js'
 import type { UserId } from '../domain/identity/model.js'
-import type { Board, BoardId, BoardStatus } from '../domain/board/model.js'
+import type { Board, BoardGrantRole, BoardId, BoardStatus } from '../domain/board/model.js'
+import { resolveBoardRole } from '../domain/board/model.js'
 import type {
   BoardAccess,
   BoardAsset,
   BoardFilter,
+  BoardGrant,
+  BoardGrantEntry,
   BoardListEntry,
   BoardStore,
   NewBoardAsset,
   SceneVersion,
 } from '../domain/board/repositories.js'
-import { CorruptSceneError, SceneConflictError } from '../domain/board/repositories.js'
+import { BoardGrantConflictError, CorruptSceneError, SceneConflictError } from '../domain/board/repositories.js'
 import type { WorkspaceId, WorkspaceRole, WorkspaceStatus } from '../domain/workspace/model.js'
 import type { Queryable } from './workspace-store.js'
 import { createWorkspaceStoreOn } from './workspace-store.js'
@@ -90,6 +93,29 @@ function toBoardAsset(row: BoardAssetRow): BoardAsset {
   }
 }
 
+type BoardGrantRow = {
+  board_id: string
+  workspace_id: string
+  user_id: string
+  role: string
+  created_at: Date
+  updated_at: Date
+}
+
+const BOARD_GRANT_COLUMNS = 'board_id, workspace_id, user_id, role, created_at, updated_at'
+
+function toBoardGrant(row: BoardGrantRow): BoardGrant {
+  return {
+    boardId: row.board_id,
+    workspaceId: row.workspace_id,
+    userId: row.user_id,
+    // Der Check-Constraint laesst nur diese Werte zu; `owner` kann dort nicht stehen.
+    role: row.role as BoardGrantRole,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
 function requireRow<T>(row: T | undefined, message: string): T {
   if (row === undefined) {
     throw new Error(message)
@@ -126,10 +152,15 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
     if (row === undefined) {
       return null
     }
-    const membership = await db.query<{ role: string }>(
-      'select role from workspace_memberships where workspace_id = $1 and user_id = $2',
-      [row.workspace_id, userId],
+    // Beide Rollen in einer Abfrage: Mitgliedschaft und Freigabe entscheiden gemeinsam, und zwei getrennte
+    // Abfragen waeren zwei Zeitpunkte. Ausserhalb einer Transaktion faellt eine Aenderung dazwischen sonst
+    // genau in die Luecke.
+    const roles = await db.query<{ workspace_role: string | null; grant_role: string | null }>(
+      `select (select role from workspace_memberships where workspace_id = $1 and user_id = $2) as workspace_role,
+              (select role from board_grants where board_id = $3 and user_id = $2) as grant_role`,
+      [row.workspace_id, userId, row.id],
     )
+    const roleRow = roles.rows[0]
     return {
       board: toBoard(row),
       workspace: {
@@ -139,7 +170,12 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
         createdAt: row.workspace_created_at,
         updatedAt: row.workspace_updated_at,
       },
-      role: (membership.rows[0]?.role as WorkspaceRole | undefined) ?? null,
+      role: (roleRow?.workspace_role as WorkspaceRole | null | undefined) ?? null,
+      boardRole: resolveBoardRole(
+        row.owner_user_id,
+        userId,
+        (roleRow?.grant_role as BoardGrantRole | null | undefined) ?? null,
+      ),
       ownerDisplayName: row.owner_display_name,
     }
   }
@@ -204,6 +240,14 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
         return toBoard(requireRow(result.rows[0], `Unbekanntes Board ${id}`))
       },
 
+      async setOwner(id: BoardId, ownerId: UserId): Promise<Board> {
+        const result = await db.query<BoardRow>(
+          `update boards set owner_user_id = $2, updated_at = now() where id = $1 returning ${BOARD_COLUMNS}`,
+          [id, ownerId],
+        )
+        return toBoard(requireRow(result.rows[0], `Unbekanntes Board ${id}`))
+      },
+
       async setSceneVersion(id: BoardId, version: number): Promise<Board> {
         const result = await db.query<BoardRow>(
           `update boards set current_scene_version = $2, updated_at = now()
@@ -212,6 +256,70 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
           [id, version],
         )
         return toBoard(requireRow(result.rows[0], `Unbekanntes Board ${id}`))
+      },
+    },
+
+    grants: {
+      async listForBoard(boardId: BoardId): Promise<readonly BoardGrantEntry[]> {
+        const result = await db.query<BoardGrantRow & { display_name: string; email: string | null }>(
+          `select g.board_id, g.workspace_id, g.user_id, g.role, g.created_at, g.updated_at,
+                  u.display_name, u.email
+             from board_grants g
+             join users u on u.id = g.user_id
+            where g.board_id = $1
+            order by u.display_name, g.user_id`,
+          [boardId],
+        )
+        return result.rows.map((row) => ({
+          ...toBoardGrant(row),
+          displayName: row.display_name,
+          email: row.email,
+        }))
+      },
+
+      async find(boardId: BoardId, userId: UserId): Promise<BoardGrant | null> {
+        const result = await db.query<BoardGrantRow>(
+          `select ${BOARD_GRANT_COLUMNS} from board_grants where board_id = $1 and user_id = $2`,
+          [boardId, userId],
+        )
+        const row = result.rows[0]
+        return row === undefined ? null : toBoardGrant(row)
+      },
+
+      async add(
+        boardId: BoardId,
+        workspaceId: WorkspaceId,
+        userId: UserId,
+        role: BoardGrantRole,
+      ): Promise<BoardGrant> {
+        try {
+          const result = await db.query<BoardGrantRow>(
+            `insert into board_grants (board_id, workspace_id, user_id, role)
+             values ($1, $2, $3, $4)
+             returning ${BOARD_GRANT_COLUMNS}`,
+            [boardId, workspaceId, userId, role],
+          )
+          return toBoardGrant(requireRow(result.rows[0], 'Freigabe konnte nicht angelegt werden'))
+        } catch (error) {
+          if (typeof error === 'object' && error !== null && (error as { code?: unknown }).code === UNIQUE_VIOLATION) {
+            throw new BoardGrantConflictError(error)
+          }
+          throw error
+        }
+      },
+
+      async setRole(boardId: BoardId, userId: UserId, role: BoardGrantRole): Promise<BoardGrant> {
+        const result = await db.query<BoardGrantRow>(
+          `update board_grants set role = $3, updated_at = now()
+            where board_id = $1 and user_id = $2
+            returning ${BOARD_GRANT_COLUMNS}`,
+          [boardId, userId, role],
+        )
+        return toBoardGrant(requireRow(result.rows[0], 'Unbekannte Freigabe'))
+      },
+
+      async remove(boardId: BoardId, userId: UserId): Promise<void> {
+        await db.query('delete from board_grants where board_id = $1 and user_id = $2', [boardId, userId])
       },
     },
 

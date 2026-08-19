@@ -87,8 +87,9 @@ Ein Upgrade mit fremdem `Origin` wird abgewiesen, weil der CSRF-Header beim Hand
 Ein **Arbeitsbereich** ist die aeussere Datengrenze der Instanz: jeder fachliche Datensatz traegt seinen
 Workspacebezug, und ein Nutzer sieht ausschliesslich Arbeitsbereiche, denen er angehoert.
 
-Bestaetigte Rollen sind `owner`, `admin` und `member`. Boardrollen und Gastrollen sind eine eigene Ebene und
-folgen in einem spaeteren Paket.
+Bestaetigte Rollen sind `owner`, `admin` und `member`. **Boardrollen sind eine eigene Ebene darunter** und
+wirken zusaetzlich zur Mitgliedschaft (siehe *Boards und Szenen*); Gastrollen folgen in einem spaeteren
+Paket.
 
 ### Eine Stelle entscheidet
 
@@ -113,8 +114,8 @@ Mitgliedschaft - die Sitzung selbst wird bereits von `authenticate()` verweigert
 zusaetzlich ab.
 
 Ein **Systemadmin ist nicht automatisch Mitglied**. Er verwaltet jeden Arbeitsbereich, damit keiner
-unadministrierbar wird, aber seine eigene Liste bleibt leer, und der spaetere Inhaltszugriff auf Boards
-haengt an der Mitgliedschaft, nicht an dieser Stufe.
+unadministrierbar wird, aber seine eigene Liste bleibt leer, und der Inhaltszugriff auf Boards haengt an der
+Mitgliedschaft, nicht an dieser Stufe.
 
 ### Invarianten
 
@@ -188,18 +189,64 @@ verweigernd. Sie baut auf der Workspace-Policy auf, statt sie umzubauen: `decide
 { kind: 'workspace:read' })` ist die Vorbedingung jeder Boardaktion. `src/domain/workspace/policy.ts` kennt
 weiterhin keine Boards.
 
-In diesem Paket entscheidet die **Workspace-Mitgliedschaft**: `owner`, `admin` und `member` duerfen im
-aktiven Arbeitsbereich jedes Board lesen, anlegen, umbenennen, archivieren und seine Szene speichern. Die
-feingranularen Boardrollen (`owner`, `editor`, `viewer`) und Gastlinks setzen spaeter genau hier an, nicht in
-der Workspace-Policy.
+Zwei unabhaengige Eingaben entscheiden, in dieser Reihenfolge:
+
+1. Die **Workspace-Mitgliedschaft** ist die Eintrittskarte. Ohne Rolle im Arbeitsbereich gibt es keinen
+   Boardzugriff, und **keine Boardrolle kann das umgehen**.
+2. Die **Boardrolle** (`owner`, `editor`, `viewer`) verfeinert die Mitgliedschaft je Board. Sie wirkt
+   *zusaetzlich* zur Mitgliedschaft und wird als Freigabe an einen vorhandenen internen Nutzer vergeben.
+
+**Ohne ausdrueckliche Freigabe gilt `editor`.** Ein Arbeitsbereich ist ein gemeinsamer Arbeitsraum; eine
+Freigabe schraenkt darin gezielt ein oder benennt jemanden ausdruecklich, statt jedem Mitglied den Zugang
+erst einzeln eroeffnen zu muessen. Deshalb bleibt der Entzug einer Freigabe genau das: die ausdrueckliche
+Boardrolle faellt weg, und es gilt wieder die Mitgliedschaft.
+
+| Aktion | Board-`owner` | Workspace-`owner` | `editor` (auch ohne Freigabe) | `viewer` | Nichtmitglied | Systemadmin ohne Mitgliedschaft | deaktiviert |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Board sehen, oeffnen, Szene laden | ja | ja | ja | ja | nein | nein | nein |
+| umbenennen, archivieren, entarchivieren | ja | ja | ja | nein | nein | nein | nein |
+| Szene speichern, Bild hochladen | ja | ja | ja | nein | nein | nein | nein |
+| Freigaben anlegen, aendern, entziehen | ja | ja | nein | nein | nein | nein | nein |
+| Ownerschaft uebertragen | ja | ja | nein | nein | nein | nein | nein |
+
+Ein Board **anlegen** darf jedes Mitglied eines aktiven Arbeitsbereichs: vor der Anlage gibt es noch kein
+Board und damit auch keine Boardrolle, ueber die zu entscheiden waere. Der Ersteller wird sein Owner.
+
+Der **Workspace-Owner** steht auf jedem Board seines Arbeitsbereichs auf Ownerstufe - auch auf einem, das
+ihm nicht gehoert. Ohne das waere ein Board, dessen Owner den Arbeitsbereich verlassen hat oder deaktiviert
+wurde, dauerhaft unverwaltbar; es ist dieselbe Ueberlegung, aus der ein Systemadmin jeden Arbeitsbereich
+verwaltet. Ein Workspace-`admin` bekommt diese Stufe bewusst **nicht**: er verwaltet Mitglieder, nicht die
+Verantwortung fuer einzelne Boards.
 
 Ein **Systemadmin ohne Mitgliedschaft** hat keinen Inhaltszugriff. Er verwaltet Arbeitsbereiche, damit keiner
-unadministrierbar wird; ein Board sieht fuer ihn aus wie eine erfundene Kennung. Ein **deaktivierter** Nutzer
-verliert jeden Zugriff bereits in `authenticate()`.
+unadministrierbar wird; ein Board sieht fuer ihn aus wie eine erfundene Kennung - eine Boardrolle hilft ihm
+dabei nicht. Ein **deaktivierter** Nutzer verliert jeden Zugriff bereits in `authenticate()`.
 
-**Archiviert heisst lesbar, aber unveraenderlich** - auf beiden Ebenen. In einem archivierten Arbeitsbereich
-laesst sich kein Board mehr anlegen, umbenennen, archivieren oder speichern. Bei einem archivierten Board
-bleibt nur das Entarchivieren.
+**Archiviert heisst lesbar, aber unveraenderlich** - auf beiden Ebenen und fuer jede Boardrolle. In einem
+archivierten Arbeitsbereich laesst sich kein Board mehr anlegen, umbenennen, archivieren, speichern oder
+freigeben. Bei einem archivierten Board bleibt nur das Entarchivieren.
+
+### Interne Freigaben
+
+Eine **Freigabe** gibt einem vorhandenen internen Nutzer eine eigene Rolle auf genau einem Board. Vergeben
+werden ausschliesslich `editor` und `viewer`; die Ownerschaft ist keine Freigabe, sondern die Spalte
+`boards.owner_user_id`. Sie wird uebertragen und nie vergeben - dadurch hat ein Board immer **genau einen**
+Owner, strukturell und nicht nur durch Anwendungslogik. Der Check-Constraint auf `board_grants.role` laesst
+`owner` gar nicht erst zu.
+
+Freigegeben wird nur an **Mitglieder desselben Arbeitsbereichs** und nur an aktive Nutzer. Beides wird in
+derselben Transaktion gelesen, in der geschrieben wird, und die Nutzerzeile ist dabei lesegesperrt: eine
+gleichzeitige Deaktivierung oder ein gleichzeitiger Mitgliedschaftsentzug hinterlaesst keine Freigabe auf
+einem ueberholten Stand. Eine Zeile, die einer fehlenden Mitgliedschaft widerspricht, entsteht damit gar
+nicht erst - sie waere ohnehin wirkungslos.
+
+Bei der **Uebertragung der Ownerschaft** faellt der bisherige Owner auf seine Mitgliedschaft zurueck, und
+eine bestehende Freigabezeile des neuen Owners wird entfernt: sie waere von diesem Moment an wirkungslos und
+beim naechsten Wechsel eine stille Herabstufung.
+
+Eine Freigabe kann sich **nicht selbst weitergeben**: ein `editor` verwaltet keine Freigaben, sonst waere
+jede Abstufung mit einem Schritt wieder aufgehoben. Und der Owner kann sich seine Ownerschaft nicht
+entziehen - dafuer gibt es nur die Uebertragung.
 
 ### Endpunkte
 
@@ -216,11 +263,25 @@ Die Antwort entsteht in der Transaktion und wird erst nach dem Commit gesendet.
 | POST | `/api/boards/scene` | `scene:write` | 404 unsichtbar, sonst 403 | 409 |
 | POST | `/api/boards/assets?boardId=&fileId=` | `scene:write` | 404 unsichtbar, sonst 403 | 409 |
 | GET | `/api/boards/assets?boardId=&fileId=` | `board:read` | 404 | — |
+| GET | `/api/boards/grants?boardId=` | `board:read` | 404 | — |
+| POST | `/api/boards/grants/add` | `grant:manage` | 404 unsichtbar, sonst 403 | 409 |
+| POST | `/api/boards/grants/role` | `grant:manage` | 404 unsichtbar, sonst 403 | — |
+| POST | `/api/boards/grants/remove` | `grant:manage` | 404 unsichtbar, sonst 403 | 409 |
+| POST | `/api/boards/owner` | `board:transfer-ownership` | 404 unsichtbar, sonst 403 | — |
 
 `status` trennt die aktive Liste von der Archivansicht (Standard `active`), `q` filtert nach einem Teilstring
 im Titel - ohne Platzhalterdeutung, damit `%` und `_` keine Wirkung haben.
 
 **404 statt 403, wo die Existenz sonst durchscheinen wuerde**, genau wie bei den Arbeitsbereichen.
+
+Die **409** der Freigaberouten sind benannt: eine bereits bestehende Freigabe, eine Freigabe an den
+Board-Owner (er traegt seine Rolle in `boards.owner_user_id`) und der Versuch, dem Owner seine Ownerschaft zu
+entziehen. Ein unbekannter Zielnutzer ergibt 404, ein deaktivierter oder nicht zum Arbeitsbereich gehoerender
+400 - beides erst **nach** der Berechtigungspruefung, damit die Antwort nicht verraet, welche Nutzerkennungen
+es gibt.
+
+Freigegeben wird an Nutzer, die bereits Mitglied des Arbeitsbereichs sind; die Auswahl kommt aus
+`/api/workspaces/members`. Ein eigenes Nutzerverzeichnis hat die Boardebene deshalb nicht.
 
 ### Optimistische Versionspruefung
 
@@ -449,12 +510,37 @@ schlichte Zeichenketten heraus und herein.
 - `SceneSnapshot.files[].storageKey` kommt zwar vom Server, wird beim Abruf aber nicht verwendet: massgeblich
   ist ausschliesslich `board_assets.storage_key`. Ein Client kann ueber die Szene keinen fremden Schluessel
   erreichbar machen.
+- `board_grants.user_id` traegt `on delete cascade`: ein direktes Loeschen eines Nutzers in der Datenbank
+  raeumt seine Freigaben mit ab. Ueber die Anwendung gibt es kein Loeschen, nur Deaktivierung - und die
+  entzieht den Zugriff bereits ueber `authenticate()` und die Policy.
+- Wird ein Nutzer aus dem Arbeitsbereich entfernt, bleiben seine Freigabezeilen stehen. Sie sind wirkungslos
+  (ohne Mitgliedschaft ist das Board unsichtbar) und wirken bei einer Wiederaufnahme in denselben
+  Arbeitsbereich erneut. Ein Aufraeumen waere eine eigene Entscheidung; die Sicherheit haengt nicht daran.
+- Der Board-Owner kann ohne Mitgliedschaft im Arbeitsbereich sein - etwa nach einem Mitgliedschaftsentzug.
+  Das Board bleibt trotzdem verwaltbar, weil der Workspace-Owner auf jedem Board Ownerstufe traegt.
+
+### Invarianten
+
+- Der Ersteller wird Board-Owner. **Ein Board hat immer genau einen Owner**: er steht in der `not null`-Spalte
+  `boards.owner_user_id`, und `board_grants` kann die Rolle `owner` gar nicht tragen.
+- Jede Freigabe- und Ownerschaftsaenderung sperrt zuerst die Boardzeile (`select ... for no key update`).
+  Dadurch sind gleichzeitige Uebertragungen serialisiert, und die Entscheidung faellt nie auf einem
+  veralteten Stand - dieselbe Absicherung wie bei der Ownerinvariante des Arbeitsbereichs.
+- Eine Freigabe entsteht nur fuer einen aktiven Nutzer, der Mitglied desselben Arbeitsbereichs ist. Status
+  und Mitgliedschaft werden in derselben Transaktion gelesen, in der geschrieben wird.
+- Die Antwort entsteht in der Transaktion und wird erst nach dem Commit gesendet.
 
 ### Nachweis
 
 Anlage, Umbenennung, Archivierung und Entarchivierung eines Boards schreiben ein Ereignis nach
-`audit_events` (`targetType: 'board'`). Einzelne Speicherungen tun das nicht: sie sind Inhalt, nicht
-Verwaltung, und `audit_events` enthaelt nie Boardinhalte. Die Historie der Inhalte steht in `scene_versions`.
+`audit_events` (`targetType: 'board'`), ebenso die Uebertragung der Ownerschaft
+(`board.ownership-transferred` mit bisherigem und neuem Owner). Jede Freigabe, Rollenaenderung und jeder
+Entzug schreibt `board-grant.added`, `board-grant.role-changed` oder `board-grant.removed`
+(`targetType: 'board-grant'`, Ziel ist der betroffene Nutzer, Boardbezug und Rollen stehen in `details`).
+Aenderung und Nachweis entstehen in derselben Transaktion; eine abgelehnte Aenderung schreibt nichts.
+
+Einzelne Speicherungen schreiben keinen Nachweis: sie sind Inhalt, nicht Verwaltung, und `audit_events`
+enthaelt nie Boardinhalte und nie Tokenmaterial. Die Historie der Inhalte steht in `scene_versions`.
 
 ## Echtzeit-Kollaboration
 
@@ -510,21 +596,30 @@ einer Verbindung eine Berechtigung wird (`resolveAccess` in `src/server/board-ro
 dieselbe Funktion auf wie jede Route: `decideBoardAccess`. Gelesen wird bei **jedem** Aufruf frisch, ohne
 Zwischenspeicher.
 
+`resolveAccess` liest dabei **Mitgliedschaft und Boardrolle aus demselben Datensatz** und baut denselben
+`BoardSubject`, den auch die Routen bauen.
+
 - **Beim Beitritt** entscheidet `board:read`. Wer nicht lesen darf, bekommt `board-nicht-gefunden` - genau
   dieselbe Antwort wie fuer eine erfundene Kennung. Ob es das Board gibt, erfaehrt er nicht.
 - **Bei jeder Aenderungsnachricht** wird `scene:write` erneut aufgeloest. Eine manipulierte Nachricht eines
   Teilnehmers ohne Schreibrecht wird verworfen, veraendert den Raumzustand nicht und erreicht niemanden.
 - **Beim Checkpoint** entscheidet dieselbe Policy noch einmal unter der Zeilensperre des Boards.
 - **Stille Verbindungen** werden alle zwei Sekunden nachgeprueft. Ein Mitgliedschaftsentzug beendet die
-  Verbindung mit dem Schliessgrund `4403`, eine Archivierung stuft sie auf Nur-Lesen herab (`access`) -
-  beides ohne dass sich jemand neu anmelden muss. Deaktivierung und Logout schliessen bereits auf der
-  Sitzungsebene (`4401`).
+  Verbindung mit dem Schliessgrund `4403`, eine Archivierung oder eine Herabstufung auf `viewer` stuft sie
+  auf Nur-Lesen herab (`access`) - beides ohne dass sich jemand neu anmelden muss. Deaktivierung und Logout
+  schliessen bereits auf der Sitzungsebene (`4401`).
+
+Eine **Rollenaenderung waehrend einer offenen Verbindung** wirkt sofort und ohne Protokollaenderung: die
+Herabstufung auf `viewer` schickt ein `access` mit `canWrite: false`, und die naechste Aenderungsnachricht
+wird mit `kein-schreibrecht` abgelehnt. Der Entzug der Freigabe stellt umgekehrt den Standard wieder her und
+schickt `access` mit `canWrite: true`. Nur der Verlust der **Mitgliedschaft** beendet die Verbindung - eine
+Boardrolle traegt ohne sie nichts.
 
 Presence ist ausdruecklich **kein** Schreibzugriff auf den Boardzustand; sie setzt Raummitgliedschaft
 voraus, die beim Beitritt geprueft und durch den Wiederholungslauf laufend bestaetigt wird.
 
-Feingranulare Boardrollen und Gastlinks (`boardRole`, `guestGrant`) setzen in `resolveAccess` und in
-`decideBoardAccess` an - das Protokoll aendert sich dafuer nicht.
+Gastlinks (`guestGrant`) setzen als weiteres Feld in `resolveAccess` und in `decideBoardAccess` an - das
+Protokoll aendert sich dafuer nicht.
 
 ### Was Presence uebertraegt
 
@@ -686,9 +781,8 @@ zurueck, und `'self'` deckt die gleichnamige WebSocket-Herkunft ab.
 - **Volles Board bleibt voll.** Ist die Obergrenze des Raumzustands erreicht, wird Wachstum benannt
   abgelehnt. Loeschen hilft nur begrenzt, weil ein Tombstone ungefaehr so gross ist wie das Element selbst.
   Verdichtete Tombstones waeren der Ausbauweg, wenn das im Betrieb je auftritt.
-- **Keine Boardrollen.** In diesem Paket entscheidet die Workspace-Mitgliedschaft; einen Teilnehmer, der
-  lesen aber nicht schreiben darf, gibt es nur ueber Archivierung. Echte Viewer und Gaeste kommen mit den
-  Boardrollen.
+- **Keine Gaeste.** Am Raum nimmt nur teil, wer Mitglied des Arbeitsbereichs ist; ein Nur-Lese-Teilnehmer
+  entsteht ueber die Boardrolle `viewer` oder ueber Archivierung. Gastlinks kommen in einem eigenen Paket.
 - Der Zeigezustand wird an Zeigerbewegungen gehaengt. Eine Auswahl ohne jede Mausbewegung (etwa per
   Tastatur) wird erst mit der naechsten Bewegung sichtbar.
 
@@ -751,6 +845,13 @@ Anwendungsprozess vollstaendig ersetzen, abrufen, Bytes vergleichen.
 `tests/integration/realtime.test.ts` faehrt die Echtzeitstrecke ueber **echte WebSocket-Verbindungen**:
 Beitritt mit und ohne Berechtigung, Entzug und Archivierung waehrend bestehender Verbindung, manipulierte
 Nachrichten, Konfliktfaelle und Checkpoints.
+
+`tests/integration/board-grants.test.ts` prueft die internen Freigaben: die Wirkung jeder Boardrolle an dem,
+was der Betroffene danach tatsaechlich noch darf, die Negativfaelle der vier Routen, die Ownerinvariante
+gegen die Datenbank sowie Herabstufung und Entzug waehrend einer bestehenden WebSocket-Verbindung.
+`tests/unit/board-policy.test.ts` durchlaeuft die Rollenmatrix vollstaendig - jede Kombination aus
+Workspace-Rolle, Boardrolle, Workspace- und Boardstatus sowie Nutzerstatus gegen eine von Hand gesetzte
+Erwartungstabelle.
 
 Pruefungen an der echten Oberflaeche laufen nicht als Suite im Repo, sondern manuell mit der
 `agent-browser`-CLI.

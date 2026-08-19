@@ -20,6 +20,9 @@ import { createHash } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import type {
+  BoardGrantChangeResponse,
+  BoardGrantView,
+  BoardGrantsResponse,
   BoardSceneResponse,
   BoardView,
   BoardsResponse,
@@ -32,7 +35,12 @@ import {
   ASSET_FILE_ID_PARAM,
   ASSET_FILE_NAME_PARAM,
   BOARD_ASSETS_PATH,
+  BOARD_GRANT_ADD_PATH,
+  BOARD_GRANT_REMOVE_PATH,
+  BOARD_GRANT_ROLE_PATH,
+  BOARD_GRANTS_PATH,
   BOARD_ID_PARAM,
+  BOARD_OWNER_PATH,
   BOARD_QUERY_PARAM,
   BOARD_RENAME_PATH,
   BOARD_SCENE_PATH,
@@ -50,23 +58,24 @@ import {
   parseSceneSnapshot,
   serializeSceneSnapshot,
 } from '../contracts/scene.js'
-import type { Board, BoardId, BoardStatus } from '../domain/board/model.js'
+import type { Board, BoardId, BoardRole, BoardStatus } from '../domain/board/model.js'
 import {
   MAX_BOARD_TITLE_LENGTH,
   SCENE_VERSION_RETENTION,
   normalizeBoardTitle,
   parseBaseVersion,
+  parseBoardGrantRole,
   parseBoardStatus,
 } from '../domain/board/model.js'
-import type { BoardAction, BoardDenialReason } from '../domain/board/policy.js'
+import type { BoardAction, BoardDenialReason, BoardSubject } from '../domain/board/policy.js'
 import { decideBoardAccess } from '../domain/board/policy.js'
-import type { BoardAccess, BoardAsset, BoardStore } from '../domain/board/repositories.js'
-import { CorruptSceneError, SceneConflictError } from '../domain/board/repositories.js'
-import type { AuthenticatedSession } from '../domain/identity/model.js'
+import type { BoardAccess, BoardAsset, BoardGrantEntry, BoardStore } from '../domain/board/repositories.js'
+import { BoardGrantConflictError, CorruptSceneError, SceneConflictError } from '../domain/board/repositories.js'
+import type { AuthenticatedSession, UserId } from '../domain/identity/model.js'
 import { buildAssetStorageKey } from '../domain/storage/asset-storage-port.js'
 import { ALLOWED_IMAGE_TYPES, isAllowedImageType, sniffImageType } from '../domain/storage/image-type.js'
 import type { Workspace, WorkspaceRole } from '../domain/workspace/model.js'
-import type { PolicySubject } from '../domain/workspace/policy.js'
+import type { MembershipTarget } from '../domain/workspace/repositories.js'
 import type { AppContext } from './context.js'
 import { requireCsrfToken, requireSession } from './guard.js'
 import type { Route } from './http.js'
@@ -162,6 +171,16 @@ function toBoardView(board: Board, ownerDisplayName: string): BoardView {
   }
 }
 
+function toGrantView(grant: BoardGrantEntry): BoardGrantView {
+  return {
+    userId: grant.userId,
+    displayName: grant.displayName,
+    email: grant.email,
+    role: grant.role,
+    grantedAt: grant.createdAt.toISOString(),
+  }
+}
+
 function toWorkspaceView(workspace: Workspace, role: WorkspaceRole | null): WorkspaceView {
   return {
     id: workspace.id,
@@ -176,22 +195,28 @@ function toWorkspaceView(workspace: Workspace, role: WorkspaceRole | null): Work
 export function createBoardRoutes(context: AppContext): readonly Route[] {
   const { boards: store } = context
 
-  function subjectOf(auth: AuthenticatedSession, role: WorkspaceRole | null): PolicySubject {
-    return { user: auth.user, workspaceRole: role }
+  function subjectOf(
+    auth: AuthenticatedSession,
+    role: WorkspaceRole | null,
+    boardRole: BoardRole | null,
+  ): BoardSubject {
+    return { user: auth.user, workspaceRole: role, boardRole }
   }
 
   /**
    * Einziger Weg zu einer Entscheidung. `null` heisst erlaubt; sonst steht die Ablehnung als fertige Antwort
-   * bereit, und der Aufrufer beendet sich.
+   * bereit, und der Aufrufer beendet sich. Workspacerolle und Boardrolle kommen beide aus demselben
+   * geladenen Datensatz; entschieden wird ausschliesslich in der Policy.
    */
   function deny(
     auth: AuthenticatedSession,
     workspace: Workspace,
     role: WorkspaceRole | null,
+    boardRole: BoardRole | null,
     board: Board | null,
     action: BoardAction,
   ): Reply | null {
-    const decision = decideBoardAccess(subjectOf(auth, role), workspace, board, action)
+    const decision = decideBoardAccess(subjectOf(auth, role, boardRole), workspace, board, action)
     if (decision.allowed) {
       return null
     }
@@ -222,7 +247,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
     if (access === null) {
       return fail(404, NOT_FOUND.message)
     }
-    return deny(auth, access.workspace, access.role, access.board, 'board:read') ?? access
+    return deny(auth, access.workspace, access.role, access.boardRole, access.board, 'board:read') ?? access
   }
 
   /** Gemeinsamer Einstieg der zustandsaendernden Boardrouten: Sitzung, CSRF, Kennung, Sperre, Sichtbarkeit. */
@@ -255,6 +280,53 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
     send(response, reply)
   }
 
+  /**
+   * Zielnutzer einer Freigabe oder einer Uebertragung.
+   *
+   * Wird ausschliesslich **nach** der Berechtigungspruefung aufgerufen, sonst verriete die Antwort, welche
+   * Nutzerkennungen es gibt. Status und Mitgliedschaft stammen aus derselben Transaktion wie der
+   * Schreibvorgang; die Nutzerzeile ist dabei lesegesperrt. Eine Boardrolle ohne Mitgliedschaft im
+   * Arbeitsbereich entsteht dadurch gar nicht erst - sie waere ohnehin wirkungslos, aber eben auch eine
+   * Zeile, die etwas anderes behauptet.
+   */
+  async function requireGrantTarget(
+    tx: BoardStore,
+    access: BoardAccess,
+    userId: UserId,
+  ): Promise<{ readonly target: MembershipTarget } | Reply> {
+    const target = await tx.workspaces.findUserForMembership(userId)
+    if (target === null) {
+      return fail(404, 'Unbekannter Nutzer')
+    }
+    if (target.status !== 'active') {
+      return fail(400, 'Ein deaktivierter Nutzer kann weder eine Freigabe erhalten noch ein Board uebernehmen')
+    }
+    const membership = await tx.workspaces.findMembership(access.workspace.id, userId)
+    if (membership === null) {
+      return fail(400, 'Nur Mitglieder des Arbeitsbereichs koennen eine Boardrolle erhalten')
+    }
+    return { target }
+  }
+
+  /** Nachweis einer Freigabeaenderung. Traegt Rollen und Bezuege, nie Boardinhalt. */
+  async function recordGrantEvent(
+    tx: BoardStore,
+    auth: AuthenticatedSession,
+    access: BoardAccess,
+    action: string,
+    userId: UserId,
+    details: Readonly<Record<string, string | number | boolean | null>>,
+  ): Promise<void> {
+    await tx.audit.record({
+      actorId: auth.user.id,
+      action,
+      targetType: 'board-grant',
+      targetId: userId,
+      workspaceId: access.workspace.id,
+      details: { boardId: access.board.id, ...details },
+    })
+  }
+
   return [
     {
       method: 'GET',
@@ -276,7 +348,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
         }
         // Ohne Board entscheidet allein die Mitgliedschaft im Workspace; ein Systemadmin ohne Rolle bekommt
         // hier dieselbe 404 wie fuer eine erfundene Kennung.
-        const denial = deny(auth, access.workspace, access.role, null, 'board:read')
+        const denial = deny(auth, access.workspace, access.role, null, null, 'board:read')
         if (denial !== null) {
           send(response, denial)
           return
@@ -317,7 +389,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
           if (access === null) {
             return fail(404, NOT_FOUND.message)
           }
-          const denial = deny(guarded.auth, access.workspace, access.role, null, 'board:create')
+          const denial = deny(guarded.auth, access.workspace, access.role, null, null, 'board:create')
           if (denial !== null) {
             return denial
           }
@@ -346,7 +418,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
           if (title === null) {
             return fail(400, `Ein Titel mit 1 bis ${String(MAX_BOARD_TITLE_LENGTH)} Zeichen wird erwartet`)
           }
-          const denial = deny(auth, access.workspace, access.role, access.board, 'board:rename')
+          const denial = deny(auth, access.workspace, access.role, access.boardRole, access.board, 'board:rename')
           if (denial !== null) {
             return denial
           }
@@ -374,7 +446,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
             return fail(400, 'status muss active oder archived sein')
           }
           const action: BoardAction = status === 'archived' ? 'board:archive' : 'board:unarchive'
-          const denial = deny(auth, access.workspace, access.role, access.board, action)
+          const denial = deny(auth, access.workspace, access.role, access.boardRole, access.board, action)
           if (denial !== null) {
             return denial
           }
@@ -477,7 +549,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
           if (isReply(access)) {
             return access
           }
-          const denial = deny(guarded.auth, access.workspace, access.role, access.board, 'scene:write')
+          const denial = deny(guarded.auth, access.workspace, access.role, access.boardRole, access.board, 'scene:write')
           if (denial !== null) {
             return denial
           }
@@ -510,6 +582,219 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
           return ok(200, body)
         })
         send(response, reply)
+      },
+    },
+
+    /* ------------------------------------------------------------------------------------------------ */
+    /* Interne Freigaben                                                                                 */
+    /* ------------------------------------------------------------------------------------------------ */
+
+    /**
+     * Freigabeliste eines Boards.
+     *
+     * Sichtbar fuer jeden, der das Board sehen darf - genau wie die Mitgliederliste eines Arbeitsbereichs.
+     * Wer eine Rolle einer Freigabe traegt, ist ohnehin Mitglied desselben Arbeitsbereichs; die Liste
+     * verraet also niemanden, den der Fragende nicht schon kennt.
+     */
+    {
+      method: 'GET',
+      path: BOARD_GRANTS_PATH,
+      handle: async ({ request, response, url }) => {
+        const auth = await requireSession(context, request, response)
+        if (auth === null) {
+          return
+        }
+        const boardId = readUuid(url.searchParams.get(BOARD_ID_PARAM))
+        if (boardId === null) {
+          sendError(response, 404, NOT_FOUND.message)
+          return
+        }
+        const access = await loadVisibleBoard(store, auth, boardId, { lock: false })
+        if (isReply(access)) {
+          send(response, access)
+          return
+        }
+        const grants = await store.grants.listForBoard(boardId)
+        const body: BoardGrantsResponse = {
+          board: toBoardView(access.board, access.ownerDisplayName),
+          grants: grants.map(toGrantView),
+        }
+        send(response, ok(200, body))
+      },
+    },
+
+    /**
+     * Board an einen vorhandenen internen Nutzer freigeben.
+     *
+     * Der Zielnutzer wird erst **nach** der Berechtigungspruefung gelesen, sonst verriete die Antwort,
+     * welche Nutzerkennungen es gibt. Sein Status und seine Mitgliedschaft kommen aus derselben
+     * Transaktion, in der geschrieben wird: eine gleichzeitige Deaktivierung oder ein gleichzeitiger
+     * Mitgliedschaftsentzug hinterlaesst so keine Freigabe auf einem ueberholten Stand.
+     */
+    {
+      method: 'POST',
+      path: BOARD_GRANT_ADD_PATH,
+      handle: async ({ request, response }) => {
+        await withLockedBoard(request, response, async (tx, auth, access, body) => {
+          const userId = readUuid(body['userId'])
+          const role = parseBoardGrantRole(body['role'])
+          if (userId === null || role === null) {
+            return fail(400, 'userId und eine gueltige Rolle (editor oder viewer) werden erwartet')
+          }
+          const denial = deny(auth, access.workspace, access.role, access.boardRole, access.board, 'grant:manage')
+          if (denial !== null) {
+            return denial
+          }
+          if (userId === access.board.ownerId) {
+            // Der Owner traegt seine Rolle in `boards.owner_user_id`. Eine Freigabezeile daneben waere
+            // wirkungslos und beim naechsten Ownerwechsel eine stille Herabstufung.
+            return fail(409, 'Der Board-Owner braucht keine Freigabe')
+          }
+          const found = await requireGrantTarget(tx, access, userId)
+          if (isReply(found)) {
+            return found
+          }
+          let added
+          try {
+            added = await tx.grants.add(access.board.id, access.workspace.id, userId, role)
+          } catch (error) {
+            if (!(error instanceof BoardGrantConflictError)) {
+              throw error
+            }
+            return fail(409, 'Fuer diesen Nutzer besteht bereits eine Freigabe')
+          }
+          await recordGrantEvent(tx, auth, access, 'board-grant.added', userId, { role: added.role })
+          const created: BoardGrantChangeResponse = { userId, role: added.role }
+          return ok(201, created)
+        })
+      },
+    },
+
+    {
+      method: 'POST',
+      path: BOARD_GRANT_ROLE_PATH,
+      handle: async ({ request, response }) => {
+        await withLockedBoard(request, response, async (tx, auth, access, body) => {
+          const userId = readUuid(body['userId'])
+          const nextRole = parseBoardGrantRole(body['role'])
+          if (userId === null || nextRole === null) {
+            return fail(400, 'userId und eine gueltige Rolle (editor oder viewer) werden erwartet')
+          }
+          const denial = deny(auth, access.workspace, access.role, access.boardRole, access.board, 'grant:manage')
+          if (denial !== null) {
+            return denial
+          }
+          const grant = await tx.grants.find(access.board.id, userId)
+          if (grant === null) {
+            return fail(404, 'Freigabe nicht gefunden')
+          }
+          if (grant.role === nextRole) {
+            const unchanged: BoardGrantChangeResponse = { userId, role: nextRole }
+            return ok(200, unchanged)
+          }
+          const updated = await tx.grants.setRole(access.board.id, userId, nextRole)
+          await recordGrantEvent(tx, auth, access, 'board-grant.role-changed', userId, {
+            previousRole: grant.role,
+            role: updated.role,
+          })
+          const changed: BoardGrantChangeResponse = { userId, role: updated.role }
+          return ok(200, changed)
+        })
+      },
+    },
+
+    /**
+     * Freigabe entziehen.
+     *
+     * Danach gilt fuer diesen Nutzer wieder seine Workspace-Mitgliedschaft - eine Freigabe ist eine
+     * Verfeinerung und kein zweites Tor. Die Ownerschaft laesst sich so **nicht** abgeben: ein Board ohne
+     * Owner soll es nie geben, deshalb gibt es dafuer nur die Uebertragung.
+     */
+    {
+      method: 'POST',
+      path: BOARD_GRANT_REMOVE_PATH,
+      handle: async ({ request, response }) => {
+        await withLockedBoard(request, response, async (tx, auth, access, body) => {
+          const userId = readUuid(body['userId'])
+          if (userId === null) {
+            return fail(400, 'userId wird erwartet')
+          }
+          const denial = deny(auth, access.workspace, access.role, access.boardRole, access.board, 'grant:manage')
+          if (denial !== null) {
+            return denial
+          }
+          if (userId === access.board.ownerId) {
+            return fail(409, 'Die Ownerschaft kann nicht entzogen werden. Uebertrage sie stattdessen.')
+          }
+          const grant = await tx.grants.find(access.board.id, userId)
+          if (grant === null) {
+            return fail(404, 'Freigabe nicht gefunden')
+          }
+          await tx.grants.remove(access.board.id, userId)
+          await recordGrantEvent(tx, auth, access, 'board-grant.removed', userId, { previousRole: grant.role })
+          context.logger('info', 'board.grant.removed', {
+            actorId: auth.user.id,
+            userId,
+            boardId: access.board.id,
+          })
+          const removed: BoardGrantChangeResponse = { userId, role: null }
+          return ok(200, removed)
+        })
+      },
+    },
+
+    /**
+     * Ownerschaft uebertragen.
+     *
+     * Genau ein Owner, jederzeit: `boards.owner_user_id` wird unter der Zeilensperre ersetzt, nicht
+     * ergaenzt. Zwei gleichzeitige Uebertragungen sind dadurch serialisiert, und der bisherige Owner faellt
+     * im selben Schritt auf seine Mitgliedschaft zurueck. Eine Freigabezeile des neuen Owners waere von
+     * diesem Moment an wirkungslos und beim naechsten Wechsel eine stille Ueberraschung - sie faellt weg.
+     */
+    {
+      method: 'POST',
+      path: BOARD_OWNER_PATH,
+      handle: async ({ request, response }) => {
+        await withLockedBoard(request, response, async (tx, auth, access, body) => {
+          const userId = readUuid(body['userId'])
+          if (userId === null) {
+            return fail(400, 'userId wird erwartet')
+          }
+          const denial = deny(
+            auth,
+            access.workspace,
+            access.role,
+            access.boardRole,
+            access.board,
+            'board:transfer-ownership',
+          )
+          if (denial !== null) {
+            return denial
+          }
+          if (userId === access.board.ownerId) {
+            return ok(200, toBoardView(access.board, access.ownerDisplayName))
+          }
+          const found = await requireGrantTarget(tx, access, userId)
+          if (isReply(found)) {
+            return found
+          }
+          await tx.grants.remove(access.board.id, userId)
+          const updated = await tx.boards.setOwner(access.board.id, userId)
+          await tx.audit.record({
+            actorId: auth.user.id,
+            action: 'board.ownership-transferred',
+            targetType: 'board',
+            targetId: updated.id,
+            workspaceId: updated.workspaceId,
+            details: { previousOwnerId: access.board.ownerId, ownerId: userId },
+          })
+          context.logger('info', 'board.ownership.transferred', {
+            actorId: auth.user.id,
+            boardId: updated.id,
+            ownerId: userId,
+          })
+          return ok(200, toBoardView(updated, found.target.displayName))
+        })
       },
     },
 
@@ -579,7 +864,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
             }
             // Ein Bild ist Inhalt des Boards: es darf hochladen, wer die Szene speichern darf. Damit gilt in
             // einem archivierten Board oder Arbeitsbereich dieselbe Unveraenderlichkeit wie fuer die Szene.
-            const denial = deny(auth, access.workspace, access.role, access.board, 'scene:write')
+            const denial = deny(auth, access.workspace, access.role, access.boardRole, access.board, 'scene:write')
             if (denial !== null) {
               return denial
             }

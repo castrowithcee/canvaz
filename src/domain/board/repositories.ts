@@ -11,13 +11,18 @@ import type { SceneSnapshot } from '../../contracts/scene.js'
 import type { UserId } from '../identity/model.js'
 import type { Workspace, WorkspaceId, WorkspaceRole } from '../workspace/model.js'
 import type { AuditRepository, WorkspaceRepository } from '../workspace/repositories.js'
-import type { Board, BoardId, BoardStatus } from './model.js'
+import type { Board, BoardGrantRole, BoardId, BoardRole, BoardStatus } from './model.js'
 
-/** Board samt Workspace und Rolle des fragenden Nutzers. `role === null` heisst Nichtmitglied. */
+/**
+ * Board samt Workspace und beiden Rollen des fragenden Nutzers. `role === null` heisst Nichtmitglied,
+ * `boardRole === null` heisst: keine eigene Boardrolle. Beide werden zusammen mit dem Board geladen, damit
+ * eine Entscheidung nie auf zwei getrennten Abfragen und damit auf zwei Zeitpunkten beruht.
+ */
 export type BoardAccess = {
   readonly board: Board
   readonly workspace: Workspace
   readonly role: WorkspaceRole | null
+  readonly boardRole: BoardRole | null
   readonly ownerDisplayName: string
 }
 
@@ -47,8 +52,54 @@ export interface BoardRepository {
   create(workspaceId: WorkspaceId, title: string, ownerId: UserId): Promise<Board>
   rename(id: BoardId, title: string): Promise<Board>
   setStatus(id: BoardId, status: BoardStatus): Promise<Board>
+  /**
+   * Uebertraegt die Ownerschaft. `boards.owner_user_id` ist `not null` und traegt genau einen Owner; die
+   * Uebertragung ersetzt ihn, statt einen zweiten anzulegen. Laeuft immer unter der Zeilensperre aus
+   * `findForUpdate`, damit zwei gleichzeitige Uebertragungen serialisiert sind.
+   */
+  setOwner(id: BoardId, ownerId: UserId): Promise<Board>
   /** Setzt die aktuelle Szenenversion. Laeuft immer in derselben Transaktion wie `SceneRepository.append`. */
   setSceneVersion(id: BoardId, version: number): Promise<Board>
+}
+
+/**
+ * Eine interne Boardfreigabe.
+ *
+ * Der Workspacebezug steht mit im Vertrag, damit eine Freigabe ohne Workspacegrenze gar nicht erst
+ * formulierbar ist - dasselbe Muster wie beim Assetdatensatz.
+ */
+export type BoardGrant = {
+  readonly boardId: BoardId
+  readonly workspaceId: WorkspaceId
+  readonly userId: UserId
+  readonly role: BoardGrantRole
+  readonly createdAt: Date
+  readonly updatedAt: Date
+}
+
+/** Freigabe samt Profilangaben fuer die Freigabeliste; sie soll keine zweite Abfrage je Zeile brauchen. */
+export type BoardGrantEntry = BoardGrant & {
+  readonly displayName: string
+  readonly email: string | null
+}
+
+export interface BoardGrantRepository {
+  /** Ausschliesslich Freigaben genau dieses Boards. Die Sichtbarkeit des Boards prueft der Aufrufer. */
+  listForBoard(boardId: BoardId): Promise<readonly BoardGrantEntry[]>
+  /** Board und Nutzer zusammen; es gibt keine Abfrage allein ueber die Nutzerkennung. */
+  find(boardId: BoardId, userId: UserId): Promise<BoardGrant | null>
+  /** Legt die Freigabe an. Wirft `BoardGrantConflictError`, wenn es sie schon gibt. */
+  add(boardId: BoardId, workspaceId: WorkspaceId, userId: UserId, role: BoardGrantRole): Promise<BoardGrant>
+  setRole(boardId: BoardId, userId: UserId, role: BoardGrantRole): Promise<BoardGrant>
+  remove(boardId: BoardId, userId: UserId): Promise<void>
+}
+
+/** Die Freigabe besteht bereits (gleichzeitige Freigabe an denselben Nutzer). */
+export class BoardGrantConflictError extends Error {
+  constructor(cause: unknown) {
+    super('Die Freigabe besteht bereits', { cause })
+    this.name = 'BoardGrantConflictError'
+  }
 }
 
 export type SceneVersion = {
@@ -134,6 +185,7 @@ export interface BoardAssetRepository {
  */
 export interface BoardStore {
   readonly boards: BoardRepository
+  readonly grants: BoardGrantRepository
   readonly scenes: SceneRepository
   readonly assets: BoardAssetRepository
   readonly workspaces: WorkspaceRepository
