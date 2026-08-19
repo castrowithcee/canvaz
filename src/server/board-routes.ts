@@ -14,18 +14,24 @@
  *   gilt auch fuer einen Systemadmin ohne Mitgliedschaft: Verwaltung ist kein Inhaltszugriff.
  * - Wer es sehen, die Aktion aber nicht ausfuehren darf, bekommt **403**.
  * - Eine Speicherung auf einer ueberholten Version bekommt **409** und ueberschreibt nichts.
+ *
+ * ## Gaeste
+ *
+ * Vier Endpunkte nehmen zusaetzlich zur internen Sitzung eine **Gastsession** an: Szene laden und
+ * speichern, Bild abrufen und hochladen. Sie sind der Inhalt genau eines Boards - alles, was ein
+ * Gastzugang je erreichen soll. Jede andere Boardroute verlangt weiterhin eine interne Sitzung und
+ * antwortet einem Gast mit 401; eine Verwaltungsstrecke ist fuer ihn nicht vorhanden, nicht bloss verboten.
+ * Innerhalb der vier Endpunkte entscheidet auch fuer ihn ausschliesslich `decideBoardAccess`.
  */
 
 import { createHash } from 'node:crypto'
-import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import type {
   BoardGrantChangeResponse,
   BoardGrantView,
   BoardGrantsResponse,
-  BoardSceneResponse,
-  BoardView,
   BoardsResponse,
+  SceneResponse,
   SaveSceneResponse,
   SceneConflictResponse,
   UploadBoardAssetResponse,
@@ -58,7 +64,7 @@ import {
   parseSceneSnapshot,
   serializeSceneSnapshot,
 } from '../contracts/scene.js'
-import type { Board, BoardId, BoardRole, BoardStatus } from '../domain/board/model.js'
+import type { BoardStatus } from '../domain/board/model.js'
 import {
   MAX_BOARD_TITLE_LENGTH,
   SCENE_VERSION_RETENTION,
@@ -67,8 +73,7 @@ import {
   parseBoardGrantRole,
   parseBoardStatus,
 } from '../domain/board/model.js'
-import type { BoardAction, BoardDenialReason, BoardSubject } from '../domain/board/policy.js'
-import { decideBoardAccess } from '../domain/board/policy.js'
+import type { BoardAction } from '../domain/board/policy.js'
 import type { BoardAccess, BoardAsset, BoardGrantEntry, BoardStore } from '../domain/board/repositories.js'
 import { BoardGrantConflictError, CorruptSceneError, SceneConflictError } from '../domain/board/repositories.js'
 import type { AuthenticatedSession, UserId } from '../domain/identity/model.js'
@@ -76,25 +81,18 @@ import { buildAssetStorageKey } from '../domain/storage/asset-storage-port.js'
 import { ALLOWED_IMAGE_TYPES, isAllowedImageType, sniffImageType } from '../domain/storage/image-type.js'
 import type { Workspace, WorkspaceRole } from '../domain/workspace/model.js'
 import type { MembershipTarget } from '../domain/workspace/repositories.js'
+import { NOT_FOUND, createBoardGate, withoutBoard } from './board-access.js'
+import { sceneResponseFor, toBoardView } from './board-views.js'
 import type { AppContext } from './context.js'
-import { requireCsrfToken, requireSession } from './guard.js'
+import { requireCsrfToken, requireRequester, requireSession } from './guard.js'
 import type { Route } from './http.js'
 import { readBinaryBodyLimited, sendBytes, sendError } from './http.js'
 import type { Reply } from './reply.js'
-import { fail, guardMutation, isReply, ok, readUuid, send } from './reply.js'
+import { fail, guardBoardMutation, guardMutation, isReply, ok, readUuid, send } from './reply.js'
+import { asRequester, userOf } from './requester.js'
 
 /** Laenger als jeder zulaessige Titel; alles darueber kann kein sinnvoller Filter sein. */
 const MAX_FILTER_LENGTH = MAX_BOARD_TITLE_LENGTH
-
-const DENIALS: Readonly<Record<BoardDenialReason, { readonly status: number; readonly message: string }>> = {
-  'not-visible': { status: 404, message: 'Board nicht gefunden' },
-  'user-deactivated': { status: 404, message: 'Board nicht gefunden' },
-  'insufficient-role': { status: 403, message: 'Keine Berechtigung fuer diese Aktion' },
-  'workspace-archived': { status: 403, message: 'Der Arbeitsbereich ist archiviert und kann nicht geaendert werden' },
-  'board-archived': { status: 403, message: 'Das Board ist archiviert und kann nicht geaendert werden' },
-}
-
-const NOT_FOUND = DENIALS['not-visible']
 
 /**
  * Was die Anwendung nicht zuruecklesen kann, nimmt sie nicht an.
@@ -157,20 +155,6 @@ function toFileRef(asset: BoardAsset): BinaryFileRef {
   }
 }
 
-function toBoardView(board: Board, ownerDisplayName: string): BoardView {
-  return {
-    id: board.id,
-    workspaceId: board.workspaceId,
-    title: board.title,
-    status: board.status,
-    ownerUserId: board.ownerId,
-    ownerDisplayName,
-    sceneVersion: board.sceneVersion,
-    createdAt: board.createdAt.toISOString(),
-    updatedAt: board.updatedAt.toISOString(),
-  }
-}
-
 function toGrantView(grant: BoardGrantEntry): BoardGrantView {
   return {
     userId: grant.userId,
@@ -194,91 +178,9 @@ function toWorkspaceView(workspace: Workspace, role: WorkspaceRole | null): Work
 
 export function createBoardRoutes(context: AppContext): readonly Route[] {
   const { boards: store } = context
-
-  function subjectOf(
-    auth: AuthenticatedSession,
-    role: WorkspaceRole | null,
-    boardRole: BoardRole | null,
-  ): BoardSubject {
-    return { user: auth.user, workspaceRole: role, boardRole }
-  }
-
-  /**
-   * Einziger Weg zu einer Entscheidung. `null` heisst erlaubt; sonst steht die Ablehnung als fertige Antwort
-   * bereit, und der Aufrufer beendet sich. Workspacerolle und Boardrolle kommen beide aus demselben
-   * geladenen Datensatz; entschieden wird ausschliesslich in der Policy.
-   */
-  function deny(
-    auth: AuthenticatedSession,
-    workspace: Workspace,
-    role: WorkspaceRole | null,
-    boardRole: BoardRole | null,
-    board: Board | null,
-    action: BoardAction,
-  ): Reply | null {
-    const decision = decideBoardAccess(subjectOf(auth, role, boardRole), workspace, board, action)
-    if (decision.allowed) {
-      return null
-    }
-    const { status, message } = DENIALS[decision.reason]
-    context.logger('warn', 'authorization.denied', {
-      userId: auth.user.id,
-      workspaceId: workspace.id,
-      ...(board === null ? {} : { boardId: board.id }),
-      action,
-      reason: decision.reason,
-    })
-    return fail(status, message)
-  }
-
-  /**
-   * Laedt das Board samt Workspace und eigener Rolle und setzt die Sichtbarkeit durch. Eine unbekannte und
-   * eine nicht sichtbare Kennung ergeben dieselbe 404.
-   */
-  async function loadVisibleBoard(
-    tx: BoardStore,
-    auth: AuthenticatedSession,
-    boardId: BoardId,
-    options: { readonly lock: boolean },
-  ): Promise<BoardAccess | Reply> {
-    const access = options.lock
-      ? await tx.boards.findForUpdate(boardId, auth.user.id)
-      : await tx.boards.findForUser(boardId, auth.user.id)
-    if (access === null) {
-      return fail(404, NOT_FOUND.message)
-    }
-    return deny(auth, access.workspace, access.role, access.boardRole, access.board, 'board:read') ?? access
-  }
-
-  /** Gemeinsamer Einstieg der zustandsaendernden Boardrouten: Sitzung, CSRF, Kennung, Sperre, Sichtbarkeit. */
-  async function withLockedBoard(
-    request: IncomingMessage,
-    response: ServerResponse,
-    run: (
-      tx: BoardStore,
-      auth: AuthenticatedSession,
-      access: BoardAccess,
-      body: Record<string, unknown>,
-    ) => Promise<Reply>,
-  ): Promise<void> {
-    const guarded = await guardMutation(context, request, response)
-    if (guarded === null) {
-      return
-    }
-    const boardId = readUuid(guarded.body['boardId'])
-    if (boardId === null) {
-      sendError(response, 404, NOT_FOUND.message)
-      return
-    }
-    const reply = await store.transaction(async (tx) => {
-      const access = await loadVisibleBoard(tx, guarded.auth, boardId, { lock: true })
-      if (isReply(access)) {
-        return access
-      }
-      return run(tx, guarded.auth, access, guarded.body)
-    })
-    send(response, reply)
-  }
+  // Laden, Sichtbarkeit und Uebersetzung der Ablehnung stehen an einer Stelle - dieselbe, die auch die
+  // Routen der Freigabelinks benutzen.
+  const { deny, loadVisibleBoard, withLockedBoard } = createBoardGate(context)
 
   /**
    * Zielnutzer einer Freigabe oder einer Uebertragung.
@@ -348,7 +250,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
         }
         // Ohne Board entscheidet allein die Mitgliedschaft im Workspace; ein Systemadmin ohne Rolle bekommt
         // hier dieselbe 404 wie fuer eine erfundene Kennung.
-        const denial = deny(auth, access.workspace, access.role, null, null, 'board:read')
+        const denial = deny(asRequester(auth), access.workspace, withoutBoard(access.role), 'board:read')
         if (denial !== null) {
           send(response, denial)
           return
@@ -389,7 +291,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
           if (access === null) {
             return fail(404, NOT_FOUND.message)
           }
-          const denial = deny(guarded.auth, access.workspace, access.role, null, null, 'board:create')
+          const denial = deny(asRequester(guarded.auth), access.workspace, withoutBoard(access.role), 'board:create')
           if (denial !== null) {
             return denial
           }
@@ -418,7 +320,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
           if (title === null) {
             return fail(400, `Ein Titel mit 1 bis ${String(MAX_BOARD_TITLE_LENGTH)} Zeichen wird erwartet`)
           }
-          const denial = deny(auth, access.workspace, access.role, access.boardRole, access.board, 'board:rename')
+          const denial = deny(asRequester(auth), access.workspace, access, 'board:rename')
           if (denial !== null) {
             return denial
           }
@@ -446,7 +348,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
             return fail(400, 'status muss active oder archived sein')
           }
           const action: BoardAction = status === 'archived' ? 'board:archive' : 'board:unarchive'
-          const denial = deny(auth, access.workspace, access.role, access.boardRole, access.board, action)
+          const denial = deny(asRequester(auth), access.workspace, access, action)
           if (denial !== null) {
             return denial
           }
@@ -468,8 +370,9 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
       method: 'GET',
       path: BOARD_SCENE_PATH,
       handle: async ({ request, response, url }) => {
-        const auth = await requireSession(context, request, response)
-        if (auth === null) {
+        // Auch fuer einen Gast: sein Zugang ist genau dieses eine Board.
+        const requester = await requireRequester(context, request, response)
+        if (requester === null) {
           return
         }
         const boardId = readUuid(url.searchParams.get(BOARD_ID_PARAM))
@@ -477,7 +380,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
           sendError(response, 404, NOT_FOUND.message)
           return
         }
-        const access = await loadVisibleBoard(store, auth, boardId, { lock: false })
+        const access = await loadVisibleBoard(store, requester, boardId, { lock: false })
         if (isReply(access)) {
           send(response, access)
           return
@@ -495,13 +398,15 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
           send(response, fail(500, 'Die gespeicherte Szene ist beschaedigt und kann nicht geoeffnet werden'))
           return
         }
-        const body: BoardSceneResponse = {
-          board: toBoardView(access.board, access.ownerDisplayName),
-          version: latest?.version ?? 0,
+        const body: SceneResponse = sceneResponseFor(
+          requester,
+          access.board,
+          access.ownerDisplayName,
+          latest?.version ?? 0,
           // Version 0 heisst: noch nie gespeichert. Der leere Ausgangsstand ist kein Ersatz fuer einen
           // fehlgeschlagenen Ladevorgang, sondern der tatsaechliche Inhalt eines neuen Boards.
-          scene: latest?.snapshot ?? createEmptySnapshot(boardId, access.board.createdAt.getTime()),
-        }
+          latest?.snapshot ?? createEmptySnapshot(boardId, access.board.createdAt.getTime()),
+        )
         send(response, ok(200, body))
       },
     },
@@ -510,7 +415,8 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
       method: 'POST',
       path: BOARD_SCENE_PATH,
       handle: async ({ request, response }) => {
-        const guarded = await guardMutation(context, request, response, context.config.maxSceneBytes)
+        // Auch fuer einen Gast; ob er speichern darf, entscheidet `scene:write` in der Policy.
+        const guarded = await guardBoardMutation(context, request, response, context.config.maxSceneBytes)
         if (guarded === null) {
           return
         }
@@ -545,11 +451,11 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
         }
 
         const reply = await store.transaction(async (tx) => {
-          const access = await loadVisibleBoard(tx, guarded.auth, boardId, { lock: true })
+          const access = await loadVisibleBoard(tx, guarded.requester, boardId, { lock: true })
           if (isReply(access)) {
             return access
           }
-          const denial = deny(guarded.auth, access.workspace, access.role, access.boardRole, access.board, 'scene:write')
+          const denial = deny(guarded.requester, access.workspace, access, 'scene:write')
           if (denial !== null) {
             return denial
           }
@@ -565,7 +471,9 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
           const version = baseVersion + 1
           let saved
           try {
-            saved = await tx.scenes.append(boardId, version, scene, guarded.auth.user.id)
+            // Ein Gast ist kein Nutzer und steht deshalb nicht in der Autorenspalte; die Version selbst
+            // entsteht ueber genau denselben Weg wie jede andere.
+            saved = await tx.scenes.append(boardId, version, scene, userOf(guarded.requester)?.id ?? null)
           } catch (error) {
             if (!(error instanceof SceneConflictError)) {
               throw error
@@ -609,7 +517,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
           sendError(response, 404, NOT_FOUND.message)
           return
         }
-        const access = await loadVisibleBoard(store, auth, boardId, { lock: false })
+        const access = await loadVisibleBoard(store, asRequester(auth), boardId, { lock: false })
         if (isReply(access)) {
           send(response, access)
           return
@@ -641,7 +549,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
           if (userId === null || role === null) {
             return fail(400, 'userId und eine gueltige Rolle (editor oder viewer) werden erwartet')
           }
-          const denial = deny(auth, access.workspace, access.role, access.boardRole, access.board, 'grant:manage')
+          const denial = deny(asRequester(auth), access.workspace, access, 'grant:manage')
           if (denial !== null) {
             return denial
           }
@@ -680,7 +588,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
           if (userId === null || nextRole === null) {
             return fail(400, 'userId und eine gueltige Rolle (editor oder viewer) werden erwartet')
           }
-          const denial = deny(auth, access.workspace, access.role, access.boardRole, access.board, 'grant:manage')
+          const denial = deny(asRequester(auth), access.workspace, access, 'grant:manage')
           if (denial !== null) {
             return denial
           }
@@ -719,7 +627,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
           if (userId === null) {
             return fail(400, 'userId wird erwartet')
           }
-          const denial = deny(auth, access.workspace, access.role, access.boardRole, access.board, 'grant:manage')
+          const denial = deny(asRequester(auth), access.workspace, access, 'grant:manage')
           if (denial !== null) {
             return denial
           }
@@ -760,14 +668,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
           if (userId === null) {
             return fail(400, 'userId wird erwartet')
           }
-          const denial = deny(
-            auth,
-            access.workspace,
-            access.role,
-            access.boardRole,
-            access.board,
-            'board:transfer-ownership',
-          )
+          const denial = deny(asRequester(auth), access.workspace, access, 'board:transfer-ownership')
           if (denial !== null) {
             return denial
           }
@@ -814,11 +715,11 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
       method: 'POST',
       path: BOARD_ASSETS_PATH,
       handle: async ({ request, response, url }) => {
-        const auth = await requireSession(context, request, response)
-        if (auth === null) {
+        const requester = await requireRequester(context, request, response)
+        if (requester === null) {
           return
         }
-        if (!requireCsrfToken(context, request, response, auth)) {
+        if (!requireCsrfToken(context, request, response, requester)) {
           return
         }
         const body = await readBinaryBodyLimited(request, context.config.storage.maxAssetBytes)
@@ -858,13 +759,14 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
         let written = false
         try {
           const reply = await store.transaction(async (tx) => {
-            const access = await loadVisibleBoard(tx, auth, boardId, { lock: true })
+            const access = await loadVisibleBoard(tx, requester, boardId, { lock: true })
             if (isReply(access)) {
               return access
             }
             // Ein Bild ist Inhalt des Boards: es darf hochladen, wer die Szene speichern darf. Damit gilt in
-            // einem archivierten Board oder Arbeitsbereich dieselbe Unveraenderlichkeit wie fuer die Szene.
-            const denial = deny(auth, access.workspace, access.role, access.boardRole, access.board, 'scene:write')
+            // einem archivierten Board oder Arbeitsbereich dieselbe Unveraenderlichkeit wie fuer die Szene,
+            // und ein `guest-viewer` laedt so wenig hoch, wie er speichert.
+            const denial = deny(requester, access.workspace, access, 'scene:write')
             if (denial !== null) {
               return denial
             }
@@ -920,8 +822,8 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
       method: 'GET',
       path: BOARD_ASSETS_PATH,
       handle: async ({ request, response, url }) => {
-        const auth = await requireSession(context, request, response)
-        if (auth === null) {
+        const requester = await requireRequester(context, request, response)
+        if (requester === null) {
           return
         }
         const boardId = readUuid(url.searchParams.get(BOARD_ID_PARAM))
@@ -929,7 +831,9 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
           sendError(response, 404, NOT_FOUND.message)
           return
         }
-        const access = await loadVisibleBoard(store, auth, boardId, { lock: false })
+        // Der Abruf haengt an derselben Entscheidung wie das Oeffnen des Boards: ein Gast erreicht damit die
+        // Bilder **seines** Boards und die keines anderen.
+        const access = await loadVisibleBoard(store, requester, boardId, { lock: false })
         if (isReply(access)) {
           send(response, access)
           return

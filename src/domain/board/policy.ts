@@ -25,21 +25,50 @@
  * Board, dessen Owner den Arbeitsbereich verlassen hat oder deaktiviert wurde, dauerhaft unverwaltbar -
  * dieselbe Ueberlegung, aus der ein Systemadmin jeden Arbeitsbereich verwaltet.
  *
- * ## Andockpunkt fuer Gastfreigaben
+ * ## Gastfreigaben
  *
- * Gastlinks setzen **hier** an, nicht in der Workspace-Policy: `BoardSubject` bekommt ein weiteres,
- * unabhaengiges Feld (etwa `guestGrant`), und ein Gast steht dann ohne Mitgliedschaft und ohne Boardrolle
- * vor derselben Funktion. Vorbedingung, Ablehnungsgruende und Aufrufform in den Routen bleiben dabei
- * unveraendert.
+ * Gastlinks setzen **hier** an und nicht in der Workspace-Policy: `BoardSubject` traegt dafuer das dritte,
+ * unabhaengige Feld `guestGrant`. Ein Gast steht ohne Mitgliedschaft und ohne Boardrolle vor derselben
+ * Funktion, und sein Grant ist **die einzige** Eingabe, die fuer ihn zaehlt:
+ *
+ * - Er gilt fuer **genau ein Board**. Jedes andere Board ist fuer ihn nicht vorhanden - auch eines im
+ *   selben Arbeitsbereich, auch eines, dessen Kennung er kennt.
+ * - `guest-viewer` liest, `guest-editor` liest und speichert. Umbenennen, Archivieren, Freigabeverwaltung
+ *   und Ownerschaft sind fuer einen Gast **in keinem Zustand** erreichbar.
+ * - Archiviert heisst auch fuer ihn: lesbar, aber unveraenderlich - und das Entarchivieren selbst bleibt
+ *   ihm ebenfalls verwehrt.
+ *
+ * Der Gastweg und der Weg des internen Nutzers schliessen sich aus: `guestSubject` ist die einzige Stelle,
+ * die ein Gastsubjekt baut, und sie setzt weder Mitgliedschaft noch Boardrolle. Vorbedingung,
+ * Ablehnungsgruende und Aufrufform in den Routen bleiben unveraendert.
  */
 
 import type { WorkspaceStatus } from '../workspace/model.js'
 import type { DenialReason, PolicySubject } from '../workspace/policy.js'
 import { decideWorkspaceAccess } from '../workspace/policy.js'
-import type { BoardRole, BoardStatus } from './model.js'
+import type { GuestRole, GuestSessionId } from './guest.js'
+import { guestMayWrite } from './guest.js'
+import type { BoardId, BoardRole, BoardStatus } from './model.js'
 
+/**
+ * Der Zustand des betroffenen Boards. Die Kennung gehoert dazu, weil ein Gastgrant genau ein Board meint -
+ * ohne sie koennte die Policy nicht selbst pruefen, ob es dasselbe ist, und muesste sich darauf verlassen,
+ * dass die Route das Richtige geladen hat.
+ */
 export type BoardState = {
+  readonly id: BoardId
   readonly status: BoardStatus
+}
+
+/**
+ * Berechtigung eines Gastes aus einem Freigabelink: eine Rolle fuer genau ein Board.
+ *
+ * Sie steht **neben** Mitgliedschaft und Boardrolle und nie an ihrer Stelle - beide sind bei einem Gast
+ * leer, und keine Rolle der internen Ebene laesst sich daraus ableiten.
+ */
+export type BoardGuestGrant = {
+  readonly boardId: BoardId
+  readonly role: GuestRole
 }
 
 /**
@@ -49,6 +78,28 @@ export type BoardState = {
  */
 export type BoardSubject = PolicySubject & {
   readonly boardRole: BoardRole | null
+  /** `null` heisst: kein Gast. Ist das Feld gesetzt, entscheidet ausschliesslich der Gastweg. */
+  readonly guestGrant: BoardGuestGrant | null
+}
+
+/**
+ * Einzige Stelle, die ein Gastsubjekt baut.
+ *
+ * Ein Gast hat kein Nutzerprofil. Das Pflichtfeld `user` traegt deshalb allein die Kennung seiner
+ * Gastsession, damit ein Aufrufer nichts erfinden muss; **gelesen wird es auf dem Gastweg nie** - weder
+ * Status noch Systemrolle spielen dort eine Rolle, weil ein Gast beides nicht haben kann. Mitgliedschaft
+ * und Boardrolle bleiben leer: ein Gast bekommt niemals eine interne Stufe.
+ *
+ * `grant === null` steht fuer einen Gast ohne gueltigen Link. Er ergibt ein Subjekt ohne jede Eingabe und
+ * damit die Ablehnung `not-visible` - dieselbe Antwort wie fuer eine erfundene Boardkennung.
+ */
+export function guestSubject(guestSessionId: GuestSessionId, grant: BoardGuestGrant | null): BoardSubject {
+  return {
+    user: { id: guestSessionId, status: 'active', isSystemAdmin: false },
+    workspaceRole: null,
+    boardRole: null,
+    guestGrant: grant,
+  }
 }
 
 export type BoardAction =
@@ -90,6 +141,48 @@ function boardLevel(subject: BoardSubject): BoardRole {
 }
 
 /**
+ * Entscheidet die Aktion eines Gastes.
+ *
+ * Dieselbe Reihenfolge wie im internen Weg - erst Sichtbarkeit, dann die beiden Archivzustaende, zuletzt
+ * die Rolle -, aber mit einer anderen ersten Frage: nicht "ist er Mitglied?", sondern "gilt sein Link
+ * ueberhaupt fuer dieses Board?". Alles andere ist fuer ihn nicht vorhanden.
+ */
+function decideGuestAccess(
+  grant: BoardGuestGrant,
+  workspace: { readonly status: WorkspaceStatus },
+  board: BoardState | null,
+  action: BoardAction,
+): BoardDecision {
+  // Ohne Board gibt es keinen Bezug, den ein Gastgrant treffen koennte - `board:create` ist fuer ihn
+  // schlicht keine Aktion. Und ein anderes Board als das seine sieht fuer ihn aus wie eine erfundene
+  // Kennung; dass es existiert, erfaehrt er nicht.
+  if (board === null || board.id !== grant.boardId) {
+    return denied('not-visible')
+  }
+
+  if (action === 'board:read') {
+    return ALLOWED
+  }
+
+  if (workspace.status === 'archived') {
+    return denied('workspace-archived')
+  }
+
+  // Anders als intern gibt es hier keine Ausnahme fuer `board:unarchive`: ein Gast entarchiviert nichts,
+  // und die Ablehnung nennt trotzdem den Zustand, der zuerst dagegen steht.
+  if (board.status === 'archived') {
+    return denied('board-archived')
+  }
+
+  // Nur die Szene, und die auch nur mit ausdruecklichem Schreibrecht. Stammdaten, Freigaben und
+  // Ownerschaft eines Boards gehoeren dem Arbeitsbereich - ein Gast gehoert ihm nicht an.
+  if (action === 'scene:write') {
+    return guestMayWrite(grant.role) ? ALLOWED : denied('insufficient-role')
+  }
+  return denied('insufficient-role')
+}
+
+/**
  * Entscheidet eine Boardaktion. `board === null` steht fuer `board:create` - da gibt es noch kein Board.
  *
  * Die Reihenfolge ist bewusst: erst die Sichtbarkeit des Workspace (sie bestimmt, ob ueberhaupt eine
@@ -102,6 +195,13 @@ export function decideBoardAccess(
   board: BoardState | null,
   action: BoardAction,
 ): BoardDecision {
+  // Ein Gast steht vor derselben Funktion, aber auf einem eigenen Weg: er hat keine Mitgliedschaft, und
+  // `decideWorkspaceAccess` wuerde ihn deshalb sofort als Nichtmitglied abweisen. Seine Grenze ist der
+  // Link, nicht der Arbeitsbereich.
+  if (subject.guestGrant !== null) {
+    return decideGuestAccess(subject.guestGrant, workspace, board, action)
+  }
+
   const visible = decideWorkspaceAccess(subject, workspace, { kind: 'workspace:read' })
   if (!visible.allowed) {
     return denied(visible.reason)

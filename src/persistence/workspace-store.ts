@@ -87,8 +87,8 @@ function toAuditEvent(row: AuditRow): AuditEvent {
   return {
     id: row.id,
     occurredAt: row.occurred_at,
-    // Der Akteur wird immer geschrieben; null entstuende erst, wenn der Nutzer spaeter geloescht wuerde.
-    actorId: row.actor_user_id ?? '',
+    // null heisst: kein interner Nutzer - der Beitritt eines Gastes - oder ein spaeter geloeschter Nutzer.
+    actorId: row.actor_user_id,
     action: row.action,
     targetType: row.target_type as NewAuditEvent['targetType'],
     targetId: row.target_id,

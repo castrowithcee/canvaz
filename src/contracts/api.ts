@@ -256,12 +256,35 @@ export type SetBoardStatusRequest = {
 /**
  * Geoeffnetes Board samt Szene. `version` ist die Ausgangsversion der naechsten Speicherung; bei einem noch
  * nie gespeicherten Board ist sie `0` und `scene` der leere Ausgangsstand.
+ *
+ * `viewer` unterscheidet die beiden Antwortformen desselben Endpunkts. Es ist bewusst ein
+ * **Unterscheidungsmerkmal** und kein Zusatzfeld: wer `SceneResponse` verarbeitet, muss darauf verzweigen
+ * und kommt an die Boardsicht sonst gar nicht heran. Ein spaeterer Aufrufer kann den Unterschied damit
+ * nicht versehentlich uebergehen und aus einer Gastantwort Felder lesen, die es dort nicht gibt.
  */
 export type BoardSceneResponse = {
+  readonly viewer: 'member'
   readonly board: BoardView
   readonly version: number
   readonly scene: SceneSnapshot
 }
+
+/**
+ * Dieselbe Szene fuer einen Gast - mit der reduzierten Boardsicht.
+ *
+ * **Kein Workspacebezug, keine Ownerkennung, kein Owner-Anzeigename.** Ein Gast hat einen Link auf genau
+ * ein Board bekommen; wem es gehoert, in welchem Arbeitsbereich es liegt und welche internen Kennungen
+ * daran haengen, ist nicht Teil dieser Freigabe.
+ */
+export type GuestBoardSceneResponse = {
+  readonly viewer: 'guest'
+  readonly board: GuestBoardView
+  readonly version: number
+  readonly scene: SceneSnapshot
+}
+
+/** Was `GET /api/boards/scene` liefert. Welche der beiden Formen, entscheidet die Art der Sitzung. */
+export type SceneResponse = BoardSceneResponse | GuestBoardSceneResponse
 
 export type SaveSceneRequest = {
   readonly boardId: string
@@ -336,6 +359,107 @@ export type BoardGrantChangeResponse = {
 export type TransferBoardOwnershipRequest = {
   readonly boardId: string
   readonly userId: string
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+/* Oeffentliche Gastfreigaben                                                                            */
+/* ---------------------------------------------------------------------------------------------------- */
+
+/** Freigabelinks eines Boards: lesen (GET), anlegen und widerrufen (POST). Alle drei `grant:manage`. */
+export const BOARD_SHARE_LINKS_PATH = `${API_BASE_PATH}/boards/share-links`
+export const BOARD_SHARE_LINK_CREATE_PATH = `${API_BASE_PATH}/boards/share-links/create`
+export const BOARD_SHARE_LINK_REVOKE_PATH = `${API_BASE_PATH}/boards/share-links/revoke`
+
+/** Beitritt ueber einen Freigabelink. Der einzige Endpunkt der Boardebene ohne jede Sitzung. */
+export const BOARD_GUEST_JOIN_PATH = `${API_BASE_PATH}/boards/guest/join`
+/** Eigener Gastzugang: Board, Rolle und CSRF-Token. Die Entsprechung von `/api/me` fuer einen Gast. */
+export const BOARD_GUEST_SESSION_PATH = `${API_BASE_PATH}/boards/guest/session`
+
+/**
+ * Pfad der Gastansicht in der SPA.
+ *
+ * Das Token steht im **Fragment** der geteilten Adresse (`/gast#<token>`) und nie in der
+ * Abfragezeichenfolge: ein Fragment wird vom Browser nicht mitgesendet und landet damit weder in einem
+ * Serverprotokoll noch in einem Referrer noch in einem Zwischenspeicher.
+ */
+export const GUEST_APP_PATH = '/gast'
+
+export type GuestRoleView = 'guest-viewer' | 'guest-editor'
+
+export type BoardShareLinkView = {
+  readonly id: string
+  readonly role: GuestRoleView
+  /** Anzeigename des Erzeugers; `null`, wenn sein Konto nicht mehr existiert. */
+  readonly createdByDisplayName: string | null
+  /** ISO-8601. */
+  readonly createdAt: string
+  /** ISO-8601 oder `null`: dieser Link laeuft nicht von selbst ab. */
+  readonly expiresAt: string | null
+  /** ISO-8601 oder `null`. Ein widerrufener Link bleibt sichtbar, damit der Nachweis lesbar bleibt. */
+  readonly revokedAt: string | null
+  /** Zahl der bisher beigetretenen Gaeste. Ohne Namen und ohne Zeitpunkte. */
+  readonly guestCount: number
+}
+
+export type BoardShareLinksResponse = {
+  readonly board: BoardView
+  readonly links: readonly BoardShareLinkView[]
+}
+
+export type CreateBoardShareLinkRequest = {
+  readonly boardId: string
+  /** Fehlt die Rolle, gilt `guest-viewer`. Schreibrecht ist immer eine ausdrueckliche Entscheidung. */
+  readonly role?: GuestRoleView
+  /** Lebensdauer in Stunden. Fehlt sie, laeuft der Link nicht von selbst ab. */
+  readonly expiresInHours?: number
+}
+
+/**
+ * Antwort auf die Anlage.
+ *
+ * `url` enthaelt das Klartexttoken und ist die **einzige** Stelle, an der es je erscheint. Es wird nirgends
+ * gespeichert, nirgends protokolliert und laesst sich danach nicht noch einmal abrufen; ein verlorener Link
+ * wird widerrufen und neu angelegt.
+ */
+export type CreateBoardShareLinkResponse = {
+  readonly link: BoardShareLinkView
+  readonly url: string
+}
+
+export type RevokeBoardShareLinkRequest = {
+  readonly boardId: string
+  readonly shareLinkId: string
+}
+
+export type JoinBoardAsGuestRequest = {
+  readonly token: string
+  readonly displayName: string
+}
+
+/**
+ * Gueltiger Gastzugang.
+ *
+ * Bewusst ohne jede Angabe zum Arbeitsbereich, zu Mitgliedern oder zu anderen Boards: ein Gast erfaehrt
+ * genau das, was er zum Arbeiten an diesem einen Board braucht.
+ */
+export type GuestSessionResponse = {
+  readonly board: GuestBoardView
+  readonly role: GuestRoleView
+  /** Selbst gewaehlter Anzeigename; er erscheint im Teilnehmerfeld der Mitbearbeiter. */
+  readonly displayName: string
+  /** An die Gastsession gebundenes Token fuer zustandsaendernde Anfragen. */
+  readonly csrfToken: string
+  /** ISO-8601, Ende der Gastsession. Sie ueberlebt ihren Link nie. */
+  readonly expiresAt: string
+}
+
+/** Was ein Gast von einem Board sieht: der Inhalt, den er bearbeitet, und sonst nichts. */
+export type GuestBoardView = {
+  readonly id: string
+  readonly title: string
+  readonly status: BoardStatusView
+  /** Nummer der zuletzt gespeicherten Szene. `0` heisst: noch nie gespeichert. */
+  readonly sceneVersion: number
 }
 
 /* ---------------------------------------------------------------------------------------------------- */

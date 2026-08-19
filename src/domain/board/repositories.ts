@@ -11,7 +11,27 @@ import type { SceneSnapshot } from '../../contracts/scene.js'
 import type { UserId } from '../identity/model.js'
 import type { Workspace, WorkspaceId, WorkspaceRole } from '../workspace/model.js'
 import type { AuditRepository, WorkspaceRepository } from '../workspace/repositories.js'
+import type {
+  AuthenticatedGuest,
+  BoardShareLink,
+  BoardShareLinkId,
+  GuestRole,
+  GuestSession,
+  GuestSessionId,
+} from './guest.js'
 import type { Board, BoardGrantRole, BoardId, BoardRole, BoardStatus } from './model.js'
+
+/**
+ * Wer ein Board anfragt.
+ *
+ * Ein interner Nutzer bringt seine Nutzerkennung mit, ein Gast die Kennung seiner Gastsession. Beides sind
+ * verschiedene Kennungsraeume und beide fuehren ueber **dieselbe** Abfrage zum Board - dadurch gibt es
+ * weiterhin nur einen Weg zu einem Boarddatensatz, und ein Gast kann ihn nicht an der Berechtigung vorbei
+ * nehmen.
+ */
+export type BoardViewer =
+  | { readonly kind: 'user'; readonly userId: UserId }
+  | { readonly kind: 'guest'; readonly guestSessionId: GuestSessionId }
 
 /**
  * Board samt Workspace und beiden Rollen des fragenden Nutzers. `role === null` heisst Nichtmitglied,
@@ -23,6 +43,12 @@ export type BoardAccess = {
   readonly workspace: Workspace
   readonly role: WorkspaceRole | null
   readonly boardRole: BoardRole | null
+  /**
+   * Rolle eines Gastes auf genau diesem Board, aus seinem noch gueltigen Freigabelink. `null` heisst: kein
+   * Gast oder kein gueltiger Link mehr. Bei einem internen Nutzer immer `null`, bei einem Gast sind
+   * umgekehrt `role` und `boardRole` immer `null` - die beiden Ebenen mischen sich nie.
+   */
+  readonly guestRole: GuestRole | null
   readonly ownerDisplayName: string
 }
 
@@ -41,14 +67,21 @@ export type BoardFilter = {
 export interface BoardRepository {
   /** Ausschliesslich Boards des angegebenen Workspace. Die Sichtbarkeit des Workspace prueft der Aufrufer. */
   listForWorkspace(workspaceId: WorkspaceId, filter: BoardFilter): Promise<readonly BoardListEntry[]>
-  /** Board samt Workspace und eigener Rolle. `null` heisst: existiert nicht. */
-  findForUser(id: BoardId, userId: UserId): Promise<BoardAccess | null>
   /**
-   * Wie `findForUser`, sperrt die Boardzeile aber bis zum Ende der Transaktion. Jede Aenderung an Board oder
-   * Szene laeuft darueber, damit gleichzeitige Speicherungen serialisiert werden und die Versionspruefung
-   * nie auf einem veralteten Stand entscheidet. Nur in einer Transaktion gueltig.
+   * Board samt Workspace und eigener Rolle. `null` heisst: existiert nicht - oder, bei einem Gast, sein
+   * Zugang gilt nicht (mehr) fuer dieses Board.
+   *
+   * `now` entscheidet ueber Ablauf und Widerruf des Gastzugangs. Er wird bei **jedem** Aufruf frisch
+   * geprueft und nirgends zwischengespeichert; deshalb wirkt ein Widerruf auch auf eine laengst offene
+   * Verbindung, sobald sie das naechste Mal aufloest.
    */
-  findForUpdate(id: BoardId, userId: UserId): Promise<BoardAccess | null>
+  findForViewer(id: BoardId, viewer: BoardViewer, now: Date): Promise<BoardAccess | null>
+  /**
+   * Wie `findForViewer`, sperrt die Boardzeile aber bis zum Ende der Transaktion. Jede Aenderung an Board
+   * oder Szene laeuft darueber, damit gleichzeitige Speicherungen serialisiert werden und die
+   * Versionspruefung nie auf einem veralteten Stand entscheidet. Nur in einer Transaktion gueltig.
+   */
+  findForUpdate(id: BoardId, viewer: BoardViewer, now: Date): Promise<BoardAccess | null>
   create(workspaceId: WorkspaceId, title: string, ownerId: UserId): Promise<Board>
   rename(id: BoardId, title: string): Promise<Board>
   setStatus(id: BoardId, status: BoardStatus): Promise<Board>
@@ -106,6 +139,10 @@ export type SceneVersion = {
   readonly boardId: BoardId
   readonly version: number
   readonly snapshot: SceneSnapshot
+  /**
+   * Urheber der Speicherung. `null` heisst: ein Gast hat sie geschrieben oder der Nutzer wurde inzwischen
+   * aus der Datenbank entfernt. Ein Gast ist kein Nutzer und kann in dieser Spalte deshalb nicht stehen.
+   */
   readonly authorId: UserId | null
   readonly createdAt: Date
 }
@@ -141,7 +178,12 @@ export interface SceneRepository {
    * Legt genau die Version `version` an und wirft `SceneConflictError`, wenn es sie schon gibt. Der
    * Aufrufer erhoeht `boards.current_scene_version` in derselben Transaktion.
    */
-  append(boardId: BoardId, version: number, snapshot: SceneSnapshot, authorId: UserId): Promise<SceneVersion>
+  append(
+    boardId: BoardId,
+    version: number,
+    snapshot: SceneSnapshot,
+    authorId: UserId | null,
+  ): Promise<SceneVersion>
   /** Begrenzt die Historie eines Boards auf die juengsten Versionen. */
   prune(boardId: BoardId, keepNewest: number): Promise<void>
 }
@@ -178,6 +220,60 @@ export interface BoardAssetRepository {
   record(asset: NewBoardAsset): Promise<BoardAsset>
 }
 
+/* ---------------------------------------------------------------------------------------------------- */
+/* Oeffentliche Gastfreigaben                                                                            */
+/* ---------------------------------------------------------------------------------------------------- */
+
+/** Freigabelink samt Anzeigename seines Erzeugers; die Liste soll keine zweite Abfrage je Zeile brauchen. */
+export type BoardShareLinkEntry = BoardShareLink & {
+  readonly createdByDisplayName: string | null
+  /** Zahl der bisher daraus entstandenen Gastsessions. Reine Kennzahl, ohne Namen und ohne Zeitpunkte. */
+  readonly guestCount: number
+}
+
+export type NewBoardShareLink = {
+  readonly boardId: BoardId
+  readonly workspaceId: WorkspaceId
+  /** Hash des Tokens. Das Token selbst verlaesst den Server genau einmal, in der Antwort auf die Anlage. */
+  readonly tokenHash: string
+  readonly role: GuestRole
+  readonly createdByUserId: UserId
+  readonly expiresAt: Date | null
+}
+
+export interface BoardShareLinkRepository {
+  /** Ausschliesslich Links genau dieses Boards. Die Berechtigung prueft der Aufrufer. */
+  listForBoard(boardId: BoardId): Promise<readonly BoardShareLinkEntry[]>
+  /** Link und Board zusammen; es gibt keine Abfrage allein ueber die Linkkennung. */
+  find(boardId: BoardId, id: BoardShareLinkId): Promise<BoardShareLink | null>
+  /**
+   * Loest ein Freigabetoken auf. Liefert **nur** einen Link, der weder widerrufen noch abgelaufen ist -
+   * Ablauf und Widerruf stehen in der Abfrage selbst und lassen sich damit nicht umgehen.
+   */
+  findLiveByTokenHash(tokenHash: string, now: Date): Promise<BoardShareLink | null>
+  create(link: NewBoardShareLink): Promise<BoardShareLink>
+  /**
+   * Widerruft den Link. Idempotent: ein bereits widerrufener Link behaelt seinen Zeitpunkt, damit ein
+   * zweiter Aufruf den Nachweis nicht verschiebt.
+   */
+  revoke(boardId: BoardId, id: BoardShareLinkId, revokedAt: Date): Promise<BoardShareLink | null>
+}
+
+export interface GuestSessionRepository {
+  /**
+   * Loest ein Gastgeheimnis auf. Liefert nur, was **beide** Invarianten erfuellt: lebende Gastsession und
+   * lebender Link. Alles andere ist `null` - Ablauf und Widerruf wirken damit sofort und ohne Aufraeumlauf.
+   */
+  findAuthenticatedByTokenHash(tokenHash: string, now: Date): Promise<AuthenticatedGuest | null>
+  create(session: {
+    readonly shareLinkId: BoardShareLinkId
+    readonly boardId: BoardId
+    readonly tokenHash: string
+    readonly displayName: string
+    readonly expiresAt: Date
+  }): Promise<GuestSession>
+}
+
 /**
  * Aenderung und zugehoeriges Auditereignis entstehen gemeinsam oder gar nicht. `workspaces` ist Teil des
  * Stores, weil jede Boardaktion zuerst die Sichtbarkeit des Workspace prueft und beides in derselben
@@ -186,6 +282,8 @@ export interface BoardAssetRepository {
 export interface BoardStore {
   readonly boards: BoardRepository
   readonly grants: BoardGrantRepository
+  readonly shareLinks: BoardShareLinkRepository
+  readonly guests: GuestSessionRepository
   readonly scenes: SceneRepository
   readonly assets: BoardAssetRepository
   readonly workspaces: WorkspaceRepository

@@ -15,10 +15,17 @@
  * ## Eine Stelle loest auf
  *
  * `resolveAccess` ist die einzige Stelle, an der aus einer Verbindung eine Berechtigung wird. Sie liefert
- * Workspacerolle **und** Boardrolle in denselben `BoardSubject`, den auch die Routen bauen; eine
- * Herabstufung wirkt deshalb auf die naechste Nachricht und spaetestens mit dem Wiederholungslauf auf jede
- * stille Verbindung. Eine Gastberechtigung kaeme als weiteres Feld genau hierher - das Protokoll aendert
- * sich dafuer nicht.
+ * Workspacerolle, Boardrolle **und** Gastgrant in denselben `BoardSubject`, den auch die Routen bauen
+ * (`boardSubject` in `requester.ts`); eine Herabstufung wirkt deshalb auf die naechste Nachricht und
+ * spaetestens mit dem Wiederholungslauf auf jede stille Verbindung.
+ *
+ * ## Gaeste sitzen im selben Raum
+ *
+ * Ein Gast aus einem Freigabelink tritt demselben Raum bei wie ein Mitglied, mit demselben Protokoll und
+ * derselben Presence - ein selbst gewaehlter Anzeigename, sonst nichts. Ablauf und Widerruf seines Links
+ * wirken ueber genau denselben Weg wie ein Mitgliedschaftsentzug: die naechste Aufloesung findet nichts
+ * mehr, und die Verbindung wird beendet. Ein Rollenwechsel des Links stuft sie herab wie jede andere
+ * Herabstufung. Das Protokoll aendert sich fuer beides nicht.
  *
  * ## Grenzen dieser Ebene
  *
@@ -49,13 +56,13 @@ import type { BinaryFileRef, PersistedAppState, SceneSnapshot, SyncElement } fro
 import { SCENE_SCHEMA_VERSION, createEmptySnapshot, findUnstorableValue } from '../contracts/scene.js'
 import type { BoardId } from '../domain/board/model.js'
 import { SCENE_VERSION_RETENTION } from '../domain/board/model.js'
-import type { BoardSubject } from '../domain/board/policy.js'
 import { decideBoardAccess } from '../domain/board/policy.js'
-import type { BoardStore } from '../domain/board/repositories.js'
+import type { BoardAccess, BoardStore } from '../domain/board/repositories.js'
 import { CorruptSceneError, SceneConflictError } from '../domain/board/repositories.js'
 import { reconcileElements } from '../domain/board/reconcile.js'
-import type { AuthenticatedSession } from '../domain/identity/model.js'
 import type { Logger } from './log.js'
+import type { Requester } from './requester.js'
+import { boardSubject, displayNameOf, requesterFields, sessionIdOf, userOf, viewerOf } from './requester.js'
 
 /**
  * Takt der Checkpoints.
@@ -158,7 +165,7 @@ export type BoardRoomOptions = {
 
 export type BoardRooms = {
   /** Passt auf `RealtimeOptions.onConnection`. */
-  onConnection(socket: WebSocket, auth: AuthenticatedSession): void
+  onConnection(socket: WebSocket, requester: Requester): void
   /** Offene Raeume; ausschliesslich fuer Tests und Diagnose. */
   readonly roomCount: number
   close(): Promise<void>
@@ -190,9 +197,10 @@ type Room = {
   firstDirtyAt: number | null
   /**
    * Wer die letzte angenommene Aenderung beigetragen hat. Er ist der Autor des naechsten Checkpoints, und
-   * seine Berechtigung wird beim Schreiben unter der Zeilensperre erneut geprueft.
+   * seine Berechtigung wird beim Schreiben unter der Zeilensperre erneut geprueft. Ein Gast kann das
+   * ebenso sein - er steht danach nur nicht in der Autorenspalte, weil er kein Nutzer ist.
    */
-  lastAuthor: AuthenticatedSession['user'] | null
+  lastAuthor: Requester | null
   checkpointTimer: NodeJS.Timeout | null
   presenceTimer: NodeJS.Timeout | null
   readonly participants: Set<Participant>
@@ -201,7 +209,8 @@ type Room = {
 type Participant = {
   readonly clientId: string
   readonly socket: WebSocket
-  readonly auth: AuthenticatedSession
+  /** Interne Sitzung oder Gastsession. Ueber das Duerfen entscheidet in beiden Faellen dieselbe Policy. */
+  readonly requester: Requester
   /** `null` heisst: verbunden, aber in keinem Raum. Das ist der Zustand direkt nach dem Upgrade. */
   room: Room | null
   canWrite: boolean
@@ -255,7 +264,8 @@ function measure(room: Room): void {
 function presenceOf(participant: Participant): PresenceView {
   return {
     clientId: participant.clientId,
-    displayName: participant.auth.user.displayName,
+    // Beim Gast der selbst gewaehlte Name. Wie bisher keine Adresse, keine Kennung, keine Rolle.
+    displayName: displayNameOf(participant.requester),
     canWrite: participant.canWrite,
     pointer: participant.pointer,
     selectedElementIds: participant.selectedElementIds,
@@ -318,16 +328,23 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
   /**
    * Einzige Stelle, an der aus einer Verbindung eine Berechtigung wird.
    *
-   * Liest bei **jedem** Aufruf frisch und speichert nichts zwischen: Mitgliedschaft und Boardrolle kommen
-   * aus demselben Datensatz. Ein Entzug der Mitgliedschaft nimmt damit die Leseberechtigung und beendet die
-   * Verbindung, eine Herabstufung auf `viewer` nimmt nur das Schreibrecht.
+   * Liest bei **jedem** Aufruf frisch und speichert nichts zwischen: Mitgliedschaft, Boardrolle und - bei
+   * einem Gast - die Rolle seines noch gueltigen Links kommen aus demselben Datensatz. Ein Entzug der
+   * Mitgliedschaft nimmt die Leseberechtigung und beendet die Verbindung, eine Herabstufung auf `viewer`
+   * nimmt nur das Schreibrecht. Fuer einen Gast gilt dasselbe: Ablauf und Widerruf seines Links beenden,
+   * ein Rollenwechsel stuft herab.
    */
-  async function resolveAccess(auth: AuthenticatedSession, boardId: BoardId): Promise<BoardPermission> {
-    const access = await store.boards.findForUser(boardId, auth.user.id)
+  async function resolveAccess(requester: Requester, boardId: BoardId): Promise<BoardPermission> {
+    const access = await store.boards.findForViewer(boardId, viewerOf(requester), now())
     if (access === null) {
       return NO_ACCESS
     }
-    const subject: BoardSubject = { user: auth.user, workspaceRole: access.role, boardRole: access.boardRole }
+    return permissionFor(requester, access)
+  }
+
+  /** Dieselbe Entscheidung, aber auf einem bereits geladenen (und ggf. gesperrten) Datensatz. */
+  function permissionFor(requester: Requester, access: BoardAccess): BoardPermission {
+    const subject = boardSubject(requester, access)
     if (!decideBoardAccess(subject, access.workspace, access.board, 'board:read').allowed) {
       // Wer nicht lesen darf, erfaehrt nicht, ob es das Board gibt.
       return NO_ACCESS
@@ -351,7 +368,7 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
     const buffered = socket.bufferedAmount
     if (buffered > slowCloseBytes) {
       logger('warn', 'realtime.backpressure.closed', {
-        userId: participant.auth.user.id,
+        ...requesterFields(participant.requester),
         boardId: participant.room?.boardId ?? '',
         buffered,
       })
@@ -367,7 +384,7 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
       // Kein stiller Verlust: der vollstaendige Stand kommt, sobald der Puffer abgeflossen ist.
       participant.needsResync = true
       logger('warn', 'realtime.backpressure.deferred', {
-        userId: participant.auth.user.id,
+        ...requesterFields(participant.requester),
         boardId: participant.room?.boardId ?? '',
         buffered,
       })
@@ -421,12 +438,12 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
    * die bereits angenommene Arbeit aller anderen mit verloren, obwohl niemand sonst ein Recht eingebuesst
    * hat. Die Berechtigung jedes Kandidaten wird trotzdem unter der Zeilensperre erneut geprueft.
    */
-  function checkpointAuthors(room: Room): readonly AuthenticatedSession['user'][] {
-    const authors: AuthenticatedSession['user'][] = []
+  function checkpointAuthors(room: Room): readonly Requester[] {
+    const authors: Requester[] = []
     const seen = new Set<string>()
-    for (const candidate of [room.lastAuthor, ...[...room.participants].map((entry) => entry.auth.user)]) {
-      if (candidate !== null && !seen.has(candidate.id)) {
-        seen.add(candidate.id)
+    for (const candidate of [room.lastAuthor, ...[...room.participants].map((entry) => entry.requester)]) {
+      if (candidate !== null && !seen.has(sessionIdOf(candidate))) {
+        seen.add(sessionIdOf(candidate))
         authors.push(candidate)
       }
     }
@@ -442,19 +459,19 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
     room.saving = true
     try {
       const result = await store.transaction(async (tx) => {
-        let author: AuthenticatedSession['user'] | null = null
-        let access: Awaited<ReturnType<typeof tx.boards.findForUpdate>> = null
+        let author: Requester | null = null
+        let access: BoardAccess | null = null
         let reason = 'not-visible'
         for (const candidate of authors) {
-          const found = await tx.boards.findForUpdate(room.boardId, candidate.id)
+          const found = await tx.boards.findForUpdate(room.boardId, viewerOf(candidate), now())
           if (found === null) {
             continue
           }
-          // Dieselbe Entscheidung wie in der HTTP-Route, mit demselben Subjekt aus Nutzer, Workspacerolle
-          // und Boardrolle. Beide Rollen werden hier frisch unter der Zeilensperre gelesen; eine
-          // Deaktivierung schliesst die Verbindung bereits ueber die Sitzungsebene.
+          // Dieselbe Entscheidung wie in der HTTP-Route, mit demselben Subjekt. Alle Rollen werden hier
+          // frisch unter der Zeilensperre gelesen; eine Deaktivierung schliesst die Verbindung bereits ueber
+          // die Sitzungsebene, und ein widerrufener Gastlink faellt hier durch.
           const decision = decideBoardAccess(
-            { user: candidate, workspaceRole: found.role, boardRole: found.boardRole },
+            boardSubject(candidate, found),
             found.workspace,
             found.board,
             'scene:write',
@@ -487,7 +504,9 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
           [...room.participants].map((participant) => [participant.clientId, participant.lastAcceptedChangeSequence]),
         )
         const snapshot = snapshotOf(room, now().getTime())
-        const saved = await tx.scenes.append(room.boardId, version, snapshot, author.id)
+        // Ein Gast ist kein Nutzer und steht deshalb nicht in der Autorenspalte; geschrieben wird der
+        // Checkpoint trotzdem - die Arbeit der anderen haengt daran.
+        const saved = await tx.scenes.append(room.boardId, version, snapshot, userOf(author)?.id ?? null)
         await tx.boards.setSceneVersion(room.boardId, version)
         await tx.scenes.prune(room.boardId, SCENE_VERSION_RETENTION)
         return { kind: 'saved', version, savedAt: saved.createdAt, snapshotSequence, clientChangeSequences } as const
@@ -656,9 +675,9 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
       sendError(participant.socket, 'falscher-zustand')
       return
     }
-    const permission = await resolveAccess(participant.auth, boardId)
+    const permission = await resolveAccess(participant.requester, boardId)
     if (!permission.read) {
-      logger('warn', 'realtime.join.denied', { userId: participant.auth.user.id, boardId })
+      logger('warn', 'realtime.join.denied', { ...requesterFields(participant.requester), boardId })
       sendError(participant.socket, 'board-nicht-gefunden')
       return
     }
@@ -678,7 +697,11 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
     if (room.participants.size >= maxRoomParticipants) {
       // Benannte Ablehnung, kein Schliessen: die Verbindung bleibt bestehen und kann es spaeter oder auf
       // einem anderen Board erneut versuchen. Die bereits Anwesenden merken nichts davon.
-      logger('warn', 'realtime.join.denied', { userId: participant.auth.user.id, boardId, reason: 'raum-voll' })
+      logger('warn', 'realtime.join.denied', {
+        ...requesterFields(participant.requester),
+        boardId,
+        reason: 'raum-voll',
+      })
       if (room.participants.size === 0) {
         rooms.delete(room.boardId)
       }
@@ -698,7 +721,11 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
       scene: snapshotOf(room, now().getTime()),
       peers: [...room.participants].map(presenceOf),
     })
-    logger('info', 'realtime.join.accepted', { userId: participant.auth.user.id, boardId, canWrite: permission.write })
+    logger('info', 'realtime.join.accepted', {
+      ...requesterFields(participant.requester),
+      boardId,
+      canWrite: permission.write,
+    })
     schedulePresence(room)
   }
 
@@ -741,7 +768,7 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
     message: Extract<ClientMessage, { type: 'scene-change' }>,
   ): Promise<void> {
     // Schreibrecht wird bei **jeder** Aenderungsnachricht neu aufgeloest, nicht nur beim Beitritt.
-    const permission = await resolveAccess(participant.auth, room.boardId)
+    const permission = await resolveAccess(participant.requester, room.boardId)
     if (!permission.read) {
       revoke(participant)
       return
@@ -752,7 +779,7 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
       schedulePresence(room)
     }
     if (!permission.write) {
-      logger('warn', 'realtime.change.denied', { userId: participant.auth.user.id, boardId: room.boardId })
+      logger('warn', 'realtime.change.denied', { ...requesterFields(participant.requester), boardId: room.boardId })
       sendError(participant.socket, 'kein-schreibrecht')
       return
     }
@@ -790,7 +817,7 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
     if (projiziert > maxRoomBytes) {
       logger('warn', 'realtime.room.too-large', {
         boardId: room.boardId,
-        userId: participant.auth.user.id,
+        ...requesterFields(participant.requester),
         bytes: projiziert,
       })
       sendError(participant.socket, 'raum-zu-gross')
@@ -818,7 +845,7 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
     room.dirty = true
     room.changeSequence += 1
     room.firstDirtyAt ??= now().getTime()
-    room.lastAuthor = participant.auth.user
+    room.lastAuthor = participant.requester
     scheduleCheckpoint(room)
     const applied = message.elements.filter((element) => appliedIds.has(element.id))
     const broadcast: ServerMessage = {
@@ -866,7 +893,10 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
     }
     participant.dropped += 1
     if (participant.dropped > messageBurst) {
-      logger('warn', 'realtime.rate.closed', { userId: participant.auth.user.id, dropped: participant.dropped })
+      logger('warn', 'realtime.rate.closed', {
+        ...requesterFields(participant.requester),
+        dropped: participant.dropped,
+      })
       leaveRoom(participant)
       sendError(participant.socket, 'zu-viele-nachrichten')
       participant.socket.close(TOO_MANY_CLOSE_CODE, 'Zu viele Nachrichten')
@@ -874,7 +904,7 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
     }
     if (at - participant.noticedAt >= 1000) {
       participant.noticedAt = at
-      logger('warn', 'realtime.rate.exceeded', { userId: participant.auth.user.id })
+      logger('warn', 'realtime.rate.exceeded', { ...requesterFields(participant.requester) })
       sendError(participant.socket, 'zu-viele-nachrichten')
     }
     return false
@@ -883,7 +913,7 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
   /** Zugriff entzogen: der Raum ist verloren, die Sitzung selbst bleibt gueltig. */
   function revoke(participant: Participant): void {
     logger('warn', 'realtime.access.revoked', {
-      userId: participant.auth.user.id,
+      ...requesterFields(participant.requester),
       boardId: participant.room?.boardId ?? '',
     })
     leaveRoom(participant)
@@ -914,7 +944,7 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
       case 'resync': {
         // Ein `resync` liefert den vollstaendigen Boardzustand. Er wird deshalb wie ein Beitritt behandelt
         // und frisch autorisiert, statt sich auf die Pruefung beim Beitritt zu verlassen.
-        const permission = await resolveAccess(participant.auth, room.boardId)
+        const permission = await resolveAccess(participant.requester, room.boardId)
         if (!permission.read) {
           revoke(participant)
           return
@@ -944,7 +974,7 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
   async function recheckAccess(): Promise<void> {
     for (const room of [...rooms.values()]) {
       for (const participant of [...room.participants]) {
-        const permission = await resolveAccess(participant.auth, room.boardId)
+        const permission = await resolveAccess(participant.requester, room.boardId)
         if (!permission.read) {
           revoke(participant)
           continue
@@ -974,11 +1004,11 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
   accessSweep.unref()
 
   return {
-    onConnection(socket: WebSocket, auth: AuthenticatedSession): void {
+    onConnection(socket: WebSocket, requester: Requester): void {
       const participant: Participant = {
         clientId: randomUUID(),
         socket,
-        auth,
+        requester,
         room: null,
         canWrite: false,
         pointer: null,
@@ -1015,7 +1045,10 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
         pending = pending
           .then(() => handle(participant, parsed.message))
           .catch((error: unknown) => {
-            logger('error', 'realtime.message.failed', { userId: auth.user.id, reason: String(error) })
+            logger('error', 'realtime.message.failed', {
+              ...requesterFields(requester),
+              reason: String(error),
+            })
             leaveRoom(participant)
             socket.close(1011, 'Serverfehler')
           })

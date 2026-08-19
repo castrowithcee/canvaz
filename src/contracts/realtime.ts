@@ -220,6 +220,7 @@ export type ClientMessage = JoinMessage | LeaveMessage | SceneChangeMessage | Pr
 export type ReadyMessage = {
   readonly type: 'ready'
   readonly protocolVersion: number
+  /** Kennung des angemeldeten Nutzers; bei einem Gast die Kennung seiner Gastsession. */
   readonly userId: string
 }
 

@@ -12,6 +12,13 @@ import type { Pool } from 'pg'
 import type { SceneSnapshot } from '../contracts/scene.js'
 import { parseSceneSnapshot } from '../contracts/scene.js'
 import type { UserId } from '../domain/identity/model.js'
+import type {
+  AuthenticatedGuest,
+  BoardShareLink,
+  BoardShareLinkId,
+  GuestRole,
+  GuestSession,
+} from '../domain/board/guest.js'
 import type { Board, BoardGrantRole, BoardId, BoardStatus } from '../domain/board/model.js'
 import { resolveBoardRole } from '../domain/board/model.js'
 import type {
@@ -21,8 +28,11 @@ import type {
   BoardGrant,
   BoardGrantEntry,
   BoardListEntry,
+  BoardShareLinkEntry,
   BoardStore,
+  BoardViewer,
   NewBoardAsset,
+  NewBoardShareLink,
   SceneVersion,
 } from '../domain/board/repositories.js'
 import { BoardGrantConflictError, CorruptSceneError, SceneConflictError } from '../domain/board/repositories.js'
@@ -116,6 +126,69 @@ function toBoardGrant(row: BoardGrantRow): BoardGrant {
   }
 }
 
+type ShareLinkRow = {
+  id: string
+  board_id: string
+  role: string
+  created_by_user_id: string | null
+  created_at: Date
+  expires_at: Date | null
+  revoked_at: Date | null
+}
+
+const SHARE_LINK_COLUMNS = 'id, board_id, role, created_by_user_id, created_at, expires_at, revoked_at'
+
+function toShareLink(row: ShareLinkRow): BoardShareLink {
+  return {
+    id: row.id,
+    boardId: row.board_id,
+    // Der Check-Constraint laesst nur diese Werte zu.
+    role: row.role as GuestRole,
+    createdByUserId: row.created_by_user_id,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+    revokedAt: row.revoked_at,
+  }
+}
+
+type GuestSessionRow = {
+  id: string
+  share_link_id: string
+  board_id: string
+  display_name: string
+  created_at: Date
+  expires_at: Date
+  revoked_at: Date | null
+}
+
+const GUEST_SESSION_COLUMNS = 'id, share_link_id, board_id, display_name, created_at, expires_at, revoked_at'
+
+function toGuestSession(row: GuestSessionRow): GuestSession {
+  return {
+    id: row.id,
+    shareLinkId: row.share_link_id,
+    boardId: row.board_id,
+    displayName: row.display_name,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+    revokedAt: row.revoked_at,
+  }
+}
+
+/**
+ * Bedingung eines noch gueltigen Gastzugangs, einmal formuliert.
+ *
+ * Sie steht bewusst in **einer** Zeichenkette: Gastsession und Link muessen beide leben, und eine zweite,
+ * leicht abweichende Formulierung waere genau die Stelle, an der ein Widerruf einmal nicht wirkt. Die
+ * Platzhalter sind `$s` fuer die Gastsession, `$l` fuer den Link und `$n` fuer den Zeitpunkt.
+ */
+function liveGuestCondition(session: string, link: string, now: string): string {
+  return `${session}.revoked_at is null
+      and ${session}.expires_at > ${now}
+      and ${link}.revoked_at is null
+      and (${link}.expires_at is null or ${link}.expires_at > ${now})`
+}
+
 function requireRow<T>(row: T | undefined, message: string): T {
   if (row === undefined) {
     throw new Error(message)
@@ -126,7 +199,54 @@ function requireRow<T>(row: T | undefined, message: string): T {
 export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boolean): BoardStore {
   const base = createWorkspaceStoreOn(pool, db, inTransaction)
 
-  async function loadAccess(id: BoardId, userId: UserId, lock: boolean): Promise<BoardAccess | null> {
+  /**
+   * Rollen des Anfragenden auf genau diesem Board, in **einer** Abfrage.
+   *
+   * Beim internen Nutzer sind das Mitgliedschaft und Freigabe, beim Gast die Rolle seines noch gueltigen
+   * Links. Zwei getrennte Abfragen waeren zwei Zeitpunkte; ausserhalb einer Transaktion faellt eine
+   * Aenderung sonst genau in die Luecke.
+   */
+  async function loadRoles(
+    board: BoardRow,
+    viewer: BoardViewer,
+    now: Date,
+  ): Promise<Pick<BoardAccess, 'role' | 'boardRole' | 'guestRole'>> {
+    if (viewer.kind === 'guest') {
+      const found = await db.query<{ role: string }>(
+        `select l.role
+           from board_guest_sessions s
+           join board_share_links l on l.id = s.share_link_id
+          where s.id = $1
+            and s.board_id = $2
+            and ${liveGuestCondition('s', 'l', '$3')}`,
+        [viewer.guestSessionId, board.id, now],
+      )
+      // Ein Gast hat nie eine Mitgliedschaft und nie eine Boardrolle. Beide Ebenen mischen sich nicht.
+      return { role: null, boardRole: null, guestRole: (found.rows[0]?.role as GuestRole | undefined) ?? null }
+    }
+    const roles = await db.query<{ workspace_role: string | null; grant_role: string | null }>(
+      `select (select role from workspace_memberships where workspace_id = $1 and user_id = $2) as workspace_role,
+              (select role from board_grants where board_id = $3 and user_id = $2) as grant_role`,
+      [board.workspace_id, viewer.userId, board.id],
+    )
+    const roleRow = roles.rows[0]
+    return {
+      role: (roleRow?.workspace_role as WorkspaceRole | null | undefined) ?? null,
+      boardRole: resolveBoardRole(
+        board.owner_user_id,
+        viewer.userId,
+        (roleRow?.grant_role as BoardGrantRole | null | undefined) ?? null,
+      ),
+      guestRole: null,
+    }
+  }
+
+  async function loadAccess(
+    id: BoardId,
+    viewer: BoardViewer,
+    now: Date,
+    lock: boolean,
+  ): Promise<BoardAccess | null> {
     // Zwei Schritte statt eines Joins ueber die Mitgliedschaft: `for update` wuerde sonst die falsche Zeile
     // sperren. Gesperrt wird ausschliesslich die Boardzeile - sie serialisiert die Speicherungen.
     const found = await db.query<
@@ -152,15 +272,6 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
     if (row === undefined) {
       return null
     }
-    // Beide Rollen in einer Abfrage: Mitgliedschaft und Freigabe entscheiden gemeinsam, und zwei getrennte
-    // Abfragen waeren zwei Zeitpunkte. Ausserhalb einer Transaktion faellt eine Aenderung dazwischen sonst
-    // genau in die Luecke.
-    const roles = await db.query<{ workspace_role: string | null; grant_role: string | null }>(
-      `select (select role from workspace_memberships where workspace_id = $1 and user_id = $2) as workspace_role,
-              (select role from board_grants where board_id = $3 and user_id = $2) as grant_role`,
-      [row.workspace_id, userId, row.id],
-    )
-    const roleRow = roles.rows[0]
     return {
       board: toBoard(row),
       workspace: {
@@ -170,12 +281,7 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
         createdAt: row.workspace_created_at,
         updatedAt: row.workspace_updated_at,
       },
-      role: (roleRow?.workspace_role as WorkspaceRole | null | undefined) ?? null,
-      boardRole: resolveBoardRole(
-        row.owner_user_id,
-        userId,
-        (roleRow?.grant_role as BoardGrantRole | null | undefined) ?? null,
-      ),
+      ...(await loadRoles(row, viewer, now)),
       ownerDisplayName: row.owner_display_name,
     }
   }
@@ -201,17 +307,17 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
         return result.rows.map((row) => ({ board: toBoard(row), ownerDisplayName: row.owner_display_name }))
       },
 
-      async findForUser(id: BoardId, userId: UserId): Promise<BoardAccess | null> {
-        return loadAccess(id, userId, false)
+      async findForViewer(id: BoardId, viewer: BoardViewer, now: Date): Promise<BoardAccess | null> {
+        return loadAccess(id, viewer, now, false)
       },
 
-      async findForUpdate(id: BoardId, userId: UserId): Promise<BoardAccess | null> {
+      async findForUpdate(id: BoardId, viewer: BoardViewer, now: Date): Promise<BoardAccess | null> {
         if (!inTransaction) {
           // Ausserhalb einer Transaktion faellt die Sperre sofort wieder weg und die Serialisierung waere
           // eine Illusion. Das ist ein Programmierfehler, kein Betriebszustand.
           throw new Error('findForUpdate ist nur innerhalb einer Transaktion gueltig')
         }
-        return loadAccess(id, userId, true)
+        return loadAccess(id, viewer, now, true)
       },
 
       async create(workspaceId: WorkspaceId, title: string, ownerId: UserId): Promise<Board> {
@@ -323,6 +429,108 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
       },
     },
 
+    shareLinks: {
+      async listForBoard(boardId: BoardId): Promise<readonly BoardShareLinkEntry[]> {
+        // Der Zaehler kommt als Unterabfrage mit: eine zweite Abfrage je Zeile waere fuer eine Liste, die
+        // ohnehin kurz ist, ein Vielfaches an Rundreisen.
+        const result = await db.query<ShareLinkRow & { created_by_display_name: string | null; guest_count: string }>(
+          `select l.id, l.board_id, l.role, l.created_by_user_id, l.created_at, l.expires_at, l.revoked_at,
+                  u.display_name as created_by_display_name,
+                  (select count(*) from board_guest_sessions s where s.share_link_id = l.id) as guest_count
+             from board_share_links l
+             left join users u on u.id = l.created_by_user_id
+            where l.board_id = $1
+            order by l.created_at desc, l.id`,
+          [boardId],
+        )
+        return result.rows.map((row) => ({
+          ...toShareLink(row),
+          createdByDisplayName: row.created_by_display_name,
+          guestCount: Number(row.guest_count),
+        }))
+      },
+
+      async find(boardId: BoardId, id: BoardShareLinkId): Promise<BoardShareLink | null> {
+        // Board und Link zusammen; es gibt keine Abfrage allein ueber die Linkkennung.
+        const result = await db.query<ShareLinkRow>(
+          `select ${SHARE_LINK_COLUMNS} from board_share_links where board_id = $1 and id = $2`,
+          [boardId, id],
+        )
+        const row = result.rows[0]
+        return row === undefined ? null : toShareLink(row)
+      },
+
+      async findLiveByTokenHash(tokenHash: string, now: Date): Promise<BoardShareLink | null> {
+        const result = await db.query<ShareLinkRow>(
+          `select ${SHARE_LINK_COLUMNS}
+             from board_share_links
+            where token_hash = $1
+              and revoked_at is null
+              and (expires_at is null or expires_at > $2)`,
+          [tokenHash, now],
+        )
+        const row = result.rows[0]
+        return row === undefined ? null : toShareLink(row)
+      },
+
+      async create(link: NewBoardShareLink): Promise<BoardShareLink> {
+        const result = await db.query<ShareLinkRow>(
+          `insert into board_share_links (board_id, workspace_id, token_hash, role, created_by_user_id, expires_at)
+           values ($1, $2, $3, $4, $5, $6)
+           returning ${SHARE_LINK_COLUMNS}`,
+          [link.boardId, link.workspaceId, link.tokenHash, link.role, link.createdByUserId, link.expiresAt],
+        )
+        return toShareLink(requireRow(result.rows[0], 'Freigabelink konnte nicht angelegt werden'))
+      },
+
+      async revoke(boardId: BoardId, id: BoardShareLinkId, revokedAt: Date): Promise<BoardShareLink | null> {
+        // `coalesce`: ein zweiter Widerruf laesst den ersten Zeitpunkt stehen. Der Nachweis soll sagen, wann
+        // der Zugang endete, nicht wann zuletzt jemand darauf geklickt hat.
+        const result = await db.query<ShareLinkRow>(
+          `update board_share_links set revoked_at = coalesce(revoked_at, $3)
+            where board_id = $1 and id = $2
+            returning ${SHARE_LINK_COLUMNS}`,
+          [boardId, id, revokedAt],
+        )
+        const row = result.rows[0]
+        return row === undefined ? null : toShareLink(row)
+      },
+    },
+
+    guests: {
+      async findAuthenticatedByTokenHash(tokenHash: string, now: Date): Promise<AuthenticatedGuest | null> {
+        const result = await db.query<GuestSessionRow & { link_role: string }>(
+          `select ${GUEST_SESSION_COLUMNS.split(', ').map((column) => `s.${column}`).join(', ')},
+                  l.role as link_role
+             from board_guest_sessions s
+             join board_share_links l on l.id = s.share_link_id
+            where s.token_hash = $1
+              and ${liveGuestCondition('s', 'l', '$2')}`,
+          [tokenHash, now],
+        )
+        const row = result.rows[0]
+        // Ablauf und Widerruf stehen in der Abfrage selbst: was hier nicht herauskommt, gilt nicht - und es
+        // gibt keinen zweiten Weg, an dem die Pruefung vorbeifuehren koennte.
+        return row === undefined ? null : { session: toGuestSession(row), role: row.link_role as GuestRole }
+      },
+
+      async create(session: {
+        readonly shareLinkId: BoardShareLinkId
+        readonly boardId: BoardId
+        readonly tokenHash: string
+        readonly displayName: string
+        readonly expiresAt: Date
+      }): Promise<GuestSession> {
+        const result = await db.query<GuestSessionRow>(
+          `insert into board_guest_sessions (share_link_id, board_id, token_hash, display_name, expires_at)
+           values ($1, $2, $3, $4, $5)
+           returning ${GUEST_SESSION_COLUMNS}`,
+          [session.shareLinkId, session.boardId, session.tokenHash, session.displayName, session.expiresAt],
+        )
+        return toGuestSession(requireRow(result.rows[0], 'Gastsession konnte nicht angelegt werden'))
+      },
+    },
+
     scenes: {
       async findLatest(boardId: BoardId): Promise<SceneVersion | null> {
         const result = await db.query<{
@@ -360,7 +568,7 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
         boardId: BoardId,
         version: number,
         snapshot: SceneSnapshot,
-        authorId: UserId,
+        authorId: UserId | null,
       ): Promise<SceneVersion> {
         try {
           const result = await db.query<{ created_at: Date }>(

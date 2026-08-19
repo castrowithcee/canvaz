@@ -51,6 +51,7 @@ const realtime = createRealtimeGateway({
   config,
   identity,
   workspaces,
+  boards,
   logger: consoleLogger,
   now: () => new Date(),
   onConnection: rooms.onConnection,

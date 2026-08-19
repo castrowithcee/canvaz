@@ -10,6 +10,7 @@ import type { HealthResponse } from '../contracts/api.js'
 import { createAdminRoutes } from './admin-routes.js'
 import { createAuthRoutes } from './auth-routes.js'
 import { createBoardRoutes } from './board-routes.js'
+import { createBoardShareRoutes } from './board-share-routes.js'
 import type { AppContext } from './context.js'
 import type { Route } from './http.js'
 import { sendJson } from './http.js'
@@ -33,5 +34,6 @@ export function createRoutes(context: AppContext): readonly Route[] {
     ...createAdminRoutes(context),
     ...createWorkspaceRoutes(context),
     ...createBoardRoutes(context),
+    ...createBoardShareRoutes(context),
   ]
 }

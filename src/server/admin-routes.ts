@@ -13,6 +13,7 @@ import type { AppContext } from './context.js'
 import { requireCsrfToken, requireSession, requireSystemAdmin, toUserView } from './guard.js'
 import type { Route } from './http.js'
 import { readJsonBody, sendError, sendJson } from './http.js'
+import { asRequester } from './requester.js'
 
 const STATUSES: readonly UserStatusView[] = ['active', 'deactivated']
 
@@ -50,7 +51,7 @@ export function createAdminRoutes(context: AppContext): readonly Route[] {
       path: ADMIN_USER_STATUS_PATH,
       handle: async ({ request, response }) => {
         const auth = await requireSession(context, request, response)
-        if (auth === null || !requireCsrfToken(context, request, response, auth)) {
+        if (auth === null || !requireCsrfToken(context, request, response, asRequester(auth))) {
           return
         }
         if (!requireSystemAdmin(context, response, auth)) {

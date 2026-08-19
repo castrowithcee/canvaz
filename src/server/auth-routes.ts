@@ -20,6 +20,7 @@ import type { Route } from './http.js'
 import { sendJson, sendRedirect } from './http.js'
 import { describeError } from './log.js'
 import { OidcError } from './oidc.js'
+import { asRequester } from './requester.js'
 import { clearSessionCookie, csrfTokenFor, setSessionCookie, startSession } from './session.js'
 
 /** Der Callback antwortet immer mit einer Weiterleitung auf die Startseite - mit oder ohne Fehlercode. */
@@ -170,7 +171,7 @@ export function createAuthRoutes(context: AppContext): readonly Route[] {
         if (auth === null) {
           return
         }
-        if (!requireCsrfToken(context, request, response, auth)) {
+        if (!requireCsrfToken(context, request, response, asRequester(auth))) {
           return
         }
         await context.identity.sessions.revoke(auth.session.id, context.now())

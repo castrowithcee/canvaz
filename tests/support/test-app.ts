@@ -110,6 +110,7 @@ export async function startTestApp(options: {
     config,
     identity: store,
     workspaces,
+    boards,
     logger,
     now,
     expiryCheckIntervalMs: 25,

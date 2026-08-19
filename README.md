@@ -52,6 +52,13 @@ zufaelliges Geheimnis, in der Datenbank nur dessen SHA-256-Hash. Unter HTTPS hei
 kann. Zustandsaendernde Endpunkte verlangen zusaetzlich das an die Sitzung gebundene CSRF-Token im Header
 `x-canvaz-csrf`; die SPA erhaelt es von `/api/me`.
 
+Externe ohne Konto erreichen genau ein Board ueber einen **Gastlink** (siehe
+[Oeffentliche Gastfreigaben](#oeffentliche-gastfreigaben)). Sie bekommen dabei eine eigene, kurzlebige
+Gastsession mit eigenem Cookie (`canvaz_guest`, unter HTTPS `__Host-canvaz_guest`), eigenem Hash in der
+Datenbank und einem eigenen, an die Gastsession gebundenen CSRF-Token im selben Header. Eine angemeldete
+Sitzung hat Vorrang: wer intern angemeldet ist, handelt als er selbst, auch wenn im selben Browser noch ein
+Gastcookie liegt.
+
 Jede Antwort traegt `Content-Security-Policy` (`default-src 'self'`, `frame-ancestors 'none'`,
 `object-src 'none'`, `base-uri 'self'`), `X-Content-Type-Options: nosniff` und `Referrer-Policy: no-referrer`.
 HSTS setzt bewusst die TLS-Terminierung des Deployments, nicht die Anwendung.
@@ -73,13 +80,17 @@ einen Systemadmin ergeben. Es gibt keine fest codierten Zugangsdaten.
 | GET | `/api/me` | angemeldet |
 | GET | `/api/admin/users` | angemeldet + Systemadmin |
 | POST | `/api/admin/users/status` | angemeldet + Systemadmin + CSRF-Token |
-| GET (Upgrade) | `/api/realtime` | angemeldet; WebSocket-Einstieg fuer die spaetere Realtime-Strecke |
+| GET (Upgrade) | `/api/realtime` | angemeldet **oder** gueltige Gastsession; WebSocket-Einstieg der Realtime-Strecke |
+| POST | `/api/boards/guest/join` | oeffentlich, verlangt ein gueltiges Freigabetoken und die eigene Herkunft |
+| GET | `/api/boards/guest/session` | gueltige Gastsession |
 
 Die Endpunkte der Arbeitsbereiche stehen im Abschnitt [Arbeitsbereiche und Rollen](#arbeitsbereiche-und-rollen),
 die der Boards im Abschnitt [Boards und Szenen](#boards-und-szenen).
 
 Logout und Deaktivierung widerrufen Sitzungen serverseitig und schliessen offene WebSocket-Verbindungen
 sofort; ein Upgrade danach wird abgelehnt. Auch der Ablauf der Sitzung schliesst eine offene Verbindung.
+Fuer einen Gast gilt dasselbe, und zusaetzlich beendet der Widerruf seines Freigabelinks jede offene
+Verbindung, die daraus entstanden ist.
 Ein Upgrade mit fremdem `Origin` wird abgewiesen, weil der CSRF-Header beim Handshake nicht greift.
 
 ## Arbeitsbereiche und Rollen
@@ -88,8 +99,9 @@ Ein **Arbeitsbereich** ist die aeussere Datengrenze der Instanz: jeder fachliche
 Workspacebezug, und ein Nutzer sieht ausschliesslich Arbeitsbereiche, denen er angehoert.
 
 Bestaetigte Rollen sind `owner`, `admin` und `member`. **Boardrollen sind eine eigene Ebene darunter** und
-wirken zusaetzlich zur Mitgliedschaft (siehe *Boards und Szenen*); Gastrollen folgen in einem spaeteren
-Paket.
+wirken zusaetzlich zur Mitgliedschaft (siehe *Boards und Szenen*). **Gastrollen stehen daneben und nicht
+darunter**: ein Gast aus einem Freigabelink ist in keinem Arbeitsbereich Mitglied und erreicht ausschliesslich
+das eine Board seines Links.
 
 ### Eine Stelle entscheidet
 
@@ -189,25 +201,33 @@ verweigernd. Sie baut auf der Workspace-Policy auf, statt sie umzubauen: `decide
 { kind: 'workspace:read' })` ist die Vorbedingung jeder Boardaktion. `src/domain/workspace/policy.ts` kennt
 weiterhin keine Boards.
 
-Zwei unabhaengige Eingaben entscheiden, in dieser Reihenfolge:
+Zwei unabhaengige Eingaben entscheiden ueber einen internen Nutzer, in dieser Reihenfolge:
 
 1. Die **Workspace-Mitgliedschaft** ist die Eintrittskarte. Ohne Rolle im Arbeitsbereich gibt es keinen
    Boardzugriff, und **keine Boardrolle kann das umgehen**.
 2. Die **Boardrolle** (`owner`, `editor`, `viewer`) verfeinert die Mitgliedschaft je Board. Sie wirkt
    *zusaetzlich* zur Mitgliedschaft und wird als Freigabe an einen vorhandenen internen Nutzer vergeben.
 
+Ein **Gast** aus einem Freigabelink steht vor derselben Funktion, aber auf einem eigenen Weg: er hat weder
+Mitgliedschaft noch Boardrolle, und seine einzige Eingabe ist der Grant seines Links
+(`BoardSubject.guestGrant`). Beide Wege schliessen sich aus - ein Gast bekommt nie eine interne Stufe, und
+ein Mitglied nie einen Gastgrant.
+
 **Ohne ausdrueckliche Freigabe gilt `editor`.** Ein Arbeitsbereich ist ein gemeinsamer Arbeitsraum; eine
 Freigabe schraenkt darin gezielt ein oder benennt jemanden ausdruecklich, statt jedem Mitglied den Zugang
 erst einzeln eroeffnen zu muessen. Deshalb bleibt der Entzug einer Freigabe genau das: die ausdrueckliche
 Boardrolle faellt weg, und es gilt wieder die Mitgliedschaft.
 
-| Aktion | Board-`owner` | Workspace-`owner` | `editor` (auch ohne Freigabe) | `viewer` | Nichtmitglied | Systemadmin ohne Mitgliedschaft | deaktiviert |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Board sehen, oeffnen, Szene laden | ja | ja | ja | ja | nein | nein | nein |
-| umbenennen, archivieren, entarchivieren | ja | ja | ja | nein | nein | nein | nein |
-| Szene speichern, Bild hochladen | ja | ja | ja | nein | nein | nein | nein |
-| Freigaben anlegen, aendern, entziehen | ja | ja | nein | nein | nein | nein | nein |
-| Ownerschaft uebertragen | ja | ja | nein | nein | nein | nein | nein |
+| Aktion | Board-`owner` | Workspace-`owner` | `editor` (auch ohne Freigabe) | `viewer` | `guest-editor` | `guest-viewer` | Nichtmitglied | Systemadmin ohne Mitgliedschaft | deaktiviert |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Board sehen, oeffnen, Szene laden | ja | ja | ja | ja | ja | ja | nein | nein | nein |
+| umbenennen, archivieren, entarchivieren | ja | ja | ja | nein | nein | nein | nein | nein | nein |
+| Szene speichern, Bild hochladen | ja | ja | ja | nein | ja | nein | nein | nein | nein |
+| Freigaben und Gastlinks verwalten | ja | ja | nein | nein | nein | nein | nein | nein | nein |
+| Ownerschaft uebertragen | ja | ja | nein | nein | nein | nein | nein | nein | nein |
+
+Die beiden Gastspalten gelten **nur fuer das eine Board des jeweiligen Links**. Jedes andere Board - auch ein
+Nachbarboard desselben Arbeitsbereichs - ist fuer einen Gast nicht vorhanden.
 
 Ein Board **anlegen** darf jedes Mitglied eines aktiven Arbeitsbereichs: vor der Anlage gibt es noch kein
 Board und damit auch keine Boardrolle, ueber die zu entscheiden waere. Der Ersteller wird sein Owner.
@@ -248,6 +268,64 @@ Eine Freigabe kann sich **nicht selbst weitergeben**: ein `editor` verwaltet kei
 jede Abstufung mit einem Schritt wieder aufgehoben. Und der Owner kann sich seine Ownerschaft nicht
 entziehen - dafuer gibt es nur die Uebertragung.
 
+### Oeffentliche Gastfreigaben
+
+Ein **Freigabelink** oeffnet genau ein Board fuer Menschen ohne Konto dieser Instanz. Er ist die einzige
+Stelle, an der Boardinhalt ohne Workspace-Mitgliedschaft erreichbar wird, und deshalb eng geschnitten:
+
+- **Genau ein Board, genau eine Gastrolle.** `guest-viewer` liest, `guest-editor` liest und speichert die
+  Szene. Ohne ausdrueckliche Wahl gilt `guest-viewer` - Schreibrecht nach aussen ist eine bewusste
+  Entscheidung. Umbenennen, Archivieren, Freigabeverwaltung und Ownerschaft bleiben einem Gast in **jedem**
+  Zustand verwehrt, und Gastrollen sind eigene Werte: `editor` oder `viewer` werden hier gar nicht erst
+  angenommen.
+- **Das Token steht nur als Hash in der Datenbank**, genau wie das Sitzungsgeheimnis. Ein Leseleck der
+  Datenbank oeffnet kein Board.
+- **Das Klartexttoken erscheint genau einmal**, in der Antwort auf das Anlegen. Es laesst sich danach
+  nirgends wieder abrufen - auch nicht vom Owner, auch nicht ueber die Liste. Ein verlorener Link wird
+  widerrufen und neu angelegt.
+- Die geteilte Adresse traegt es im **Fragment** (`/gast#<token>`). Ein Fragment sendet der Browser nicht
+  mit; damit erreicht das Token weder ein Zugriffsprotokoll noch einen Referrer noch einen Zwischenspeicher.
+  Es steht ebenso wenig in einer Protokollzeile, einem Auditereignis oder einer Fehlermeldung.
+- **Optionaler Ablauf, jederzeitiger Widerruf.** Ohne Ablaufangabe laeuft ein Link nicht von selbst ab; das
+  steht so in der Liste, und der Widerruf bleibt sein Ende.
+
+Aus einem Link entsteht beim Beitritt eine **Gastsession**: serverseitig, widerrufbar, mit einem selbst
+gewaehlten Anzeigenamen und **vier Stunden** Lebensdauer. Sie ueberlebt ihren Link nie - laeuft der Link
+frueher ab, endet auch sie frueher. Ein Gastkonto entsteht dabei nicht: es gibt kein Profil, keine
+Mitgliedschaft und keine Anmeldung, nur diese eine Sitzung fuer dieses eine Board.
+
+**Ablauf und Widerruf wirken sofort**, auf neue wie auf bestehende Gastsessions: jede Aufloesung eines
+Gastzugriffs prueft Gastsession **und** Link in derselben Abfrage, und nichts davon wird zwischengespeichert.
+Der Widerruf schliesst zusaetzlich offene Realtime-Verbindungen dieses Links unmittelbar (siehe
+*Echtzeit-Kollaboration*).
+
+**Was ein Gast erreicht, ist der Inhalt seines Boards - und sonst nichts.** Vier Endpunkte nehmen eine
+Gastsession an: Szene laden und speichern, Bild abrufen und hochladen. Jede andere Strecke - Boardliste,
+Freigaben, Gastlinks, Ownerschaft, Arbeitsbereiche, Mitglieder, Systemadministration - verlangt eine interne
+Sitzung und antwortet einem Gast mit **401**: sie ist fuer ihn nicht vorhanden, nicht bloss verboten. Ein
+fremdes Board ergibt **404**, ununterscheidbar von einer erfundenen Kennung.
+
+Eine gespeicherte Szenenversion eines Gastes traegt **keinen** Autor (`scene_versions.author_user_id` bleibt
+leer): ein Gast ist kein Nutzer und steht in keiner Nutzerspalte.
+
+**Ein Gastlink offenbart keinen Arbeitsbereich und keinen internen Nutzer.** Jede Antwort an einen Gast
+zeigt vom Board nur `GuestBoardView` - Kennung, Titel, Status und Version. Keine Workspacekennung, keine
+Ownerkennung, kein Owner-Anzeigename. Das gilt fuer den Gastzugang (`/api/boards/guest/session`) und fuer die
+Szene (`GET /api/boards/scene`) gleichermassen; die uebrigen Antworten auf seinem Weg tragen ohnehin nur
+Inhalt (`version`/`savedAt` beim Speichern, `BinaryFileRef` beim Bild, dessen Speicherschluessel aus
+Boardkennung, Dateikennung und Pruefsumme entsteht).
+
+Der Szenenendpunkt hat dafuer **zwei Antwortformen, die sich im Typ unterscheiden**: `SceneResponse` ist die
+Vereinigung aus `BoardSceneResponse` (`viewer: 'member'`, volle `BoardView`) und `GuestBoardSceneResponse`
+(`viewer: 'guest'`, `GuestBoardView`). Wer die Antwort verarbeitet, muss auf `viewer` verzweigen und kommt
+an die Boardsicht sonst nicht heran - der Unterschied laesst sich damit nicht versehentlich uebergehen. Die
+beiden Sichten entstehen an genau einer Stelle (`src/server/board-views.ts`), und die Gastsicht zaehlt ihre
+Felder einzeln auf, statt aus der vollen Sicht etwas wegzulassen: ein spaeter ergaenztes Feld der
+`BoardView` landet dadurch nicht von selbst beim Gast.
+
+Was es bewusst **nicht** gibt: dauerhafte externe Konten, Gastmitgliedschaften in einem Arbeitsbereich,
+Einladungen per E-Mail und weitere Gastrollen.
+
 ### Endpunkte
 
 Alle verlangen eine Sitzung; alle zustandsaendernden zusaetzlich das CSRF-Token im Header `x-canvaz-csrf`.
@@ -268,6 +346,16 @@ Die Antwort entsteht in der Transaktion und wird erst nach dem Commit gesendet.
 | POST | `/api/boards/grants/role` | `grant:manage` | 404 unsichtbar, sonst 403 | — |
 | POST | `/api/boards/grants/remove` | `grant:manage` | 404 unsichtbar, sonst 403 | 409 |
 | POST | `/api/boards/owner` | `board:transfer-ownership` | 404 unsichtbar, sonst 403 | — |
+| GET | `/api/boards/share-links?boardId=` | `grant:manage` | 404 unsichtbar, sonst 403 | — |
+| POST | `/api/boards/share-links/create` | `grant:manage` | 404 unsichtbar, sonst 403 | — |
+| POST | `/api/boards/share-links/revoke` | `grant:manage` | 404 unsichtbar, sonst 403 | — |
+| POST | `/api/boards/guest/join` | oeffentlich, gueltiges Token | 404 | — |
+| GET | `/api/boards/guest/session` | gueltige Gastsession | 401 | — |
+
+Die vier Endpunkte, die zusaetzlich eine **Gastsession** annehmen, sind `GET`/`POST` auf
+`/api/boards/scene` und `/api/boards/assets`. Fuer sie entscheidet dieselbe Policy wie fuer ein Mitglied;
+alle uebrigen Zeilen dieser Tabelle verlangen eine interne Sitzung. `GET /api/boards/scene` antwortet einem
+Gast in der eigenen, reduzierten Form (`viewer: 'guest'`, siehe oben).
 
 `status` trennt die aktive Liste von der Archivansicht (Standard `active`), `q` filtert nach einem Teilstring
 im Titel - ohne Platzhalterdeutung, damit `%` und `_` keine Wirkung haben.
@@ -518,6 +606,22 @@ schlichte Zeichenketten heraus und herein.
   Arbeitsbereich erneut. Ein Aufraeumen waere eine eigene Entscheidung; die Sicherheit haengt nicht daran.
 - Der Board-Owner kann ohne Mitgliedschaft im Arbeitsbereich sein - etwa nach einem Mitgliedschaftsentzug.
   Das Board bleibt trotzdem verwaltbar, weil der Workspace-Owner auf jedem Board Ownerstufe traegt.
+- **Wer den Gastlink hat, ist der Gast.** Ein Link unterscheidet die Menschen nicht, die ihn benutzen; jeder
+  Beitritt bekommt zwar eine eigene Gastsession, aber der Anzeigename ist frei gewaehlt und belegt nichts.
+  Wer einzelne Personen unterscheiden oder gezielt entziehen will, legt getrennte Links an oder nimmt sie als
+  interne Nutzer auf.
+- Ein Widerruf trifft immer den **ganzen** Link und damit alle daraus entstandenen Gastsessions. Eine
+  einzelne Gastsession laesst sich nicht gesondert beenden.
+- **Die interne Sitzung hat Vorrang vor dem Gastcookie.** Ein angemeldeter Nutzer, der einen Gastlink
+  oeffnet, handelt als er selbst; gehoert er dem Arbeitsbereich nicht an, sieht er das Board deshalb nicht,
+  obwohl der Link gilt. Beide Zugaenge zu verrechnen waere ein zweiter Entscheidungsweg fuer denselben
+  Zugriff - der Ausweg ist die Abmeldung oder eine Aufnahme als internes Mitglied.
+- Abgelaufene Zeilen in `board_guest_sessions` werden nicht aufgeraeumt; sie tragen keinen Zugriff mehr, weil
+  jede Aufloesung Ablauf und Widerruf mitprueft. Ein Aufraeumlauf braucht dieselbe gesonderte Entscheidung
+  wie das Hard Delete.
+- `board_guest_sessions.share_link_id` traegt `on delete cascade`: ein direktes Loeschen eines Links in der
+  Datenbank nimmt seine Gastsessions mit. Ueber die Anwendung gibt es nur den Widerruf - er erhaelt den
+  Nachweis.
 
 ### Invarianten
 
@@ -528,6 +632,11 @@ schlichte Zeichenketten heraus und herein.
   veralteten Stand - dieselbe Absicherung wie bei der Ownerinvariante des Arbeitsbereichs.
 - Eine Freigabe entsteht nur fuer einen aktiven Nutzer, der Mitglied desselben Arbeitsbereichs ist. Status
   und Mitgliedschaft werden in derselben Transaktion gelesen, in der geschrieben wird.
+- Von Freigabetoken und Gastgeheimnis steht ausschliesslich der SHA-256-Hash in der Datenbank; ein
+  Check-Constraint laesst dort nichts anderes als 64 Hexzeichen zu.
+- Eine Gastsession gehoert immer zum Board ihres Links: der zusammengesetzte Fremdschluessel
+  `(share_link_id, board_id)` macht jede andere Zeile strukturell unmoeglich.
+- Eine Gastsession ueberlebt ihren Link nie; ihr Ablauf ist am Ablauf des Links gedeckelt.
 - Die Antwort entsteht in der Transaktion und wird erst nach dem Commit gesendet.
 
 ### Nachweis
@@ -538,6 +647,12 @@ Anlage, Umbenennung, Archivierung und Entarchivierung eines Boards schreiben ein
 Entzug schreibt `board-grant.added`, `board-grant.role-changed` oder `board-grant.removed`
 (`targetType: 'board-grant'`, Ziel ist der betroffene Nutzer, Boardbezug und Rollen stehen in `details`).
 Aenderung und Nachweis entstehen in derselben Transaktion; eine abgelehnte Aenderung schreibt nichts.
+
+Fuer Gastfreigaben gibt es drei Ereignisse mit `targetType: 'board-share-link'` und dem Link als Ziel:
+`board-share-link.created` und `board-share-link.revoked` (Akteur ist der Owner, `details` traegt Board,
+Rolle und Ablauf) sowie `board-guest.joined`. Dieses eine Ereignis hat **keinen** internen Akteur - ein Gast
+ist kein Nutzer -, und `details` nennt Board, Rolle, Gastsession und den gewaehlten Anzeigenamen. **Kein
+Token steht in einem dieser Ereignisse**, weder das des Links noch das der Gastsession.
 
 Einzelne Speicherungen schreiben keinen Nachweis: sie sind Inhalt, nicht Verwaltung, und `audit_events`
 enthaelt nie Boardinhalte und nie Tokenmaterial. Die Historie der Inhalte steht in `scene_versions`.
@@ -596,8 +711,8 @@ einer Verbindung eine Berechtigung wird (`resolveAccess` in `src/server/board-ro
 dieselbe Funktion auf wie jede Route: `decideBoardAccess`. Gelesen wird bei **jedem** Aufruf frisch, ohne
 Zwischenspeicher.
 
-`resolveAccess` liest dabei **Mitgliedschaft und Boardrolle aus demselben Datensatz** und baut denselben
-`BoardSubject`, den auch die Routen bauen.
+`resolveAccess` liest dabei **Mitgliedschaft, Boardrolle und - bei einem Gast - die Rolle seines noch
+gueltigen Links aus demselben Datensatz** und baut denselben `BoardSubject`, den auch die Routen bauen.
 
 - **Beim Beitritt** entscheidet `board:read`. Wer nicht lesen darf, bekommt `board-nicht-gefunden` - genau
   dieselbe Antwort wie fuer eine erfundene Kennung. Ob es das Board gibt, erfaehrt er nicht.
@@ -618,14 +733,28 @@ Boardrolle traegt ohne sie nichts.
 Presence ist ausdruecklich **kein** Schreibzugriff auf den Boardzustand; sie setzt Raummitgliedschaft
 voraus, die beim Beitritt geprueft und durch den Wiederholungslauf laufend bestaetigt wird.
 
-Gastlinks (`guestGrant`) setzen als weiteres Feld in `resolveAccess` und in `decideBoardAccess` an - das
-Protokoll aendert sich dafuer nicht.
+**Gaeste sitzen im selben Raum.** Ein Gast aus einem Freigabelink tritt demselben Boardraum bei, mit
+demselben Protokoll und derselben Presence: sein selbst gewaehlter Anzeigename, ob er schreiben darf, Zeiger
+und Auswahl - keine Adresse, keine Kennung, keine Rolle. Fuer ihn gilt jede Grenze dieses Abschnitts
+unveraendert, und `ready.userId` traegt statt einer Nutzerkennung die seiner Gastsession.
+
+Ueber die Strecke erreicht ihn damit **keine Workspacekennung und keine interne Nutzerkennung**: `joined`
+und `snapshot` tragen Boardkennung, Version und Szene, `presence` das Teilnehmerfeld, `error` einen festen
+Text. Die **Anzeigenamen der gerade anwesenden Mitbearbeiter** sind der eine gewollte Ausnahmefall - ohne sie
+waere eine gemeinsame Zeichenflaeche anonym.
+
+Ablauf und Widerruf seines Links wirken auf die offene Verbindung wie ein Mitgliedschaftsentzug: die
+naechste Aufloesung findet nichts mehr und beendet sie. Der Widerruf schliesst sie zusaetzlich **sofort**,
+statt bis zur naechsten Nachpruefung zu warten - genau wie ein Logout eine interne Sitzung schliesst. Ein
+Wiederaufbau scheitert danach bereits am Upgrade. Ein Rollenwechsel des Links wuerde ihn wie jede andere
+Herabstufung auf Nur-Lesen stellen (`access`); das Protokoll aendert sich fuer nichts davon.
 
 ### Was Presence uebertraegt
 
 Eine fluechtige Verbindungskennung, den Anzeigenamen, ob dieser Teilnehmer schreiben darf, den Zeiger und die
-Auswahl. **Keine E-Mail, keine Nutzerkennung, keine Rolle.** Presence wird nie persistiert und verschwindet
-mit der Verbindung.
+Auswahl. **Keine E-Mail, keine Nutzerkennung, keine Rolle.** Bei einem Gast ist der Anzeigename der, den er
+sich beim Beitritt selbst gegeben hat; ob ein Teilnehmer Mitglied oder Gast ist, uebertraegt Presence nicht.
+Presence wird nie persistiert und verschwindet mit der Verbindung.
 
 Uebertragen wird gebuendelt, in beide Richtungen: der Browser sammelt Zeigerstaende und geaenderte Elemente
 und schickt sie hoechstens alle **50 ms**, der Raum verschickt hoechstens alle **100 ms** ein vollstaendiges
@@ -706,7 +835,7 @@ fuehrt zu einem unbenannten Fehler, und keine hinterlaesst einen Raum, der nicht
 | Nachrichten je Verbindung | 120/s, Eimer 240 | `zu-viele-nachrichten`; bei Dauerflut Schliessen mit `4429` | Der Browser buendelt auf hoechstens 40/s - dreifache Reserve, zwei Sekunden Nachholschub |
 | Akkumulierter Raumzustand | `CANVAZ_MAX_SCENE_BYTES`, 5 MiB | `raum-zu-gross`, Aenderung verworfen, Raum bleibt benutzbar | Der Raum haelt genau das, was ein Checkpoint schreibt und die HTTP-Speicherung wieder annehmen muss |
 | Teilnehmer je Raum | 10 | `raum-voll` beim Beitritt, Anwesende unberuehrt | Der Reservewert des Produktvertrags |
-| Verbindungen je Nutzer | 5 | `zu-viele-verbindungen` und Schliessen mit `4429` | Fuenf Tabs sind grosszuegig; ein Konto darf die zehn Verbindungen nicht allein belegen |
+| Verbindungen je Nutzer (Gast: je Gastsession) | 5 | `zu-viele-verbindungen` und Schliessen mit `4429` | Fuenf Tabs sind grosszuegig; ein Konto darf die zehn Verbindungen nicht allein belegen |
 
 Geprueft wird die **projizierte** Groesse, nicht die aktuelle: eine Aenderung, die den Raum kleiner macht
 oder gleich gross laesst, kommt auch an der Grenze noch durch. Ein volles Board bleibt damit vollstaendig
@@ -781,8 +910,9 @@ zurueck, und `'self'` deckt die gleichnamige WebSocket-Herkunft ab.
 - **Volles Board bleibt voll.** Ist die Obergrenze des Raumzustands erreicht, wird Wachstum benannt
   abgelehnt. Loeschen hilft nur begrenzt, weil ein Tombstone ungefaehr so gross ist wie das Element selbst.
   Verdichtete Tombstones waeren der Ausbauweg, wenn das im Betrieb je auftritt.
-- **Keine Gaeste.** Am Raum nimmt nur teil, wer Mitglied des Arbeitsbereichs ist; ein Nur-Lese-Teilnehmer
-  entsteht ueber die Boardrolle `viewer` oder ueber Archivierung. Gastlinks kommen in einem eigenen Paket.
+- **Gaeste zaehlen wie Bearbeiter.** Ein Gast belegt einen der zehn Plaetze eines Raums und faellt unter
+  dieselben Grenzen; ein breit geteilter Link kann einen Raum damit fuellen, und weitere Beitritte werden
+  dann benannt mit `raum-voll` abgelehnt. Wer den Zulauf begrenzen will, befristet oder widerruft den Link.
 - Der Zeigezustand wird an Zeigerbewegungen gehaengt. Eine Auswahl ohne jede Mausbewegung (etwa per
   Tastatur) wird erst mit der naechsten Bewegung sichtbar.
 
@@ -852,6 +982,16 @@ gegen die Datenbank sowie Herabstufung und Entzug waehrend einer bestehenden Web
 `tests/unit/board-policy.test.ts` durchlaeuft die Rollenmatrix vollstaendig - jede Kombination aus
 Workspace-Rolle, Boardrolle, Workspace- und Boardstatus sowie Nutzerstatus gegen eine von Hand gesetzte
 Erwartungstabelle.
+
+`tests/integration/board-share-links.test.ts` prueft die Gastfreigaben auf demselben Weg: anlegen, auflisten,
+widerrufen, beitreten, ablaufen; dass das Token weder in der Liste noch in der Datenbank, im Log oder im
+Nachweis auftaucht; dass **keine** Antwort an einen Gast eine Workspacekennung, eine interne Nutzerkennung
+oder einen internen Anzeigenamen enthaelt - gemessen am Rohkoerper der Antwort und am gesamten
+Nachrichtenprotokoll seiner WebSocket-Verbindung; dass ein Gast an keinem fremden Board, keinem Workspace-,
+Mitglieder- und keinem Adminendpunkt ankommt; und dass Widerruf wie Ablauf eine **offene** WebSocket-Verbindung beenden und ihren Wiederaufbau
+verhindern. `tests/unit/board-guest.test.ts` durchlaeuft dazu die Gasttabelle vollstaendig - beide
+Gastrollen gegen jede Aktion sowie jeden Board- und Workspacezustand, einschliesslich des Falls, der einen
+Gast ausmacht: ein anderes Board als das seines Links.
 
 Pruefungen an der echten Oberflaeche laufen nicht als Suite im Repo, sondern manuell mit der
 `agent-browser`-CLI.

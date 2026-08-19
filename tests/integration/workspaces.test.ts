@@ -758,8 +758,11 @@ describe('Andockpunkt der Realtime-Strecke', () => {
       provider,
       pool,
       databaseUrl: DATABASE_URL,
-      onConnection: (_socket, auth, scope) => {
-        scopes.set(auth.user.id, scope)
+      onConnection: (_socket, requester, scope) => {
+        // Der Andockpunkt bekommt jetzt den Anfragenden; ein Gast haette hier keine Nutzerkennung.
+        if (requester.kind === 'user') {
+          scopes.set(requester.auth.user.id, scope)
+        }
       },
     })
     try {

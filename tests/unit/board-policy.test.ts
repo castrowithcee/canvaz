@@ -35,11 +35,17 @@ function subject(options: {
     },
     workspaceRole: options.role ?? null,
     boardRole: options.boardRole ?? null,
+    // Diese Datei prueft ausschliesslich den internen Weg; der Gastweg hat seine eigene Tabelle.
+    guestGrant: null,
   }
 }
 
 const AKTIV = { status: 'active' } as const
 const ARCHIVIERT = { status: 'archived' } as const
+
+/** Das betroffene Board. Seine Kennung zaehlt erst fuer Gaeste, gehoert aber zum Zustand. */
+const BOARD = { id: 'board-1', status: 'active' } as const
+const BOARD_ARCHIVIERT = { id: 'board-1', status: 'archived' } as const
 
 const ALLE_AKTIONEN: readonly BoardAction[] = [
   'board:read',
@@ -116,7 +122,7 @@ describe('Boardberechtigung, vollstaendige Rollenmatrix', () => {
         expect(stufe, `keine Erwartung fuer ${schluessel(role, boardRole)}`).toBeDefined()
         for (const action of ALLE_AKTIONEN) {
           expect(
-            decideBoardAccess(subject({ role, boardRole }), AKTIV, AKTIV, action),
+            decideBoardAccess(subject({ role, boardRole }), AKTIV, BOARD, action),
             `${schluessel(role, boardRole)} -> ${action}`,
           ).toEqual(erwartung(stufe as BoardRole | 'kein-zugriff', action))
         }
@@ -129,17 +135,17 @@ describe('Boardberechtigung, vollstaendige Rollenmatrix', () => {
       for (const boardRole of BOARD_ROLLEN) {
         const stufe = STUFE[schluessel(role, boardRole)] as BoardRole | 'kein-zugriff'
         const nichtsichtbar = stufe === 'kein-zugriff'
-        expect(decideBoardAccess(subject({ role, boardRole }), AKTIV, ARCHIVIERT, 'board:read')).toEqual(
+        expect(decideBoardAccess(subject({ role, boardRole }), AKTIV, BOARD_ARCHIVIERT, 'board:read')).toEqual(
           nichtsichtbar ? { allowed: false, reason: 'not-visible' } : { allowed: true },
         )
         for (const action of SCHREIBENDE_AKTIONEN) {
           expect(
-            decideBoardAccess(subject({ role, boardRole }), AKTIV, ARCHIVIERT, action),
+            decideBoardAccess(subject({ role, boardRole }), AKTIV, BOARD_ARCHIVIERT, action),
             `${schluessel(role, boardRole)} -> ${action}`,
           ).toEqual({ allowed: false, reason: nichtsichtbar ? 'not-visible' : 'board-archived' })
         }
         // Entarchivieren bleibt moeglich - fuer jeden, der das Board auch sonst aendern duerfte.
-        expect(decideBoardAccess(subject({ role, boardRole }), AKTIV, ARCHIVIERT, 'board:unarchive')).toEqual(
+        expect(decideBoardAccess(subject({ role, boardRole }), AKTIV, BOARD_ARCHIVIERT, 'board:unarchive')).toEqual(
           erwartung(stufe, 'board:unarchive'),
         )
       }
@@ -150,7 +156,7 @@ describe('Boardberechtigung, vollstaendige Rollenmatrix', () => {
     for (const role of WORKSPACE_ROLLEN) {
       for (const boardRole of BOARD_ROLLEN) {
         const nichtsichtbar = STUFE[schluessel(role, boardRole)] === 'kein-zugriff'
-        for (const status of [AKTIV, ARCHIVIERT]) {
+        for (const status of [BOARD, BOARD_ARCHIVIERT]) {
           expect(decideBoardAccess(subject({ role, boardRole }), ARCHIVIERT, status, 'board:read')).toEqual(
             nichtsichtbar ? { allowed: false, reason: 'not-visible' } : { allowed: true },
           )
@@ -171,7 +177,7 @@ describe('Boardberechtigung, vollstaendige Rollenmatrix', () => {
         for (const systemAdmin of [false, true]) {
           for (const action of ALLE_AKTIONEN) {
             expect(
-              decideBoardAccess(subject({ role, boardRole, systemAdmin, active: false }), AKTIV, AKTIV, action),
+              decideBoardAccess(subject({ role, boardRole, systemAdmin, active: false }), AKTIV, BOARD, action),
               `${schluessel(role, boardRole)} -> ${action}`,
             ).toEqual({ allowed: false, reason: 'user-deactivated' })
           }
@@ -183,12 +189,12 @@ describe('Boardberechtigung, vollstaendige Rollenmatrix', () => {
   it('gibt einem Systemadmin ohne Mitgliedschaft keinen Inhaltszugriff, auch nicht mit Boardrolle', () => {
     // Er verwaltet Arbeitsbereiche; der Inhalt haengt an der Mitgliedschaft, nicht an der Systemrolle.
     for (const boardRole of BOARD_ROLLEN) {
-      expect(decideBoardAccess(subject({ systemAdmin: true, boardRole }), AKTIV, AKTIV, 'board:read')).toEqual({
+      expect(decideBoardAccess(subject({ systemAdmin: true, boardRole }), AKTIV, BOARD, 'board:read')).toEqual({
         allowed: false,
         reason: 'not-visible',
       })
     }
-    expect(decideBoardAccess(subject({ systemAdmin: true, role: 'member' }), AKTIV, AKTIV, 'board:read')).toEqual({
+    expect(decideBoardAccess(subject({ systemAdmin: true, role: 'member' }), AKTIV, BOARD, 'board:read')).toEqual({
       allowed: true,
     })
   })
@@ -211,8 +217,8 @@ describe('Bestaetigte Wirkung der Boardrollen', () => {
 
   it('laesst einen viewer lesen, aber die Szene nicht speichern', () => {
     const viewer = subject({ ...mitglied, boardRole: 'viewer' })
-    expect(decideBoardAccess(viewer, AKTIV, AKTIV, 'board:read')).toEqual({ allowed: true })
-    expect(decideBoardAccess(viewer, AKTIV, AKTIV, 'scene:write')).toEqual({
+    expect(decideBoardAccess(viewer, AKTIV, BOARD, 'board:read')).toEqual({ allowed: true })
+    expect(decideBoardAccess(viewer, AKTIV, BOARD, 'scene:write')).toEqual({
       allowed: false,
       reason: 'insufficient-role',
     })
@@ -220,10 +226,10 @@ describe('Bestaetigte Wirkung der Boardrollen', () => {
 
   it('laesst einen editor lesen und speichern, aber keine Freigabe verwalten', () => {
     const editor = subject({ ...mitglied, boardRole: 'editor' })
-    expect(decideBoardAccess(editor, AKTIV, AKTIV, 'board:read')).toEqual({ allowed: true })
-    expect(decideBoardAccess(editor, AKTIV, AKTIV, 'scene:write')).toEqual({ allowed: true })
+    expect(decideBoardAccess(editor, AKTIV, BOARD, 'board:read')).toEqual({ allowed: true })
+    expect(decideBoardAccess(editor, AKTIV, BOARD, 'scene:write')).toEqual({ allowed: true })
     for (const action of ['grant:manage', 'board:transfer-ownership'] as const) {
-      expect(decideBoardAccess(editor, AKTIV, AKTIV, action)).toEqual({
+      expect(decideBoardAccess(editor, AKTIV, BOARD, action)).toEqual({
         allowed: false,
         reason: 'insufficient-role',
       })
@@ -233,14 +239,14 @@ describe('Bestaetigte Wirkung der Boardrollen', () => {
   it('laesst einen owner zusaetzlich Freigaben verwalten und die Ownerschaft uebertragen', () => {
     const owner = subject({ ...mitglied, boardRole: 'owner' })
     for (const action of ALLE_AKTIONEN) {
-      expect(decideBoardAccess(owner, AKTIV, AKTIV, action)).toEqual({ allowed: true })
+      expect(decideBoardAccess(owner, AKTIV, BOARD, action)).toEqual({ allowed: true })
     }
   })
 
   it('laesst eine Boardrolle die fehlende Mitgliedschaft nie ersetzen', () => {
     for (const boardRole of ['owner', 'editor', 'viewer'] as const) {
       for (const action of ALLE_AKTIONEN) {
-        expect(decideBoardAccess(subject({ role: null, boardRole }), AKTIV, AKTIV, action)).toEqual({
+        expect(decideBoardAccess(subject({ role: null, boardRole }), AKTIV, BOARD, action)).toEqual({
           allowed: false,
           reason: 'not-visible',
         })

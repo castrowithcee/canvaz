@@ -15,8 +15,10 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ErrorResponse } from '../contracts/api.js'
 import type { AuthenticatedSession } from '../domain/identity/model.js'
 import type { AppContext } from './context.js'
-import { requireCsrfToken, requireSession } from './guard.js'
+import { requireCsrfToken, requireRequester, requireSession } from './guard.js'
 import { readJsonBodyLimited, sendError, sendJson } from './http.js'
+import type { Requester } from './requester.js'
+import { asRequester } from './requester.js'
 
 /** Fertige, noch nicht gesendete Antwort. */
 export type Reply = { readonly status: number; readonly body: unknown }
@@ -47,20 +49,17 @@ export type Guarded = {
   readonly body: Record<string, unknown>
 }
 
-/**
- * Sitzung, CSRF-Token und JSON-Koerper fuer eine zustandsaendernde Route. `maxBytes` begrenzt den Koerper;
- * die Szenenspeicherung setzt ihn hoeher als die kleinen Verwaltungsaufrufe.
- */
-export async function guardMutation(
-  context: AppContext,
+/** Wie `Guarded`, aber fuer die Endpunkte, die auch ein Gast erreichen darf. */
+export type GuardedRequest = {
+  readonly requester: Requester
+  readonly body: Record<string, unknown>
+}
+
+async function readBody(
   request: IncomingMessage,
   response: ServerResponse,
-  maxBytes?: number,
-): Promise<Guarded | null> {
-  const auth = await requireSession(context, request, response)
-  if (auth === null || !requireCsrfToken(context, request, response, auth)) {
-    return null
-  }
+  maxBytes: number | undefined,
+): Promise<Record<string, unknown> | null> {
   const body = await readJsonBodyLimited(request, maxBytes ?? DEFAULT_BODY_BYTES)
   if (!body.ok) {
     if (body.reason === 'too-large') {
@@ -70,7 +69,49 @@ export async function guardMutation(
     }
     return null
   }
-  return { auth, body: body.body }
+  return body.body
+}
+
+/**
+ * Sitzung, CSRF-Token und JSON-Koerper fuer eine zustandsaendernde Route. `maxBytes` begrenzt den Koerper;
+ * die Szenenspeicherung setzt ihn hoeher als die kleinen Verwaltungsaufrufe.
+ *
+ * **Ausschliesslich fuer interne Endpunkte.** Ein Gast bekommt hier dieselbe 401 wie ein Unangemeldeter -
+ * eine Verwaltungsstrecke ist fuer ihn nicht vorhanden, nicht bloss verboten.
+ */
+export async function guardMutation(
+  context: AppContext,
+  request: IncomingMessage,
+  response: ServerResponse,
+  maxBytes?: number,
+): Promise<Guarded | null> {
+  const auth = await requireSession(context, request, response)
+  if (auth === null || !requireCsrfToken(context, request, response, asRequester(auth))) {
+    return null
+  }
+  const body = await readBody(request, response, maxBytes)
+  return body === null ? null : { auth, body }
+}
+
+/**
+ * Wie `guardMutation`, laesst aber auch eine Gastsession zu.
+ *
+ * Nur die wenigen Endpunkte am **Inhalt genau eines Boards** benutzen sie; ueber das Duerfen entscheidet
+ * danach ausschliesslich `decideBoardAccess`. Welche Sitzungsart eine Route ueberhaupt annimmt, ist damit
+ * eine Eigenschaft der Route und keine Rollenpruefung in ihrem Rumpf.
+ */
+export async function guardBoardMutation(
+  context: AppContext,
+  request: IncomingMessage,
+  response: ServerResponse,
+  maxBytes?: number,
+): Promise<GuardedRequest | null> {
+  const requester = await requireRequester(context, request, response)
+  if (requester === null || !requireCsrfToken(context, request, response, requester)) {
+    return null
+  }
+  const body = await readBody(request, response, maxBytes)
+  return body === null ? null : { requester, body }
 }
 
 /**

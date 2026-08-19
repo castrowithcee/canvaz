@@ -870,9 +870,10 @@ describe('Nachweis', () => {
 
 describe('Board-Persistenz', () => {
   it('gibt die sperrende Abfrage nur innerhalb einer Transaktion heraus', async () => {
-    await expect(app.boards.boards.findForUpdate(FREMDE_KENNUNG, FREMDE_KENNUNG)).rejects.toThrow()
+    const fremder = { kind: 'user', userId: FREMDE_KENNUNG } as const
+    await expect(app.boards.boards.findForUpdate(FREMDE_KENNUNG, fremder, new Date())).rejects.toThrow()
     await expect(
-      app.boards.transaction((tx) => tx.boards.findForUpdate(FREMDE_KENNUNG, FREMDE_KENNUNG)),
+      app.boards.transaction((tx) => tx.boards.findForUpdate(FREMDE_KENNUNG, fremder, new Date())),
     ).resolves.toBeNull()
   })
 
@@ -893,14 +894,14 @@ describe('Board-Persistenz', () => {
     let zweiteHatGelesen = false
 
     const erste = app.boards.transaction(async (tx) => {
-      await tx.boards.findForUpdate(board.id, ada.profile.user.id)
+      await tx.boards.findForUpdate(board.id, { kind: 'user', userId: ada.profile.user.id }, new Date())
       sperreSteht()
       await freigabe
     })
     await gesperrt
 
     const zweite = app.boards.transaction(async (tx) => {
-      await tx.boards.findForUpdate(board.id, ada.profile.user.id)
+      await tx.boards.findForUpdate(board.id, { kind: 'user', userId: ada.profile.user.id }, new Date())
       zweiteHatGelesen = true
     })
     await new Promise((resolve) => setTimeout(resolve, 300))

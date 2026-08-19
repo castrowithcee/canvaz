@@ -5,9 +5,11 @@
  * und das Verbindungsregister. Protokoll, Raeume und Presence stehen in `board-rooms.ts` und docken ueber
  * `onConnection` an.
  *
- * Der Upgrade laeuft ueber dieselbe Aufloesung wie jeder HTTP-Guard und damit ueber `authenticate()`. Offene
- * Verbindungen werden mitgefuehrt, damit Logout, Deaktivierung und Ablauf sie schliessen koennen - sonst
- * bliebe eine ungueltige Sitzung auf einem langlebigen Socket weiter privilegiert.
+ * Der Upgrade laeuft ueber dieselbe Aufloesung wie jeder HTTP-Guard und damit ueber `authenticate()` -
+ * beziehungsweise, fuer einen Gast, ueber dieselbe Abfrage, die auch seine HTTP-Anfragen aufloest. Offene
+ * Verbindungen werden mitgefuehrt, damit Logout, Deaktivierung, Ablauf und der Widerruf eines
+ * Freigabelinks sie schliessen koennen - sonst bliebe ein ungueltig gewordener Zugang auf einem
+ * langlebigen Socket weiter privilegiert.
  *
  * Zwei Pruefungen gehoeren zum Upgrade selbst: die Herkunft, weil der CSRF-Header hier nicht greift und
  * `SameSite=Lax` das Cookie an einem fremden Ursprung trotzdem mitschickt, und der Ablaufzeitpunkt, weil
@@ -34,12 +36,17 @@ import {
   SESSION_REVOKED_CLOSE_CODE,
   TOO_MANY_CLOSE_CODE,
 } from '../contracts/realtime.js'
-import type { AuthenticatedSession, SessionId, UserId } from '../domain/identity/model.js'
+import type { BoardShareLinkId } from '../domain/board/guest.js'
+import type { BoardStore } from '../domain/board/repositories.js'
+import type { SessionId, UserId } from '../domain/identity/model.js'
 import type { IdentityStore } from '../domain/identity/repositories.js'
 import type { WorkspaceId, WorkspaceRole } from '../domain/workspace/model.js'
 import type { WorkspaceStore } from '../domain/workspace/repositories.js'
 import type { AppConfig } from './config.js'
+import { resolveGuestSession } from './guest-session.js'
 import type { Logger } from './log.js'
+import type { Requester } from './requester.js'
+import { requesterFields, sessionIdOf } from './requester.js'
 import { resolveSession } from './session.js'
 
 /**
@@ -57,18 +64,29 @@ export type WorkspaceScope = {
 
 export type RealtimeGateway = {
   attach(server: Server): void
-  /** Beendet offene Verbindungen einer Sitzung, etwa beim Logout. */
+  /** Beendet offene Verbindungen einer Sitzung, etwa beim Logout. Gilt auch fuer eine Gastsession. */
   closeSession(sessionId: SessionId): void
   /** Beendet offene Verbindungen eines Nutzers, etwa bei Deaktivierung. */
   closeUser(userId: UserId): void
+  /**
+   * Beendet offene Verbindungen aller Gaeste eines Freigabelinks - der Widerruf.
+   *
+   * Die wiederkehrende Nachpruefung im Raum wuerde sie ohnehin beenden; dieser Weg macht daraus ein
+   * Ereignis statt einer Wartezeit, genau wie `closeSession` beim Logout.
+   */
+  closeShareLink(shareLinkId: BoardShareLinkId): void
   readonly openConnections: number
   close(): Promise<void>
 }
 
 type Connection = {
   readonly socket: WebSocket
-  readonly sessionId: SessionId
-  readonly userId: UserId
+  /** Kennung der internen Sitzung oder der Gastsession. Zwei getrennte Kennungsraeume, ein Feld. */
+  readonly sessionId: string
+  /** `null` bei einem Gast: er hat kein Konto, das deaktiviert werden koennte. */
+  readonly userId: UserId | null
+  /** Nur beim Gast gesetzt. Traegt den Widerruf des Links auf die offene Verbindung. */
+  readonly shareLinkId: BoardShareLinkId | null
   readonly expiresAt: Date
   /**
    * Hat diese Verbindung seit dem letzten Herzschlag geantwortet?
@@ -94,10 +112,12 @@ const DEFAULT_EXPIRY_CHECK_INTERVAL_MS = 60_000
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000
 
 /**
- * Hoechstzahl offener Verbindungen je Nutzer.
+ * Hoechstzahl offener Verbindungen je Zugang.
  *
  * Ein Mensch arbeitet an einem, hoechstens zwei Boards zugleich; fuenf Tabs sind grosszuegig. Das Lastziel
- * sind zehn gleichzeitige Verbindungen insgesamt - ein einzelnes Konto darf sie nicht allein belegen.
+ * sind zehn gleichzeitige Verbindungen insgesamt - ein einzelnes Konto darf sie nicht allein belegen. Fuer
+ * einen Gast zaehlt dasselbe je Gastsession; ein geteilter Link vervielfacht die Grenze nicht, weil jeder
+ * Beitritt seine eigene Gastsession bekommt und der Raum zusaetzlich seine Teilnehmerzahl begrenzt.
  */
 const DEFAULT_MAX_CONNECTIONS_PER_USER = 5
 
@@ -105,13 +125,15 @@ export type RealtimeOptions = {
   readonly config: AppConfig
   readonly identity: IdentityStore
   readonly workspaces: WorkspaceStore
+  /** Fuer die Aufloesung einer Gastsession; sie haengt an Freigabelink und Board, nicht an einem Konto. */
+  readonly boards: BoardStore
   readonly logger: Logger
   readonly now: () => Date
   readonly expiryCheckIntervalMs?: number
   readonly heartbeatIntervalMs?: number
   readonly maxConnectionsPerUser?: number
   /** Haken fuer die Realtime-Strecke. Ohne ihn bleibt die Verbindung offen und stumm. */
-  readonly onConnection?: (socket: WebSocket, auth: AuthenticatedSession, scope: WorkspaceScope) => void
+  readonly onConnection?: (socket: WebSocket, requester: Requester, scope: WorkspaceScope) => void
 }
 
 function reject(socket: Duplex, status: number, reason: string): void {
@@ -152,13 +174,15 @@ export function createRealtimeGateway(options: RealtimeOptions): RealtimeGateway
       reject(socket, 403, 'Forbidden')
       return
     }
-    const auth = await resolveSession(options.identity, options.config, request, options.now())
-    if (auth === null) {
-      // Standardmaessig verweigernd: ohne gueltige Sitzung entsteht kein WebSocket.
+    const requester = await resolveRequester(request)
+    if (requester === null) {
+      // Standardmaessig verweigernd: ohne gueltige Sitzung entsteht kein WebSocket. Fuer einen Gast heisst
+      // das zusaetzlich: ohne lebenden Link keine Verbindung, auch nicht mit gueltigem Gastcookie.
       options.logger('warn', 'realtime.upgrade.denied', { path: url.pathname })
       reject(socket, 401, 'Unauthorized')
       return
     }
+    const who = requesterFields(requester)
     server.handleUpgrade(request, socket, head, (webSocket) => {
       /**
        * Ohne diesen Zuhoerer beendet ein einziger uebergrosser Rahmen den **gesamten Serverprozess**: `ws`
@@ -167,12 +191,12 @@ export function createRealtimeGateway(options: RealtimeOptions): RealtimeGateway
        * Standardcode 1009; hier bleibt nur das Protokollieren.
        */
       webSocket.on('error', (error: Error) => {
-        options.logger('warn', 'realtime.socket.error', { userId: auth.user.id, reason: error.message })
+        options.logger('warn', 'realtime.socket.error', { ...who, reason: error.message })
       })
-      if (countForUser(auth.user.id) >= maxConnectionsPerUser) {
+      if (countForSession(requester) >= maxConnectionsPerUser) {
         // Benannt abgelehnt statt still verworfen: der Browser sieht den Grund und hoert auf, es zu
         // wiederholen. Die Verbindung wird nicht mitgefuehrt und belegt deshalb auch keinen Platz.
-        options.logger('warn', 'realtime.upgrade.denied', { userId: auth.user.id, reason: 'zu-viele-verbindungen' })
+        options.logger('warn', 'realtime.upgrade.denied', { ...who, reason: 'zu-viele-verbindungen' })
         const abgelehnt: ErrorMessage = {
           type: 'error',
           code: 'zu-viele-verbindungen',
@@ -184,9 +208,11 @@ export function createRealtimeGateway(options: RealtimeOptions): RealtimeGateway
       }
       const connection: Connection = {
         socket: webSocket,
-        sessionId: auth.session.id,
-        userId: auth.user.id,
-        expiresAt: auth.session.expiresAt,
+        sessionId: sessionIdOf(requester),
+        userId: requester.kind === 'user' ? requester.auth.user.id : null,
+        shareLinkId: requester.kind === 'guest' ? requester.guest.session.shareLinkId : null,
+        expiresAt:
+          requester.kind === 'user' ? requester.auth.session.expiresAt : requester.guest.session.expiresAt,
         alive: true,
       }
       connections.add(connection)
@@ -194,29 +220,55 @@ export function createRealtimeGateway(options: RealtimeOptions): RealtimeGateway
       webSocket.on('pong', () => {
         connection.alive = true
       })
-      options.logger('info', 'realtime.upgrade.accepted', { userId: auth.user.id })
+      options.logger('info', 'realtime.upgrade.accepted', who)
       // Erste Nachricht der Zustandsmaschine: verbunden und authentifiziert, aber in keinem Raum. Die
       // Protokollversion steht dabei, damit ein Browser mit altem Bundle es bemerkt, bevor er beitritt.
+      // `userId` bleibt fuer einen internen Nutzer genau seine Nutzerkennung; ein Gast hat keine und
+      // bekommt die Kennung seiner Gastsession. Das Protokoll aendert sich dafuer nicht, und der Client
+      // braucht das Feld ohnehin nur, um sich selbst wiederzuerkennen.
       const ready: ReadyMessage = {
         type: 'ready',
         protocolVersion: REALTIME_PROTOCOL_VERSION,
-        userId: auth.user.id,
+        userId: connection.userId ?? connection.sessionId,
       }
       webSocket.send(JSON.stringify(ready))
       const scope: WorkspaceScope = {
         async role(workspaceId: WorkspaceId): Promise<WorkspaceRole | null> {
-          const access = await options.workspaces.workspaces.findForUser(workspaceId, auth.user.id)
+          // Ein Gast ist in keinem Arbeitsbereich Mitglied - fuer ihn ist die Antwort immer `null`.
+          if (requester.kind === 'guest') {
+            return null
+          }
+          const access = await options.workspaces.workspaces.findForUser(workspaceId, requester.auth.user.id)
           return access?.role ?? null
         },
       }
-      options.onConnection?.(webSocket, auth, scope)
+      options.onConnection?.(webSocket, requester, scope)
     })
   }
 
-  function countForUser(userId: UserId): number {
+  /**
+   * Interne Sitzung **oder** Gastsession, in dieser Reihenfolge.
+   *
+   * Dieselbe Rangfolge wie im HTTP-Guard: wer angemeldet ist, verbindet sich als er selbst und faellt nicht
+   * wegen eines alten Gastcookies im selben Browser auf Gastrechte zurueck.
+   */
+  async function resolveRequester(request: IncomingMessage): Promise<Requester | null> {
+    const now = options.now()
+    const auth = await resolveSession(options.identity, options.config, request, now)
+    if (auth !== null) {
+      return { kind: 'user', auth }
+    }
+    const guest = await resolveGuestSession(options.boards, options.config, request, now)
+    return guest === null ? null : { kind: 'guest', guest }
+  }
+
+  /** Zaehlt je Zugang: beim Nutzer ueber alle seine Sitzungen, beim Gast ueber seine eine Gastsession. */
+  function countForSession(requester: Requester): number {
+    const sessionId = sessionIdOf(requester)
+    const userId = requester.kind === 'user' ? requester.auth.user.id : null
     let offen = 0
     for (const connection of connections) {
-      if (connection.userId === userId) {
+      if (userId === null ? connection.sessionId === sessionId : connection.userId === userId) {
         offen += 1
       }
     }
@@ -287,6 +339,9 @@ export function createRealtimeGateway(options: RealtimeOptions): RealtimeGateway
     },
     closeUser(userId: UserId): void {
       closeMatching((connection) => connection.userId === userId)
+    },
+    closeShareLink(shareLinkId: BoardShareLinkId): void {
+      closeMatching((connection) => connection.shareLinkId === shareLinkId)
     },
     get openConnections(): number {
       return connections.size

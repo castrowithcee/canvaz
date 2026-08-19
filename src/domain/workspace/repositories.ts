@@ -75,11 +75,15 @@ export interface WorkspaceRepository {
 /**
  * Ein Auditereignis haelt fest, wer wann was an welchem Ziel getan hat. `details` traegt ausschliesslich
  * fachliche Metadaten der Aenderung - nie Tokenmaterial, nie Boardinhalte.
+ *
+ * `actorId === null` heisst: der Handelnde ist kein interner Nutzer. Genau ein Ereignis kann das haben -
+ * der Beitritt eines Gastes ueber einen Freigabelink. Wer er war, steht ueber `targetId` (der Link) und
+ * `details` (seine Gastsession) trotzdem im Nachweis.
  */
 export type NewAuditEvent = {
-  readonly actorId: UserId
+  readonly actorId: UserId | null
   readonly action: string
-  readonly targetType: 'workspace' | 'membership' | 'board' | 'board-grant'
+  readonly targetType: 'workspace' | 'membership' | 'board' | 'board-grant' | 'board-share-link'
   readonly targetId: string
   readonly workspaceId: WorkspaceId
   readonly details: Readonly<Record<string, string | number | boolean | null>>
