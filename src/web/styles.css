@@ -164,6 +164,16 @@ h4 {
   font-size: 0.9rem;
 }
 
+/* Der Modus wird nicht ueberlesen: er entscheidet, was die Ansicht ueberhaupt anbietet. */
+.board__mode {
+  border: 1px solid currentColor;
+  border-radius: 0.25rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin: 0;
+  padding: 0.15rem 0.5rem;
+}
+
 .board__canvas {
   flex: 1;
   min-height: 0;
@@ -178,4 +188,11 @@ h4 {
   display: flex;
   flex-wrap: wrap;
   gap: 1.5rem;
+}
+
+/* Freigabeverwaltung: die Unterabschnitte bleiben als Ueberschriften lesbar. */
+h5,
+h6 {
+  margin-bottom: 0.25rem;
+  margin-top: 1.5rem;
 }

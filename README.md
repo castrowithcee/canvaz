@@ -268,6 +268,17 @@ Eine Freigabe kann sich **nicht selbst weitergeben**: ein `editor` verwaltet kei
 jede Abstufung mit einem Schritt wieder aufgehoben. Und der Owner kann sich seine Ownerschaft nicht
 entziehen - dafuer gibt es nur die Uebertragung.
 
+**In der Oberflaeche** steht die Freigabeverwaltung als Abschnitt im Fluss der Boardliste und nicht als
+modaler Dialog - dieselbe Entscheidung wie ueberall sonst in dieser SPA: kein Fokuskaefig, keine eigene
+Escape-Behandlung, jede Ueberschrift bleibt in der Dokumentstruktur. Der Abschnitt zeigt den Owner, die
+vorhandenen Freigaben mit ihrer Rolle, die Auswahl der Empfaenger aus der Mitgliederliste des
+Arbeitsbereichs und zu jeder Rolle einen Satz ueber ihre Wirkung. Die Uebertragung der Ownerschaft geschieht
+in zwei Schritten: Auswahl, dann eine ausdrueckliche Bestaetigung, die benennt, was danach gilt.
+
+Angeboten wird der Abschnitt dort, wo die Serverantwort das Board bereits als eigenes ausweist
+(`board.ownerUserId`, Ownerrolle im Arbeitsbereich). Das ist Bequemlichkeit und keine Grenze: **entschieden
+wird jede einzelne Aktion serverseitig**, und jede Ablehnung erscheint als Text statt zu verschwinden.
+
 ### Oeffentliche Gastfreigaben
 
 Ein **Freigabelink** oeffnet genau ein Board fuer Menschen ohne Konto dieser Instanz. Er ist die einzige
@@ -322,6 +333,22 @@ an die Boardsicht sonst nicht heran - der Unterschied laesst sich damit nicht ve
 beiden Sichten entstehen an genau einer Stelle (`src/server/board-views.ts`), und die Gastsicht zaehlt ihre
 Felder einzeln auf, statt aus der vollen Sicht etwas wegzulassen: ein spaeter ergaenztes Feld der
 `BoardView` landet dadurch nicht von selbst beim Gast.
+
+**In der Oberflaeche** verwaltet der Owner die Gastlinks im selben Abschnitt wie die internen Freigaben:
+anlegen mit Rollenwahl (Voreinstellung `guest-viewer`) und optionaler Laufzeit in Stunden, die vorhandenen
+Links mit Rolle, Erzeuger, Ablauf, Zustand und Zahl der Beitritte, und der Widerruf je Zeile. Der
+Klartextlink erscheint **genau einmal**, unmittelbar nach der Anlage und mit dem Hinweis, dass er danach
+nicht erneut abrufbar ist; die Liste zeigt ihn nie, und abgelegt wird er nirgends.
+
+**Ein Gast oeffnet `/gast#<token>`.** Die SPA behandelt das als eigene Route noch vor jedem Sitzungszustand:
+sie fragt `/api/me` gar nicht erst, liest das Token aus dem Fragment, fragt nach einem Anzeigenamen, tritt
+bei und zeigt danach den Editor fuer genau dieses eine Board. Arbeitsbereich, Mitglieder und Boardliste
+kommen darin nicht vor, und es gibt keinen Weg dorthin - auch keinen Rueckweg aus dem Editor. Nach dem
+Beitritt nimmt die Ansicht das Token aus der Adresszeile; ein neu geladener Tab findet ueber sein Gastcookie
+zurueck ins Board. Liegt dagegen ein Token in der Adresse, wird immer beigetreten: welches Board es meint,
+weiss allein der Server, und ein vorhandenes Gastcookie koennte zu einem anderen gehoeren. Ist im selben Browser
+eine interne Sitzung offen, hat sie Vorrang (siehe *Bekannte Grenzen*); bleibt das Board dadurch unsichtbar,
+benennt die Gastansicht genau diese Ursache.
 
 Was es bewusst **nicht** gibt: dauerhafte externe Konten, Gastmitgliedschaften in einem Arbeitsbereich,
 Einladungen per E-Mail und weitere Gastrollen.
@@ -894,6 +921,24 @@ Sichtbar und als `role="status"` beziehungsweise `role="alert"` auch fuer eine S
 der Verbindungsverlust, der laufende Versuch mit seiner Nummer, der erfolgreiche Abgleich nach der
 Wiederaufnahme mit Uhrzeit, jede benannt abgelehnte Nachricht (mit einer Schaltflaeche zum Ausblenden) und
 jedes Speicherproblem.
+
+**Nur Lesen ist ein benannter Zustand.** Der Editor sagt in einem `role="status"`-Bereich, ob er bearbeitet
+oder nur liest, und im zweiten Fall warum: archivierter Arbeitsbereich, archiviertes Board, fehlendes
+Schreibrecht oder ein Freigabelink mit Leserecht. Er bietet dann keine Speicheraktion an, und die
+Zeichenflaeche steht im Lesemodus. Behauptet wird dabei nichts: das Schreibrecht kommt bei einem Gast aus
+der Rolle seiner Gastsession und bei einem Mitglied aus dem Beitritt in den Boardraum (`joined.canWrite`).
+Solange der Server sich noch nicht geaeussert hat, bleibt die Flaeche bedienbar - eine abgelehnte
+Speicherung ist sichtbar, eine grundlos gesperrte Flaeche waere nicht erklaerbar. Die Grenze liegt ohnehin
+im Server; die Ansicht stellt sie nur dar.
+
+**Aendert sich das Recht waehrend der Sitzung, wechselt die Ansicht ohne Neuladen.** Ein `access` mit
+`canWrite: false` stellt die Zeichenflaeche auf Lesen, nimmt die Speicheraktion weg und benennt den Wechsel;
+ein `access` mit `canWrite: true` stellt beides wieder her. Niemand muss dafuer neu laden oder sich neu
+anmelden.
+
+Derselbe Editor traegt beide Wege. Er kennt vom Board nur Titel und Status - genau das, was in **beiden**
+Antwortformen von `GET /api/boards/scene` steht - und verzweigt auf `viewer`, statt aus einer Gastantwort
+Felder zu lesen, die es dort nicht gibt.
 
 Ein Verbindungsverlust ist damit sichtbar und fuehrt nicht zu stillem Datenverlust. Die
 Content-Security-Policy wurde dafuer **nicht** gelockert: `connect-src` faellt auf `default-src 'self'`

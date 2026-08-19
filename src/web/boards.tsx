@@ -14,6 +14,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { BoardStatusView, BoardView, MeResponse, WorkspaceView } from '../contracts/api.js'
 import { MAX_BOARD_TITLE_LENGTH } from '../domain/board/model.js'
 import { ApiError, createBoard, fetchBoards, renameBoard, setBoardStatus } from './api.js'
+import { BoardShare } from './board-share.js'
 
 /** Uebersetzt eine Serverantwort in einen Satz. 404 und 403 bekommen bewusst eigene Texte. */
 function messageOf(cause: unknown, fallback: string): string {
@@ -41,14 +42,19 @@ function BoardRow({
   me,
   board,
   editable,
+  manageable,
   onOpen,
+  onShare,
   onChanged,
   onError,
 }: {
   readonly me: MeResponse
   readonly board: BoardView
   readonly editable: boolean
+  /** Wahr, wenn der Server dieses Board als eigenes ausweist - Bequemlichkeit, keine Grenze. */
+  readonly manageable: boolean
   readonly onOpen: (board: BoardView) => void
+  readonly onShare: (board: BoardView) => void
   readonly onChanged: () => void
   readonly onError: (message: string) => void
 }) {
@@ -129,6 +135,16 @@ function BoardRow({
         >
           {board.title} oeffnen
         </button>{' '}
+        {manageable && !renaming && (
+          <button
+            type="button"
+            onClick={() => {
+              onShare(board)
+            }}
+          >
+            Freigaben von {board.title} verwalten
+          </button>
+        )}{' '}
         {editable && !renaming && (
           <>
             <button
@@ -177,6 +193,8 @@ export function Boards({
   const [actionError, setActionError] = useState<string | null>(null)
   const [newTitle, setNewTitle] = useState('')
   const [creating, setCreating] = useState(false)
+  /** Board, dessen Freigaben gerade verwaltet werden. Der Abschnitt steht im Fluss der Seite, nicht als Dialog. */
+  const [shareBoardId, setShareBoardId] = useState<string | null>(null)
 
   const workspaceId = workspace.id
   const load = useCallback(() => {
@@ -288,13 +306,32 @@ export function Boards({
                 me={me}
                 board={board}
                 editable={editable}
+                // Der Server entscheidet ueber jede Freigabeaktion. Angeboten wird der Abschnitt dort, wo
+                // seine Antwort das Board bereits als eigenes ausweist: eigener Owner oder Owner des
+                // Arbeitsbereichs.
+                manageable={board.ownerUserId === me.user.id || workspace.role === 'owner'}
                 onOpen={onOpenBoard}
+                onShare={(entry) => {
+                  setShareBoardId(entry.id)
+                }}
                 onChanged={load}
                 onError={setActionError}
               />
             ))}
           </tbody>
         </table>
+      )}
+
+      {shareBoardId !== null && (
+        <BoardShare
+          key={shareBoardId}
+          me={me}
+          boardId={shareBoardId}
+          onClose={() => {
+            setShareBoardId(null)
+          }}
+          onChanged={load}
+        />
       )}
 
       {editable && !archived && (

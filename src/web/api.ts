@@ -9,11 +9,19 @@
 import type {
   AddWorkspaceMemberRequest,
   AdminUsersResponse,
-  BoardSceneResponse,
+  BoardGrantChangeResponse,
+  BoardGrantRoleView,
+  BoardGrantsResponse,
+  BoardShareLinkView,
+  BoardShareLinksResponse,
   BoardStatusView,
   BoardView,
   BoardsResponse,
+  CreateBoardShareLinkRequest,
+  CreateBoardShareLinkResponse,
+  GuestSessionResponse,
   SaveSceneResponse,
+  SceneResponse,
   UploadBoardAssetResponse,
   ChangeWorkspaceMemberRoleRequest,
   LogoutResponse,
@@ -35,10 +43,20 @@ import {
   ASSET_FILE_ID_PARAM,
   AUTH_LOGOUT_PATH,
   BOARD_ASSETS_PATH,
+  BOARD_GRANT_ADD_PATH,
+  BOARD_GRANT_REMOVE_PATH,
+  BOARD_GRANT_ROLE_PATH,
+  BOARD_GRANTS_PATH,
+  BOARD_GUEST_JOIN_PATH,
+  BOARD_GUEST_SESSION_PATH,
   BOARD_ID_PARAM,
+  BOARD_OWNER_PATH,
   BOARD_QUERY_PARAM,
   BOARD_RENAME_PATH,
   BOARD_SCENE_PATH,
+  BOARD_SHARE_LINK_CREATE_PATH,
+  BOARD_SHARE_LINK_REVOKE_PATH,
+  BOARD_SHARE_LINKS_PATH,
   BOARD_STATUS_PARAM,
   BOARD_STATUS_PATH,
   BOARDS_PATH,
@@ -205,9 +223,13 @@ export async function setBoardStatus(
   return request<BoardView>(BOARD_STATUS_PATH, mutation(csrfToken, { boardId, status }))
 }
 
-export async function fetchBoardScene(boardId: string): Promise<BoardSceneResponse> {
+/**
+ * Szene eines Boards. Die Antwort ist die Vereinigung beider Sichten: `viewer` unterscheidet die
+ * Mitgliedsantwort von der reduzierten Gastantwort, und der Aufrufer muss darauf verzweigen.
+ */
+export async function fetchBoardScene(boardId: string): Promise<SceneResponse> {
   const params = new URLSearchParams({ [BOARD_ID_PARAM]: boardId })
-  return request<BoardSceneResponse>(`${BOARD_SCENE_PATH}?${params.toString()}`)
+  return request<SceneResponse>(`${BOARD_SCENE_PATH}?${params.toString()}`)
 }
 
 /**
@@ -219,6 +241,98 @@ export async function saveBoardScene(
   payload: { readonly boardId: string; readonly baseVersion: number; readonly scene: SceneSnapshot },
 ): Promise<SaveSceneResponse> {
   return request<SaveSceneResponse>(BOARD_SCENE_PATH, mutation(csrfToken, payload))
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+/* Interne Boardfreigaben                                                                                */
+/* ---------------------------------------------------------------------------------------------------- */
+
+/** Freigabeliste eines Boards. Lesbar fuer jeden, der das Board sehen darf. */
+export async function fetchBoardGrants(boardId: string): Promise<BoardGrantsResponse> {
+  const params = new URLSearchParams({ [BOARD_ID_PARAM]: boardId })
+  return request<BoardGrantsResponse>(`${BOARD_GRANTS_PATH}?${params.toString()}`)
+}
+
+export async function shareBoard(
+  csrfToken: string,
+  change: { readonly boardId: string; readonly userId: string; readonly role: BoardGrantRoleView },
+): Promise<BoardGrantChangeResponse> {
+  return request<BoardGrantChangeResponse>(BOARD_GRANT_ADD_PATH, mutation(csrfToken, change))
+}
+
+export async function changeBoardGrantRole(
+  csrfToken: string,
+  change: { readonly boardId: string; readonly userId: string; readonly role: BoardGrantRoleView },
+): Promise<BoardGrantChangeResponse> {
+  return request<BoardGrantChangeResponse>(BOARD_GRANT_ROLE_PATH, mutation(csrfToken, change))
+}
+
+export async function revokeBoardGrant(
+  csrfToken: string,
+  change: { readonly boardId: string; readonly userId: string },
+): Promise<BoardGrantChangeResponse> {
+  return request<BoardGrantChangeResponse>(BOARD_GRANT_REMOVE_PATH, mutation(csrfToken, change))
+}
+
+/** Uebertraegt die Ownerschaft. Die Antwort ist das Board mit seinem neuen Owner. */
+export async function transferBoardOwnership(
+  csrfToken: string,
+  change: { readonly boardId: string; readonly userId: string },
+): Promise<BoardView> {
+  return request<BoardView>(BOARD_OWNER_PATH, mutation(csrfToken, change))
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+/* Oeffentliche Gastfreigaben                                                                            */
+/* ---------------------------------------------------------------------------------------------------- */
+
+export async function fetchBoardShareLinks(boardId: string): Promise<BoardShareLinksResponse> {
+  const params = new URLSearchParams({ [BOARD_ID_PARAM]: boardId })
+  return request<BoardShareLinksResponse>(`${BOARD_SHARE_LINKS_PATH}?${params.toString()}`)
+}
+
+/**
+ * Legt einen Freigabelink an. Das Klartexttoken steht **genau einmal** in `url` dieser Antwort; es wird
+ * deshalb nirgends abgelegt, sondern nur so lange im Zustand der Ansicht gehalten, wie sie es anzeigt.
+ */
+export async function createBoardShareLink(
+  csrfToken: string,
+  change: CreateBoardShareLinkRequest,
+): Promise<CreateBoardShareLinkResponse> {
+  return request<CreateBoardShareLinkResponse>(BOARD_SHARE_LINK_CREATE_PATH, mutation(csrfToken, change))
+}
+
+export async function revokeBoardShareLink(
+  csrfToken: string,
+  change: { readonly boardId: string; readonly shareLinkId: string },
+): Promise<BoardShareLinkView> {
+  return request<BoardShareLinkView>(BOARD_SHARE_LINK_REVOKE_PATH, mutation(csrfToken, change))
+}
+
+/**
+ * Beitritt ueber einen Freigabelink.
+ *
+ * Der einzige Aufruf ohne CSRF-Token: es gibt noch keine Sitzung, an die eines gebunden waere. Der Server
+ * prueft dafuer die Herkunft. Das Token bleibt im Speicher dieser Seite und wird nirgends abgelegt.
+ */
+export async function joinBoardAsGuest(token: string, displayName: string): Promise<GuestSessionResponse> {
+  return request<GuestSessionResponse>(BOARD_GUEST_JOIN_PATH, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ token, displayName }),
+  })
+}
+
+/** `null` bedeutet: kein gueltiger Gastzugang. Alles andere ist ein echter Fehler. */
+export async function fetchGuestSession(): Promise<GuestSessionResponse | null> {
+  try {
+    return await request<GuestSessionResponse>(BOARD_GUEST_SESSION_PATH)
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) {
+      return null
+    }
+    throw error
+  }
 }
 
 /* ---------------------------------------------------------------------------------------------------- */

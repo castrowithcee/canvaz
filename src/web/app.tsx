@@ -4,29 +4,21 @@
  * Drei Zustaende: laedt, nicht angemeldet, angemeldet. Die Oberflaeche blendet nichts als Sicherheitsgrenze
  * aus - jede geschuetzte Antwort kommt bereits serverseitig geprueft. Bewusst ohne UI-Framework: das Paket
  * braucht eine Anmeldeseite, eine Huelle und eine Nutzerliste.
+ *
+ * Daneben steht **genau eine** weitere Route: die Gastansicht unter `GUEST_APP_PATH`. Sie wird vor jedem
+ * Sitzungszustand entschieden, damit ein Gast nicht erst eine Anmeldung angeboten bekommt und die Huelle mit
+ * Arbeitsbereichen, Mitgliedern und Boards fuer ihn gar nicht erst entsteht. Einen Router braucht es dafuer
+ * nicht: es sind zwei Adressen, und der Anwendungsserver liefert fuer beide dieselbe `index.html`.
  */
 
-import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
+import { Suspense, useCallback, useEffect, useState } from 'react'
 
 import type { BoardView, LoginErrorCode, MeResponse, UserView, WorkspaceView } from '../contracts/api.js'
-import { AUTH_LOGIN_PATH, LOGIN_ERROR_PARAM } from '../contracts/api.js'
+import { AUTH_LOGIN_PATH, GUEST_APP_PATH, LOGIN_ERROR_PARAM } from '../contracts/api.js'
 import { ApiError, fetchAdminUsers, fetchMe, logout, setUserStatus } from './api.js'
+import { BoardEditor } from './board/lazy-editor.js'
+import { GuestApp } from './guest.js'
 import { Workspaces } from './workspaces.js'
-
-/**
- * Der Editor wird erst beim Oeffnen eines Boards geladen.
- *
- * Zwei Gruende, und beide sind zwingend: Excalidraw bringt den mit Abstand groessten Teil des Bundles mit,
- * und sein Schriftregister baut seine URLs beim Laden auf - der eigene Assetpfad muss deshalb *vorher*
- * stehen. Ein statischer Import koennte das nicht leisten, weil der Bundler den Excalidraw-Chunk dann vor
- * jedem Modulrumpf ausfuehrt.
- */
-const BoardEditor = lazy(async () => {
-  const { setExcalidrawAssetPath } = await import('./board/excalidraw-assets.js')
-  setExcalidrawAssetPath()
-  const editor = await import('./board/board-view.js')
-  return { default: editor.BoardEditor }
-})
 
 const LOGIN_ERROR_TEXTS: Readonly<Record<LoginErrorCode, string>> = {
   abgebrochen: 'Die Anmeldung wurde beim Identity Provider abgebrochen.',
@@ -201,6 +193,8 @@ function Shell({ me, onSignedOut }: { readonly me: MeResponse; readonly onSigned
           boardId={openBoard.board.id}
           csrfToken={me.csrfToken}
           workspaceArchived={openBoard.workspaceArchived}
+          guestRole={null}
+          guestName={null}
           onClose={() => {
             setOpenBoard(null)
           }}
@@ -260,7 +254,13 @@ type State =
   | { readonly kind: 'authenticated'; readonly me: MeResponse }
   | { readonly kind: 'failed'; readonly message: string }
 
-export function App() {
+/**
+ * Sitzungsgebundene Ansicht: alles ausser der Gastroute.
+ *
+ * Steht als eigene Komponente, damit die Gastansicht ohne ihre Zustaende und ohne ihre Sitzungspruefung
+ * auskommt - ein Gast fragt `/api/me` gar nicht erst.
+ */
+function MemberApp() {
   const [state, setState] = useState<State>({ kind: 'loading' })
 
   const load = useCallback(() => {
@@ -308,4 +308,13 @@ export function App() {
     return <LoginView error={state.error} />
   }
   return <Shell me={state.me} onSignedOut={load} />
+}
+
+export function App() {
+  // Die Adresse aendert sich waehrend einer Sitzung nicht; die Entscheidung faellt deshalb einmal und ohne
+  // eigenen Zustand.
+  if (window.location.pathname === GUEST_APP_PATH) {
+    return <GuestApp />
+  }
+  return <MemberApp />
 }

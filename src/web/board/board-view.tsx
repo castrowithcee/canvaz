@@ -21,6 +21,22 @@
  * Damit fuehrt ein Verbindungsverlust nie zu stillem Datenverlust: er ist sichtbar, und die Zeichnung wird
  * weiter gesichert. Sichtbar sind ausserdem der laufende Versuch, der erfolgreiche Abgleich nach der
  * Wiederaufnahme und jede benannt abgelehnte Nachricht.
+ *
+ * ## Ein Editor fuer Mitglieder und Gaeste
+ *
+ * Dieselbe Ansicht traegt beide Wege. Sie kennt vom Board nur Titel und Status - genau das, was in beiden
+ * Antwortformen von `GET /api/boards/scene` steht - und verzweigt auf `viewer`, statt aus einer Gastantwort
+ * Felder zu lesen, die es dort nicht gibt. Ein Gast bekommt keinen Weg zurueck: es gibt fuer ihn keine
+ * Boardliste, zu der er zurueckkehren koennte.
+ *
+ * ## Nur Lesen
+ *
+ * Das Schreibrecht behauptet diese Ansicht nicht selbst. Es kommt vom Server: bei einem Gast aus der Rolle
+ * seiner Gastsession, bei einem Mitglied aus dem Beitritt in den Boardraum (`joined.canWrite`). Bis der
+ * Server sich geaeussert hat, ist es unbekannt - dann bleibt die Zeichenflaeche bedienbar, und eine
+ * abgelehnte Speicherung waere ohnehin sichtbar. Aendert sich das Recht waehrend der Sitzung (`access`),
+ * wechselt die Ansicht ohne Neuladen: die Zeichenflaeche geht in den Lesemodus, die Speicheraktion
+ * verschwindet, und der Wechsel wird in einem `role="status"`-Bereich benannt.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -28,10 +44,11 @@ import type { ReactNode } from 'react'
 
 import '@excalidraw/excalidraw/index.css'
 
-import type { BoardView } from '../../contracts/api.js'
+import type { BoardStatusView, GuestRoleView } from '../../contracts/api.js'
 import type { PresenceView } from '../../contracts/realtime.js'
 import type { BinaryFileRef, SceneSnapshot } from '../../contracts/scene.js'
 import { SCENE_SCHEMA_VERSION } from '../../contracts/scene.js'
+import { guestMayWrite } from '../../domain/board/guest.js'
 import { ApiError, fetchBoardAssetDataUrl, fetchBoardScene, saveBoardScene, uploadBoardAsset } from '../api.js'
 import type { BoardEditorPort, EditorPeer } from './board-editor-port.js'
 import { BoardCanvas } from './excalidraw-adapter.js'
@@ -41,8 +58,14 @@ import type { BoardRealtime, RealtimeStatus } from './realtime-client.js'
 /** Ruhezeit nach der letzten Aenderung, bevor gespeichert wird. */
 const AUTOSAVE_DELAY_MS = 1_500
 
+/**
+ * Was diese Ansicht vom Board braucht: Titel und Status. Beide stehen in der Mitglieds- **und** in der
+ * Gastsicht; alles Weitere (Arbeitsbereich, Owner) gehoert nicht in den Editor und erreicht einen Gast
+ * ohnehin nicht.
+ */
 type Loaded = {
-  readonly board: BoardView
+  readonly title: string
+  readonly status: BoardStatusView
   readonly version: number
   readonly scene: SceneSnapshot
 }
@@ -96,6 +119,33 @@ function connectionMessage(status: RealtimeStatus, attempt: number, resyncedAt: 
   }
 }
 
+/**
+ * Warum diese Ansicht nur liest - oder `null`, wenn sie es nicht tut.
+ *
+ * Sie behauptet dabei nichts: jeder Grund ist eine Angabe des Servers. Der Archivzustand steht in der
+ * geladenen Boardsicht, das Schreibrecht kommt aus der Gastsession oder aus dem Boardraum.
+ */
+function readOnlyReason(input: {
+  readonly workspaceArchived: boolean
+  readonly boardArchived: boolean
+  readonly canWrite: boolean | null
+  /** Wahr, wenn die Gastrolle selbst das Leserecht ist - dann ist sie der genauere Grund. */
+  readonly guestViewer: boolean
+}): string | null {
+  if (input.workspaceArchived) {
+    return 'der Arbeitsbereich ist archiviert'
+  }
+  if (input.boardArchived) {
+    return 'dieses Board ist archiviert'
+  }
+  if (input.canWrite === false) {
+    return input.guestViewer
+      ? 'dieser Freigabelink gibt nur Leserecht'
+      : 'du hast fuer dieses Board kein Schreibrecht'
+  }
+  return null
+}
+
 function saveMessage(state: SaveState): string {
   switch (state.kind) {
     case 'idle':
@@ -117,13 +167,23 @@ export function BoardEditor({
   boardId,
   csrfToken,
   workspaceArchived,
+  guestRole,
+  guestName,
   onClose,
 }: {
   readonly boardId: string
+  /** Token der eigenen Sitzung - der internen oder der des Gastes. */
   readonly csrfToken: string
   readonly workspaceArchived: boolean
-  readonly onClose: () => void
+  /** Rolle der Gastsession oder `null` fuer ein Mitglied. Ein Gast kennt seinen Arbeitsbereich nicht. */
+  readonly guestRole: GuestRoleView | null
+  /** Selbst gewaehlter Anzeigename des Gastes; `null` fuer ein Mitglied. */
+  readonly guestName: string | null
+  /** `null` heisst: es gibt keinen Weg zurueck. Genau das gilt fuer einen Gast. */
+  readonly onClose: (() => void) | null
 }) {
+  // Der Gastweg und der interne Weg schliessen sich aus; welche Rolle schreiben darf, sagt der Domain-Core.
+  const initialCanWrite = guestRole === null ? null : guestMayWrite(guestRole)
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
   const [save, setSave] = useState<SaveState>({ kind: 'idle' })
   const [adapter, setAdapter] = useState<BoardEditorPort | null>(null)
@@ -134,8 +194,16 @@ export function BoardEditor({
   const [resyncedAt, setResyncedAt] = useState<Date | null>(null)
   /** Zuletzt vom Server benannt abgelehnte Nachricht. */
   const [rejected, setRejected] = useState<string | null>(null)
-  /** Vom Server aufgeloestes Schreibrecht. Bis zum Beitritt entscheidet allein der geladene Boardzustand. */
-  const [canWrite, setCanWrite] = useState(true)
+  /**
+   * Vom Server aufgeloestes Schreibrecht. `null` heisst: noch keine Aussage des Servers.
+   *
+   * Bei einem Gast steht sie sofort fest - seine Gastsession nennt die Rolle seines Links. Ein Mitglied
+   * erfaehrt sie mit dem Beitritt in den Boardraum; bis dahin bleibt die Zeichenflaeche bedienbar, denn
+   * eine abgelehnte Speicherung waere sichtbar, eine faelschlich gesperrte Flaeche dagegen nicht erklaerbar.
+   */
+  const [canWrite, setCanWrite] = useState<boolean | null>(initialCanWrite)
+  /** Benannter Wechsel des Schreibrechts waehrend der Sitzung. */
+  const [accessNote, setAccessNote] = useState<string | null>(null)
   const [peers, setPeers] = useState<readonly EditorPeer[]>([])
   /** Meldung ueber ein Bild, das nicht hochgeladen oder nicht geladen werden konnte. */
   const [assetProblem, setAssetProblem] = useState<string | null>(null)
@@ -155,6 +223,8 @@ export function BoardEditor({
   const selfRef = useRef<string | null>(null)
   /** Spiegel von `live` fuer die Rueckrufe des Editors, die nicht neu aufgebaut werden sollen. */
   const liveRef = useRef(false)
+  /** Zuletzt vom Server genanntes Schreibrecht. Er unterscheidet die erste Aussage von einer Aenderung. */
+  const canWriteRef = useRef<boolean | null>(initialCanWrite)
 
   const load = useCallback(() => {
     setState({ kind: 'loading' })
@@ -165,7 +235,9 @@ export function BoardEditor({
     setAttempt(0)
     setResyncedAt(null)
     setRejected(null)
-    setCanWrite(true)
+    setCanWrite(initialCanWrite)
+    canWriteRef.current = initialCanWrite
+    setAccessNote(null)
     setPeers([])
     setMountKey((current) => current + 1)
     blockedRef.current = false
@@ -175,9 +247,16 @@ export function BoardEditor({
       .then((response) => {
         versionRef.current = response.version
         filesRef.current = { ...response.scene.files }
+        // Verzweigt auf `viewer`: die Gastantwort traegt eine eigene, reduzierte Boardsicht. Titel und
+        // Status stehen in beiden - mehr braucht der Editor nicht.
         setState({
           kind: 'ready',
-          loaded: { board: response.board, version: response.version, scene: response.scene },
+          loaded: {
+            title: response.board.title,
+            status: response.board.status,
+            version: response.version,
+            scene: response.scene,
+          },
         })
       })
       .catch((cause: unknown) => {
@@ -194,14 +273,14 @@ export function BoardEditor({
           message: cause instanceof ApiError ? cause.message : 'Das Board konnte nicht geladen werden.',
         })
       })
-  }, [boardId])
+  }, [boardId, initialCanWrite])
 
   useEffect(load, [load])
 
   // Der Server entscheidet; die Oberflaeche folgt ihm. `canWrite` kommt aus dem Raum und beruht auf
   // derselben Policy wie die HTTP-API.
   const viewOnly =
-    workspaceArchived || !canWrite || (state.kind === 'ready' && state.loaded.board.status === 'archived')
+    workspaceArchived || canWrite === false || (state.kind === 'ready' && state.loaded.status === 'archived')
   /** Live heisst: der Raum nimmt Aenderungen an und persistiert sie. Dann speichert die Ansicht nicht selbst. */
   const live = connection === 'verbunden' && !viewOnly
   liveRef.current = live
@@ -383,6 +462,7 @@ export function BoardEditor({
         versionRef.current = message.version
         filesRef.current = { ...filesRef.current, ...message.scene.files }
         setCanWrite(message.canWrite)
+        canWriteRef.current = message.canWrite
         selfRef.current = message.clientId
         adapter?.applyRemoteElements(message.scene.elements)
         adapter?.applyRemoteAppState(message.scene.appState)
@@ -429,6 +509,16 @@ export function BoardEditor({
         zeigePeers(fremdePeers(fremde, selfRef.current))
       },
       onAccess(erlaubt): void {
+        // Der Wechsel wird benannt, statt die Flaeche stillschweigend umzuschalten. Die erste Aussage des
+        // Servers ist keine Aenderung und bleibt deshalb ohne Hinweis.
+        if (canWriteRef.current !== null && canWriteRef.current !== erlaubt) {
+          setAccessNote(
+            erlaubt
+              ? 'Du darfst dieses Board jetzt wieder bearbeiten.'
+              : 'Dein Schreibrecht fuer dieses Board wurde entzogen. Die Ansicht ist ab sofort schreibgeschuetzt.',
+          )
+        }
+        canWriteRef.current = erlaubt
         setCanWrite(erlaubt)
         if (!erlaubt) {
           // `saving` kann hier nur der Checkpoint eines Mitbearbeiters sein; eigene Aenderungen stehen als
@@ -490,6 +580,15 @@ export function BoardEditor({
         <p className="notice notice--error" role="alert">
           Dieses Board ist nicht (mehr) fuer dich freigegeben oder existiert nicht.
         </p>
+        {guestRole !== null && (
+          // Die haeufigste Ursache auf dem Gastweg: eine interne Sitzung im selben Browser. Sie hat Vorrang,
+          // und dann entscheidet die eigene Berechtigung statt des Freigabelinks.
+          <p className="hint">
+            Bist du in diesem Browser mit einem Konto dieser Instanz angemeldet? Eine angemeldete Sitzung hat
+            Vorrang vor einem Gastzugang - dann zaehlt deine eigene Berechtigung und nicht der Freigabelink.
+            Melde dich ab und oeffne den Link erneut.
+          </p>
+        )}
       </Frame>
     )
   }
@@ -515,13 +614,25 @@ export function BoardEditor({
     )
   }
 
+  const reason = readOnlyReason({
+    workspaceArchived,
+    boardArchived: state.loaded.status === 'archived',
+    canWrite,
+    guestViewer: guestRole === 'guest-viewer',
+  })
+
   return (
     <div className="board">
       <header className="board__bar">
-        <h2 className="board__title">{state.loaded.board.title}</h2>
+        <h2 className="board__title">{state.loaded.title}</h2>
+        {/* Der Modus zuerst und immer benannt: er entscheidet, was diese Ansicht ueberhaupt anbietet. */}
+        <p className="board__mode" role="status">
+          {reason === null ? 'Bearbeitungsmodus.' : `Nur-Lesen-Modus: ${reason}.`}
+        </p>
+        {guestName !== null && <p className="board__state">Gastzugang als {guestName}</p>}
         <p className="board__state" role="status">
           {viewOnly && (save.kind === 'idle' || save.kind === 'saved')
-            ? 'Nur Lesen: keine Schreibberechtigung.'
+            ? 'Nichts zu speichern: diese Ansicht aendert das Board nicht.'
             : saveMessage(save)}
         </p>
         <p className="board__state" role="status">
@@ -537,20 +648,30 @@ export function BoardEditor({
             Board speichern
           </button>
         )}
-        {assetProblem !== null && (
-        <p className="notice notice--error" role="alert">
-          {assetProblem}
-        </p>
-      )}
-      {save.kind === 'conflict' && (
+        {save.kind === 'conflict' && (
           <button type="button" onClick={load}>
             Neu laden und eigene Aenderungen verwerfen
           </button>
         )}
-        <button type="button" onClick={onClose}>
-          Board schliessen
-        </button>
+        {onClose !== null && (
+          <button type="button" onClick={onClose}>
+            Board schliessen
+          </button>
+        )}
       </header>
+      {accessNote !== null && (
+        <p className="notice" role="status">
+          {accessNote}{' '}
+          <button
+            type="button"
+            onClick={() => {
+              setAccessNote(null)
+            }}
+          >
+            Hinweis ausblenden
+          </button>
+        </p>
+      )}
       {assetProblem !== null && (
         <p className="notice notice--error" role="alert">
           {assetProblem}
@@ -589,18 +710,21 @@ function Frame({
   children,
 }: {
   readonly title: string
-  readonly onClose: () => void
+  /** `null` heisst: kein Rueckweg. Ein Gast hat keine Boardliste, zu der er zurueckkehren koennte. */
+  readonly onClose: (() => void) | null
   readonly children: ReactNode
 }) {
   return (
     <section className="shell" aria-labelledby="board-frame-heading">
       <h2 id="board-frame-heading">{title}</h2>
       {children}
-      <p>
-        <button type="button" onClick={onClose}>
-          Zurueck zur Boardliste
-        </button>
-      </p>
+      {onClose !== null && (
+        <p>
+          <button type="button" onClick={onClose}>
+            Zurueck zur Boardliste
+          </button>
+        </p>
+      )}
     </section>
   )
 }
