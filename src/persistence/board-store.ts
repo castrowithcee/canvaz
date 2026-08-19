@@ -34,6 +34,7 @@ import type {
   NewBoardAsset,
   NewBoardShareLink,
   SceneVersion,
+  SceneVersionSummary,
 } from '../domain/board/repositories.js'
 import { BoardGrantConflictError, CorruptSceneError, SceneConflictError } from '../domain/board/repositories.js'
 import type { WorkspaceId, WorkspaceRole, WorkspaceStatus } from '../domain/workspace/model.js'
@@ -544,6 +545,56 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
     },
 
     scenes: {
+      async find(boardId: BoardId, version: number): Promise<SceneVersion | null> {
+        const result = await db.query<{ scene: unknown; author_user_id: string | null; created_at: Date }>(
+          `select scene, author_user_id, created_at
+             from scene_versions
+            where board_id = $1 and version = $2`,
+          [boardId, version],
+        )
+        const row = result.rows[0]
+        if (row === undefined) {
+          return null
+        }
+        const snapshot = parseSceneSnapshot(row.scene)
+        if (snapshot === null) {
+          // Wie beim neuesten Stand: ein beschaedigter Datensatz ist ein Fehler und nie ein leeres Board.
+          throw new CorruptSceneError(boardId, version)
+        }
+        return { boardId, version, snapshot, authorId: row.author_user_id, createdAt: row.created_at }
+      },
+
+      async listVersions(boardId: BoardId, limit: number): Promise<readonly SceneVersionSummary[]> {
+        // **Der Snapshot wird nicht angefasst.** Umfang und Groesse stehen als eigene Spalten daneben
+        // (Migration 0006); ohne sie muesste diese Liste so viele vollstaendige Szenen lesen, wie sie
+        // Zeilen zeigt - fuer eine Ansicht, die den Inhalt gar nicht darstellt.
+        const result = await db.query<{
+          version: number
+          author_user_id: string | null
+          author_display_name: string | null
+          created_at: Date
+          element_count: number
+          byte_size: number
+        }>(
+          `select v.version, v.author_user_id, u.display_name as author_display_name, v.created_at,
+                  v.element_count, v.byte_size
+             from scene_versions v
+             left join users u on u.id = v.author_user_id
+            where v.board_id = $1
+            order by v.version desc
+            limit $2`,
+          [boardId, limit],
+        )
+        return result.rows.map((row) => ({
+          version: row.version,
+          authorId: row.author_user_id,
+          authorDisplayName: row.author_display_name,
+          createdAt: row.created_at,
+          elementCount: row.element_count,
+          byteSize: row.byte_size,
+        }))
+      },
+
       async findLatest(boardId: BoardId): Promise<SceneVersion | null> {
         const result = await db.query<{
           version: number
@@ -582,12 +633,15 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
         snapshot: SceneSnapshot,
         authorId: UserId | null,
       ): Promise<SceneVersion> {
+        // Kopfdaten entstehen aus demselben Snapshot in derselben Anweisung: eine spaetere Berechnung waere
+        // ein zweiter Zeitpunkt und damit eine zweite Wahrheit ueber dieselbe Zeile.
+        const serialized = JSON.stringify(snapshot)
         try {
           const result = await db.query<{ created_at: Date }>(
-            `insert into scene_versions (board_id, version, scene, author_user_id)
-             values ($1, $2, $3::jsonb, $4)
+            `insert into scene_versions (board_id, version, scene, author_user_id, element_count, byte_size)
+             values ($1, $2, $3::jsonb, $4, $5, $6)
              returning created_at`,
-            [boardId, version, JSON.stringify(snapshot), authorId],
+            [boardId, version, serialized, authorId, snapshot.elements.length, Buffer.byteLength(serialized)],
           )
           const row = requireRow(result.rows[0], 'Szenenversion konnte nicht angelegt werden')
           return { boardId, version, snapshot, authorId, createdAt: row.created_at }

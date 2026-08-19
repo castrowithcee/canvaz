@@ -17,6 +17,7 @@ import type { EffectiveBoardRole } from '../domain/board/policy.js'
 import { mayChangeBoard, mayManageBoard } from '../domain/board/policy.js'
 import { ApiError, createBoard, fetchBoards, renameBoard, setBoardStatus } from './api.js'
 import { BoardShare } from './board-share.js'
+import { BoardVersions } from './board-versions.js'
 
 /** Uebersetzt eine Serverantwort in einen Satz. 404 und 403 bekommen bewusst eigene Texte. */
 function messageOf(cause: unknown, fallback: string): string {
@@ -58,6 +59,7 @@ function BoardRow({
   manageable,
   onOpen,
   onShare,
+  onVersions,
   onChanged,
   onError,
 }: {
@@ -68,6 +70,7 @@ function BoardRow({
   readonly manageable: boolean
   readonly onOpen: (board: BoardView) => void
   readonly onShare: (board: BoardView) => void
+  readonly onVersions: (board: BoardView) => void
   readonly onChanged: () => void
   readonly onError: (message: string) => void
 }) {
@@ -148,6 +151,16 @@ function BoardRow({
         >
           {board.title} oeffnen
         </button>{' '}
+        {!renaming && (
+          <button
+            type="button"
+            onClick={() => {
+              onVersions(board)
+            }}
+          >
+            Versionen von {board.title} zeigen
+          </button>
+        )}{' '}
         {manageable && !renaming && (
           <button
             type="button"
@@ -195,7 +208,12 @@ export function Boards({
 }: {
   readonly me: MeResponse
   readonly workspace: WorkspaceView
-  readonly onOpenBoard: (board: BoardView) => void
+  /**
+   * Oeffnet ein Board. Mit `previewVersion` steht die Read-only-Vorschau genau dieser Version - derselbe
+   * Weg wie das normale Oeffnen, damit die Vorschau die ganze Flaeche bekommt und nicht ein zweiter,
+   * halber Editor daneben entsteht.
+   */
+  readonly onOpenBoard: (board: BoardView, previewVersion?: number) => void
 }) {
   const [status, setStatus] = useState<BoardStatusView>('active')
   /** Der abgeschickte Suchbegriff. Gefiltert wird serverseitig, nicht im Browser. */
@@ -208,6 +226,8 @@ export function Boards({
   const [creating, setCreating] = useState(false)
   /** Board, dessen Freigaben gerade verwaltet werden. Der Abschnitt steht im Fluss der Seite, nicht als Dialog. */
   const [shareBoardId, setShareBoardId] = useState<string | null>(null)
+  /** Board, dessen Versionen gerade gezeigt werden. Derselbe Fluss, derselbe Grund. */
+  const [versionsBoard, setVersionsBoard] = useState<BoardView | null>(null)
 
   const workspaceId = workspace.id
   const load = useCallback(() => {
@@ -327,12 +347,29 @@ export function Boards({
                 onShare={(entry) => {
                   setShareBoardId(entry.id)
                 }}
+                onVersions={setVersionsBoard}
                 onChanged={load}
                 onError={setActionError}
               />
             ))}
           </tbody>
         </table>
+      )}
+
+      {versionsBoard !== null && (
+        <BoardVersions
+          key={versionsBoard.id}
+          me={me}
+          boardId={versionsBoard.id}
+          workspaceArchived={!workspaceActive}
+          onPreview={(version) => {
+            onOpenBoard(versionsBoard, version)
+          }}
+          onClose={() => {
+            setVersionsBoard(null)
+          }}
+          onChanged={load}
+        />
       )}
 
       {shareBoardId !== null && (

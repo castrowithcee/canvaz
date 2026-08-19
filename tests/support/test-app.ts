@@ -104,7 +104,14 @@ export async function startTestApp(options: {
   const store = createIdentityStore(options.pool)
   const workspaces = createWorkspaceStore(options.pool)
   const boards = createBoardStore(options.pool)
-  const rooms = createBoardRooms({ boards, logger, now, maxRoomBytes: config.maxSceneBytes, ...options.rooms })
+  const rooms = createBoardRooms({
+    boards,
+    logger,
+    now,
+    maxRoomBytes: config.maxSceneBytes,
+    sceneVersionRetention: config.sceneVersionRetention,
+    ...options.rooms,
+  })
   // Kurzer Abstand der Ablaufpruefung: der Test soll auf das Schliessen nicht eine Minute warten.
   const realtime = createRealtimeGateway({
     config,
@@ -126,6 +133,7 @@ export async function startTestApp(options: {
     storage: createAssetStorage(config.storage),
     oidc: createOidcClient(config),
     realtime,
+    rooms,
     logger,
     now,
   }

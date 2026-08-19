@@ -384,7 +384,8 @@ function WorkspaceDetail({
   readonly workspaceId: string
   readonly onBack: () => void
   readonly onChanged: () => void
-  readonly onOpenBoard: (board: BoardView, workspace: WorkspaceView) => void
+  /** `previewVersion` oeffnet statt des aktuellen Standes die Read-only-Vorschau genau dieser Version. */
+  readonly onOpenBoard: (board: BoardView, workspace: WorkspaceView, previewVersion?: number) => void
 }) {
   const [state, setState] = useState<
     | { readonly kind: 'loading' }
@@ -513,8 +514,8 @@ function WorkspaceDetail({
       <Boards
         me={me}
         workspace={workspace}
-        onOpenBoard={(board) => {
-          onOpenBoard(board, workspace)
+        onOpenBoard={(board, previewVersion) => {
+          onOpenBoard(board, workspace, previewVersion)
         }}
       />
 
@@ -560,7 +561,8 @@ export function Workspaces({
   onOpenBoard,
 }: {
   readonly me: MeResponse
-  readonly onOpenBoard: (board: BoardView, workspace: WorkspaceView) => void
+  /** `previewVersion` oeffnet statt des aktuellen Standes die Read-only-Vorschau genau dieser Version. */
+  readonly onOpenBoard: (board: BoardView, workspace: WorkspaceView, previewVersion?: number) => void
 }) {
   const [list, setList] = useState<readonly WorkspaceView[] | null>(null)
   const [error, setError] = useState<string | null>(null)

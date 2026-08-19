@@ -7,6 +7,7 @@
  * schlimmer als einer, der gar nicht startet.
  */
 
+import { SCENE_VERSION_RETENTION } from '../domain/board/model.js'
 import type { AssetStorageAdapter } from '../domain/storage/asset-storage-port.js'
 import type { S3StorageConfig } from '../persistence/asset-storage-s3.js'
 
@@ -37,6 +38,22 @@ export type AppConfig = {
    * Speicherung; ein groesserer Koerper wird gar nicht erst vollstaendig gelesen.
    */
   readonly maxSceneBytes: number
+  /**
+   * Zahl der je Board aufbewahrten Szenenversionen.
+   *
+   * Die Historie waechst mit jeder Speicherung und jedem Checkpoint; ohne Grenze waechst sie unbegrenzt.
+   * Der Wert ist konfigurierbar, weil er zwischen Rueckweg und Speicherbedarf abwaegt - ein Betrieb mit
+   * langen Sitzungen will mehr Staende, ein enger Datenbankplatz weniger.
+   */
+  readonly sceneVersionRetention: number
+  /**
+   * Obergrenze einer Importdatei in Bytes.
+   *
+   * Deutlich groesser als ein Snapshot: eine `.excalidraw`-Datei traegt ihre Bilder als Base64 in derselben
+   * Datei und ist dadurch um rund ein Drittel groesser als die Bytes, die sie meint. Sie begrenzt den
+   * Anfragekoerper; ein groesserer landet nie vollstaendig im Speicher.
+   */
+  readonly maxImportBytes: number
   /** Verzeichnis mit der gebauten SPA. */
   readonly webRoot: string
 }
@@ -169,6 +186,21 @@ const DEFAULT_MAX_ASSET_BYTES = 5 * 1024 * 1024
 const MIN_MAX_ASSET_BYTES = 16 * 1024
 const MAX_MAX_ASSET_BYTES = 64 * 1024 * 1024
 
+/**
+ * Der Standard steht im Fachkern; hier stehen nur die Grenzen, in denen der Betrieb ihn verschieben darf.
+ * Unter zehn Staenden waere die Historie kein Rueckweg mehr, ueber tausend keine begrenzte mehr.
+ */
+const MIN_SCENE_VERSION_RETENTION = 10
+const MAX_SCENE_VERSION_RETENTION = 1000
+
+/**
+ * 20 MiB je Importdatei. Das traegt eine grosse Zeichnung samt mehrerer Bilder in Base64 und bleibt weit
+ * unter dem, was eine einzelne Anfrage im Speicher halten darf.
+ */
+const DEFAULT_MAX_IMPORT_BYTES = 20 * 1024 * 1024
+const MIN_MAX_IMPORT_BYTES = 64 * 1024
+const MAX_MAX_IMPORT_BYTES = 128 * 1024 * 1024
+
 export function loadConfig(env: Env = process.env): AppConfig {
   const problems: string[] = []
 
@@ -212,6 +244,22 @@ export function loadConfig(env: Env = process.env): AppConfig {
       DEFAULT_MAX_SCENE_BYTES,
       MIN_MAX_SCENE_BYTES,
       MAX_MAX_SCENE_BYTES,
+      problems,
+    ),
+    sceneVersionRetention: readInteger(
+      env,
+      'CANVAZ_SCENE_VERSION_RETENTION',
+      SCENE_VERSION_RETENTION,
+      MIN_SCENE_VERSION_RETENTION,
+      MAX_SCENE_VERSION_RETENTION,
+      problems,
+    ),
+    maxImportBytes: readInteger(
+      env,
+      'CANVAZ_MAX_IMPORT_BYTES',
+      DEFAULT_MAX_IMPORT_BYTES,
+      MIN_MAX_IMPORT_BYTES,
+      MAX_MAX_IMPORT_BYTES,
       problems,
     ),
     webRoot: env['CANVAZ_WEB_ROOT']?.trim() ?? 'dist/web',

@@ -188,9 +188,35 @@ export class SceneConflictError extends Error {
   }
 }
 
+/**
+ * Kopfdaten einer gespeicherten Version fuer die Historie.
+ *
+ * Bewusst **ohne** den Snapshot: eine Liste von hundert Versionen wuerde sonst hundert vollstaendige Szenen
+ * durch den Speicher tragen, obwohl die Ansicht nur Zeitpunkt, Urheber und Umfang zeigt. Wer den Inhalt
+ * will, holt genau eine Version ueber `find`.
+ */
+export type SceneVersionSummary = {
+  readonly version: number
+  readonly authorId: UserId | null
+  /** Anzeigename des Urhebers; `null` bei einem Gast oder einem geloeschten Konto. */
+  readonly authorDisplayName: string | null
+  readonly createdAt: Date
+  /** Zahl der Elemente einschliesslich Tombstones - der Umfang, den diese Version traegt. */
+  readonly elementCount: number
+  /** Groesse des serialisierten Snapshots in Bytes. */
+  readonly byteSize: number
+}
+
 export interface SceneRepository {
   /** Neuester Stand oder `null`, wenn das Board noch nie gespeichert wurde. */
   findLatest(boardId: BoardId): Promise<SceneVersion | null>
+  /**
+   * Genau eine Version. `null` heisst: es gab sie nie oder die Aufbewahrungsgrenze hat sie entfernt - beide
+   * Faelle sind fuer den Aufrufer dasselbe, naemlich "nicht mehr da".
+   */
+  find(boardId: BoardId, version: number): Promise<SceneVersion | null>
+  /** Kopfdaten der juengsten Versionen, absteigend. Die Sichtbarkeit des Boards prueft der Aufrufer. */
+  listVersions(boardId: BoardId, limit: number): Promise<readonly SceneVersionSummary[]>
   /**
    * Legt genau die Version `version` an und wirft `SceneConflictError`, wenn es sie schon gibt. Der
    * Aufrufer erhoeht `boards.current_scene_version` in derselben Transaktion.

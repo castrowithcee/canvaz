@@ -40,6 +40,7 @@ const ALLE_AKTIONEN: readonly BoardAction[] = [
   'board:archive',
   'board:unarchive',
   'scene:write',
+  'scene:restore',
   'grant:manage',
   'board:transfer-ownership',
 ]

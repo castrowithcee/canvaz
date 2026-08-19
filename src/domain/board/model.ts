@@ -66,12 +66,15 @@ export type Board = {
 export const MAX_BOARD_TITLE_LENGTH = 120
 
 /**
- * Laenge der aufbewahrten Szenenhistorie je Board.
+ * Standardlaenge der aufbewahrten Szenenhistorie je Board.
  *
  * Jede angenommene Speicherung legt eine neue Zeile an - das ist die Versionspruefung selbst und zugleich
- * die Grundlage der spaeteren Versionshistorie. Ohne Grenze waechst sie unbegrenzt, deshalb faellt beim
- * Anlegen alles heraus, was aelter als die juengsten Versionen ist. Ein fester Wert statt einer
- * Konfiguration: er ist eine fachliche Zusage, keine Betriebsschraube.
+ * die Grundlage der Versionshistorie. Ohne Grenze waechst sie unbegrenzt, deshalb faellt beim Anlegen alles
+ * heraus, was aelter als die juengsten Versionen ist.
+ *
+ * Der Wert ist der **Standard**, nicht die Zusage: der Betrieb kann ihn ueber
+ * `CANVAZ_SCENE_VERSION_RETENTION` anpassen, weil er zwischen Rueckweg und Speicherbedarf abwaegt. Die
+ * fachliche Zusage ist die Begrenztheit selbst, nicht die Zahl - eine unbegrenzte Historie gibt es nicht.
  */
 export const SCENE_VERSION_RETENTION = 100
 

@@ -153,6 +153,8 @@ export type BoardRoomOptions = {
   readonly checkpointMaxMs?: number
   readonly presenceIntervalMs?: number
   readonly accessCheckIntervalMs?: number
+  /** Zahl der aufbewahrten Szenenversionen. Ohne Angabe gilt der Standard des Fachkerns. */
+  readonly sceneVersionRetention?: number
   /** Grenzwerte. Ohne Angabe gelten die begruendeten Standardwerte oben. */
   readonly maxRoomBytes?: number
   readonly maxRoomParticipants?: number
@@ -166,6 +168,18 @@ export type BoardRoomOptions = {
 export type BoardRooms = {
   /** Passt auf `RealtimeOptions.onConnection`. */
   onConnection(socket: WebSocket, requester: Requester): void
+  /**
+   * Der persistierte Stand wurde von aussen ersetzt - durch eine Wiederherstellung oder einen Import.
+   *
+   * Der Raum haelt den alten Stand im Speicher und wuerde ihn beim naechsten Checkpoint erneut schreiben.
+   * Deshalb wird er **ersetzt statt zusammengefuehrt**: der neue Stand ist keine weitere Aenderung, ueber
+   * die abzustimmen waere, sondern die Entscheidung, dass genau er ab jetzt gilt. Jeder Teilnehmer bekommt
+   * anschliessend den vollstaendigen Stand als `snapshot`.
+   *
+   * Ohne offenen Raum passiert nichts - dann gibt es nichts zu benachrichtigen, und der naechste Beitritt
+   * laedt den neuen Stand ohnehin aus der Datenbank.
+   */
+  restored(boardId: BoardId, version: number, snapshot: SceneSnapshot): void
   /** Offene Raeume; ausschliesslich fuer Tests und Diagnose. */
   readonly roomCount: number
   close(): Promise<void>
@@ -304,6 +318,7 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
   const checkpointMaxMs = options.checkpointMaxMs ?? CHECKPOINT_MAX_MS
   const presenceIntervalMs = options.presenceIntervalMs ?? PRESENCE_INTERVAL_MS
 
+  const sceneVersionRetention = options.sceneVersionRetention ?? SCENE_VERSION_RETENTION
   const maxRoomBytes = options.maxRoomBytes ?? DEFAULT_MAX_ROOM_BYTES
   const maxRoomParticipants = options.maxRoomParticipants ?? MAX_ROOM_PARTICIPANTS
   const messagesPerSecond = options.messagesPerSecond ?? MESSAGES_PER_SECOND
@@ -508,7 +523,7 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
         // Checkpoint trotzdem - die Arbeit der anderen haengt daran.
         const saved = await tx.scenes.append(room.boardId, version, snapshot, userOf(author)?.id ?? null)
         await tx.boards.setSceneVersion(room.boardId, version)
-        await tx.scenes.prune(room.boardId, SCENE_VERSION_RETENTION)
+        await tx.scenes.prune(room.boardId, sceneVersionRetention)
         return { kind: 'saved', version, savedAt: saved.createdAt, snapshotSequence, clientChangeSequences } as const
       })
       if (result.kind === 'denied') {
@@ -1058,6 +1073,34 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
           leaveRoom(participant)
         })
       })
+    },
+    restored(boardId: BoardId, version: number, snapshot: SceneSnapshot): void {
+      const room = rooms.get(boardId)
+      if (room === undefined) {
+        return
+      }
+      // Hart ersetzen, nicht zusammenfuehren: der neue Stand traegt bereits angehobene Elementversionen
+      // (`supersedeSnapshot`), sodass auch ein Client, der den alten Stand noch haelt, ihn nicht mehr
+      // durchsetzen kann - weder ueber diesen Raum noch nach einer Wiederverbindung.
+      room.elements = snapshot.elements
+      room.appState = snapshot.appState
+      room.files = { ...snapshot.files }
+      measure(room)
+      room.version = version
+      // Der ersetzte Stand ist bereits persistiert. Ein `dirty` daneben wuerde ihn sofort noch einmal
+      // schreiben und dabei die Version erhoehen, ohne dass sich etwas geaendert hat.
+      room.dirty = false
+      room.firstDirtyAt = null
+      room.lastAuthor = null
+      room.changeSequence += 1
+      if (room.checkpointTimer !== null) {
+        clearTimeout(room.checkpointTimer)
+        room.checkpointTimer = null
+      }
+      logger('info', 'board.scene.restored', { boardId, version, participants: room.participants.size })
+      for (const participant of [...room.participants]) {
+        sendSnapshot(participant, room)
+      }
     },
     get roomCount(): number {
       return rooms.size

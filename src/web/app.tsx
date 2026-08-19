@@ -166,15 +166,27 @@ function AdminUsers({ me }: { readonly me: MeResponse }) {
 }
 
 /** Geoeffnetes Board samt Zustand seines Arbeitsbereichs; letzterer entscheidet ueber die Schreibbarkeit. */
-type OpenBoard = { readonly board: BoardView; readonly workspaceArchived: boolean }
+type OpenBoard = {
+  readonly board: BoardView
+  readonly workspaceArchived: boolean
+  /**
+   * `null` heisst: der aktuelle Stand. Sonst die Read-only-Vorschau genau dieser Version - derselbe Editor,
+   * dieselbe Flaeche, aber ohne Boardraum und ohne jede Speicherung.
+   */
+  readonly previewVersion: number | null
+}
 
 function Shell({ me, onSignedOut }: { readonly me: MeResponse; readonly onSignedOut: () => void }) {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [openBoard, setOpenBoard] = useState<OpenBoard | null>(null)
 
-  function open(board: BoardView, workspace: WorkspaceView): void {
-    setOpenBoard({ board, workspaceArchived: workspace.status === 'archived' })
+  function open(board: BoardView, workspace: WorkspaceView, previewVersion?: number): void {
+    setOpenBoard({
+      board,
+      workspaceArchived: workspace.status === 'archived',
+      previewVersion: previewVersion ?? null,
+    })
   }
 
   // Der Editor braucht die ganze Flaeche; die Verwaltungsansicht bleibt im Zustand der Anwendung erhalten.
@@ -189,10 +201,11 @@ function Shell({ me, onSignedOut }: { readonly me: MeResponse; readonly onSigned
         }
       >
         <BoardEditor
-          key={openBoard.board.id}
+          key={`${openBoard.board.id}:${String(openBoard.previewVersion ?? 0)}`}
           boardId={openBoard.board.id}
           csrfToken={me.csrfToken}
           workspaceArchived={openBoard.workspaceArchived}
+          previewVersion={openBoard.previewVersion}
           guestName={null}
           onClose={() => {
             setOpenBoard(null)

@@ -11,6 +11,7 @@ import type { BoardStore } from '../domain/board/repositories.js'
 import type { IdentityStore } from '../domain/identity/repositories.js'
 import type { AssetStoragePort } from '../domain/storage/asset-storage-port.js'
 import type { WorkspaceStore } from '../domain/workspace/repositories.js'
+import type { BoardRooms } from './board-rooms.js'
 import type { AppConfig } from './config.js'
 import type { Logger } from './log.js'
 import type { OidcClient } from './oidc.js'
@@ -26,6 +27,13 @@ export type AppContext = {
   readonly storage: AssetStoragePort
   readonly oidc: OidcClient
   readonly realtime: RealtimeGateway
+  /**
+   * Die offenen Boardraeume.
+   *
+   * Nur eine Route braucht sie: eine Wiederherstellung oder ein Import ersetzt den persistierten Stand, und
+   * ein Raum, der davon nichts erfaehrt, wuerde beim naechsten Checkpoint den alten Stand zurueckschreiben.
+   */
+  readonly rooms: BoardRooms
   readonly logger: Logger
   /** Injizierbare Uhr: Tests pruefen Ablauf und Widerruf ohne Wartezeit. */
   readonly now: () => Date

@@ -46,6 +46,7 @@ const rooms = createBoardRooms({
   logger: consoleLogger,
   now: () => new Date(),
   maxRoomBytes: config.maxSceneBytes,
+  sceneVersionRetention: config.sceneVersionRetention,
 })
 const realtime = createRealtimeGateway({
   config,
@@ -65,6 +66,7 @@ const context: AppContext = {
   storage,
   oidc: createOidcClient(config),
   realtime,
+  rooms,
   logger: consoleLogger,
   now: () => new Date(),
 }

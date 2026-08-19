@@ -38,6 +38,14 @@
  * waehrend der Sitzung (`access`), wechselt die Ansicht ohne Neuladen: die Zeichenflaeche geht in den
  * Lesemodus, die Speicheraktion verschwindet, und der Wechsel wird in einem `role="status"`-Bereich
  * benannt.
+ *
+ * ## Vorschau einer frueheren Version
+ *
+ * Mit `previewVersion` zeigt dieselbe Ansicht genau eine aufbewahrte Version. Sie ist **sicher read-only,
+ * nicht bloss schreibgeschuetzt**: sie laedt ueber einen eigenen, nur lesenden Endpunkt, tritt keinem
+ * Boardraum bei, kennt keine Ausgangsversion fuer eine Speicherung und bietet die Speicheraktion gar nicht
+ * erst an. Es gibt damit keinen Weg, aus einer Vorschau versehentlich einen Schreibvorgang zu machen; wer
+ * den Stand uebernehmen will, stellt ihn in der Versionsliste ausdruecklich wieder her.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -51,7 +59,14 @@ import type { BinaryFileRef, SceneSnapshot } from '../../contracts/scene.js'
 import { SCENE_SCHEMA_VERSION } from '../../contracts/scene.js'
 import type { EffectiveBoardRole } from '../../domain/board/policy.js'
 import { mayChangeBoard } from '../../domain/board/policy.js'
-import { ApiError, fetchBoardAssetDataUrl, fetchBoardScene, saveBoardScene, uploadBoardAsset } from '../api.js'
+import {
+  ApiError,
+  fetchBoardAssetDataUrl,
+  fetchBoardScene,
+  fetchBoardVersionScene,
+  saveBoardScene,
+  uploadBoardAsset,
+} from '../api.js'
 import type { BoardEditorPort, EditorPeer } from './board-editor-port.js'
 import { BoardCanvas } from './excalidraw-adapter.js'
 import { connectBoardRealtime } from './realtime-client.js'
@@ -68,6 +83,8 @@ const AUTOSAVE_DELAY_MS = 1_500
 type Loaded = {
   readonly title: string
   readonly status: BoardStatusView
+  /** `null` heisst: der aktuelle Stand. Sonst die Nummer der gezeigten Version. */
+  readonly previewOf: number | null
   /** Effektive Rolle des Anfragenden, wie der Server sie nennt. Sie wird hier nicht ausgerechnet. */
   readonly role: EffectiveBoardRole
   readonly version: number
@@ -135,7 +152,12 @@ function readOnlyReason(input: {
   readonly canWrite: boolean | null
   /** Wahr, wenn die Gastrolle selbst das Leserecht ist - dann ist sie der genauere Grund. */
   readonly guestViewer: boolean
+  /** Nummer der gezeigten Version, wenn dies eine Vorschau ist. Sie ist der genaueste Grund von allen. */
+  readonly previewOf: number | null
 }): string | null {
+  if (input.previewOf !== null) {
+    return `dies ist die Vorschau von Version ${String(input.previewOf)}`
+  }
   if (input.workspaceArchived) {
     return 'der Arbeitsbereich ist archiviert'
   }
@@ -171,6 +193,7 @@ export function BoardEditor({
   boardId,
   csrfToken,
   workspaceArchived,
+  previewVersion = null,
   guestName,
   onClose,
 }: {
@@ -178,6 +201,11 @@ export function BoardEditor({
   /** Token der eigenen Sitzung - der internen oder der des Gastes. */
   readonly csrfToken: string
   readonly workspaceArchived: boolean
+  /**
+   * Nummer einer aufbewahrten Version. Gesetzt heisst: Read-only-Vorschau genau dieser Version - kein
+   * Boardraum, keine Speicherung, keine Ausgangsversion. Fehlt sie, gilt der aktuelle Stand.
+   */
+  readonly previewVersion?: number | null
   /**
    * Selbst gewaehlter Anzeigename des Gastes; `null` fuer ein Mitglied. Rein beschreibend - ob jemand Gast
    * ist, steht in der Szenenantwort und nicht in dieser Angabe.
@@ -244,9 +272,21 @@ export function BoardEditor({
     blockedRef.current = false
     uploadsRef.current = 0
     lastSentChangeSequenceRef.current = 0
-    fetchBoardScene(boardId)
+    // Zwei Endpunkte, zwei Bedeutungen: der aktuelle Stand des Boards oder genau eine aufbewahrte Version.
+    // Die Vorschau kommt ueber einen nur lesenden Weg und traegt deshalb nie eine Ausgangsversion fuer eine
+    // Speicherung; `versionRef` bleibt auf `0` und wird von nichts gelesen, was schreiben koennte.
+    const laden =
+      previewVersion === null
+        ? fetchBoardScene(boardId)
+        : fetchBoardVersionScene(boardId, previewVersion).then((response) => ({
+            viewer: 'member' as const,
+            board: response.board,
+            version: response.version,
+            scene: response.scene,
+          }))
+    laden
       .then((response) => {
-        versionRef.current = response.version
+        versionRef.current = previewVersion === null ? response.version : 0
         filesRef.current = { ...response.scene.files }
         // Verzweigt auf `viewer`: die Gastantwort traegt eine eigene, reduzierte Boardsicht. Titel, Status
         // und die eigene Rolle stehen in beiden - mehr braucht der Editor nicht.
@@ -254,8 +294,8 @@ export function BoardEditor({
           response.viewer === 'guest'
             ? { kind: 'guest', role: response.board.viewerRole }
             : { kind: 'member', role: response.board.viewerRole }
-        // Der Modus steht damit sofort fest, ohne auf den Boardraum zu warten.
-        const erlaubt = mayChangeBoard(role)
+        // Der Modus steht damit sofort fest, ohne auf den Boardraum zu warten. Eine Vorschau schreibt nie.
+        const erlaubt = previewVersion === null && mayChangeBoard(role)
         setCanWrite(erlaubt)
         canWriteRef.current = erlaubt
         setState({
@@ -263,6 +303,7 @@ export function BoardEditor({
           loaded: {
             title: response.board.title,
             status: response.board.status,
+            previewOf: previewVersion,
             role,
             version: response.version,
             scene: response.scene,
@@ -283,14 +324,17 @@ export function BoardEditor({
           message: cause instanceof ApiError ? cause.message : 'Das Board konnte nicht geladen werden.',
         })
       })
-  }, [boardId])
+  }, [boardId, previewVersion])
 
   useEffect(load, [load])
 
   // Der Server entscheidet; die Oberflaeche folgt ihm. `canWrite` kommt aus dem Raum und beruht auf
   // derselben Policy wie die HTTP-API.
   const viewOnly =
-    workspaceArchived || canWrite === false || (state.kind === 'ready' && state.loaded.status === 'archived')
+    previewVersion !== null ||
+    workspaceArchived ||
+    canWrite === false ||
+    (state.kind === 'ready' && state.loaded.status === 'archived')
   /** Live heisst: der Raum nimmt Aenderungen an und persistiert sie. Dann speichert die Ansicht nicht selbst. */
   const live = connection === 'verbunden' && !viewOnly
   liveRef.current = live
@@ -444,7 +488,9 @@ export function BoardEditor({
    * ausschliesslich der Server - diese Ansicht stellt sie nur dar.
    */
   useEffect(() => {
-    if (adapter === null || state.kind !== 'ready') {
+    // Eine Vorschau tritt keinem Raum bei: sie zeigt einen Stand, der nicht der aktuelle ist, und wuerde
+    // sonst fremde Aenderungen darueberlegen und die eigene Anzeige zum aktuellen Stand verschieben.
+    if (adapter === null || state.kind !== 'ready' || previewVersion !== null) {
       return
     }
     let abandoned = false
@@ -575,7 +621,7 @@ export function BoardEditor({
       liveRef.current = false
       client.close()
     }
-  }, [adapter, boardId, state.kind])
+  }, [adapter, boardId, previewVersion, state.kind])
 
   if (state.kind === 'loading') {
     return (
@@ -629,6 +675,7 @@ export function BoardEditor({
     boardArchived: state.loaded.status === 'archived',
     canWrite,
     guestViewer: state.loaded.role.kind === 'guest' && state.loaded.role.role === 'guest-viewer',
+    previewOf: state.loaded.previewOf,
   })
 
   return (
@@ -646,7 +693,9 @@ export function BoardEditor({
             : saveMessage(save)}
         </p>
         <p className="board__state" role="status">
-          {connectionMessage(connection, attempt, resyncedAt)}
+          {state.loaded.previewOf === null
+            ? connectionMessage(connection, attempt, resyncedAt)
+            : 'Nicht live verbunden: eine Vorschau zeigt einen festen Stand und nimmt keine Aenderungen auf.'}
         </p>
         <p className="board__peers" role="status">
           {peers.length === 0

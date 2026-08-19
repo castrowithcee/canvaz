@@ -43,7 +43,7 @@
  * Ablehnungsgruende und Aufrufform in den Routen bleiben unveraendert.
  */
 
-import type { WorkspaceStatus } from '../workspace/model.js'
+import type { WorkspaceRole, WorkspaceStatus } from '../workspace/model.js'
 import type { DenialReason, PolicySubject } from '../workspace/policy.js'
 import { decideWorkspaceAccess } from '../workspace/policy.js'
 import type { GuestRole, GuestSessionId } from './guest.js'
@@ -111,6 +111,8 @@ export type BoardAction =
   | 'board:unarchive'
   /** Eine neue Szenenversion anlegen. */
   | 'scene:write'
+  /** Einen frueheren Stand als neuen aktuellen Stand wiederherstellen. */
+  | 'scene:restore'
   /** Freigaben anlegen, aendern und entziehen. */
   | 'grant:manage'
   /** Die Ownerschaft des Boards an ein anderes Mitglied uebergeben. */
@@ -170,6 +172,26 @@ export function mayChangeBoard(effective: EffectiveBoardRole): boolean {
  */
 export function mayManageBoard(effective: EffectiveBoardRole): boolean {
   return effective.kind === 'member' && effective.role === 'owner'
+}
+
+/**
+ * Traegt diese Rolle die Wiederherstellung eines frueheren Standes?
+ *
+ * Wer das Board verantwortet - **und zusaetzlich die Verwaltung des Arbeitsbereichs**. Eine
+ * Wiederherstellung setzt den Inhalt eines Boards auf einen frueheren Stand zurueck; das ist keine laufende
+ * Bearbeitung, sondern eine Korrektur, und sie gehoert denen, die fuer den Bestand einstehen. Ein `editor`
+ * darf sie deshalb nicht, obwohl er jede einzelne Zeichnung aendern koennte.
+ *
+ * Der Workspace-`admin` bekommt sie als einziger Fall zusaetzlich zur Boardstufe: er verwaltet den
+ * Arbeitsbereich, damit dessen Bestand nicht an einer einzelnen Person haengt - dieselbe Ueberlegung, aus
+ * der ein Workspace-Owner auf jedem Board Ownerstufe traegt. Freigaben, Gastlinks und Ownerschaft bleiben
+ * ihm weiterhin verwehrt; sie sind Verantwortung fuer das einzelne Board, nicht fuer seinen Bestand.
+ *
+ * Einem Gast ist sie in jedem Zustand verwehrt: `mayManageBoard` schliesst ihn aus, und eine
+ * Workspacerolle hat er nicht.
+ */
+export function mayRestoreBoard(effective: EffectiveBoardRole, workspaceRole: WorkspaceRole | null): boolean {
+  return mayManageBoard(effective) || (effective.kind === 'member' && workspaceRole === 'admin')
 }
 
 /**
@@ -263,6 +285,10 @@ export function decideBoardAccess(
 
   const level: EffectiveBoardRole = { kind: 'member', role: boardLevel(subject) }
   switch (action) {
+    case 'scene:restore':
+      // Eigene Frage, eigene Antwort: die Wiederherstellung ist eine Korrektur am Bestand und nicht die
+      // naechste Zeichnung. Sie traegt deshalb mehr als `scene:write` und weniger als `grant:manage`.
+      return mayRestoreBoard(level, subject.workspaceRole) ? ALLOWED : denied('insufficient-role')
     case 'grant:manage':
     case 'board:transfer-ownership':
       // Wer das Board verantwortet, entscheidet, wer daran arbeitet. Ein `editor` gibt sein Recht nicht

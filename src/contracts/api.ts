@@ -318,6 +318,104 @@ export type SceneConflictResponse = ErrorResponse & {
 }
 
 /* ---------------------------------------------------------------------------------------------------- */
+/* Versionsverlauf, Export und Import                                                                    */
+/* ---------------------------------------------------------------------------------------------------- */
+
+/** Versionshistorie eines Boards (GET). Verlangt eine interne Sitzung und `board:read`. */
+export const BOARD_VERSIONS_PATH = `${API_BASE_PATH}/boards/versions`
+/** Read-only-Vorschau genau einer Version (GET). */
+export const BOARD_VERSION_SCENE_PATH = `${API_BASE_PATH}/boards/versions/scene`
+/** Wiederherstellung als neue Version (POST). Verlangt `scene:restore`. */
+export const BOARD_VERSION_RESTORE_PATH = `${API_BASE_PATH}/boards/versions/restore`
+
+/** Export eines Boards als `.excalidraw`-Datei (GET). Verlangt `board:read`. */
+export const BOARD_EXPORT_PATH = `${API_BASE_PATH}/boards/export`
+/** Import einer `.excalidraw`-Datei als neuer Stand (POST). Verlangt `scene:write`. */
+export const BOARD_IMPORT_PATH = `${API_BASE_PATH}/boards/import`
+
+/** Nummer der gewuenschten Version als Query-Parameter der Vorschau. */
+export const BOARD_VERSION_PARAM = 'version'
+
+/**
+ * Kopfdaten einer gespeicherten Version.
+ *
+ * Bewusst ohne die Szene: die Liste zeigt Zeitpunkt, Urheber und Umfang. Wer den Inhalt sehen will, oeffnet
+ * die Vorschau genau einer Version.
+ */
+export type BoardSceneVersionView = {
+  readonly version: number
+  /** Anzeigename des Urhebers; `null` heisst: ein Gast oder ein nicht mehr vorhandenes Konto. */
+  readonly authorDisplayName: string | null
+  /** ISO-8601. */
+  readonly createdAt: string
+  /** Zahl der Elemente einschliesslich geloeschter - der Umfang, den diese Version traegt. */
+  readonly elementCount: number
+  readonly byteSize: number
+}
+
+export type BoardVersionsResponse = {
+  readonly board: BoardView
+  /** Absteigend, juengste zuerst. */
+  readonly versions: readonly BoardSceneVersionView[]
+  /** Wie viele Staende je Board aufbewahrt werden. Aeltere fallen bei der naechsten Speicherung heraus. */
+  readonly retention: number
+  /**
+   * Ob die eigene Rolle wiederherstellen darf - aus derselben Policy, die auch der Endpunkt befragt. Wie
+   * `viewerRole` ist das Bequemlichkeit und keine Grenze: abgelehnt wird weiterhin am Endpunkt.
+   */
+  readonly mayRestore: boolean
+}
+
+/** Eine einzelne Version zum Ansehen. Sie wird nie zum aktuellen Stand, solange niemand sie wiederherstellt. */
+export type BoardVersionSceneResponse = {
+  readonly board: BoardView
+  readonly version: number
+  readonly scene: SceneSnapshot
+}
+
+/**
+ * Wiederherstellung eines frueheren Standes.
+ *
+ * `baseVersion` ist der Stand, den der Anfragende gesehen hat. Weicht er vom aktuellen ab, hat inzwischen
+ * jemand anderes gespeichert - dann antwortet der Server mit **409**, statt einen unerkannt neueren Stand
+ * zu ueberschreiben. Erst ein zweiter Aufruf mit der genannten aktuellen Version ist die Bestaetigung.
+ */
+export type RestoreBoardVersionRequest = {
+  readonly boardId: string
+  readonly version: number
+  readonly baseVersion: number
+}
+
+export type RestoreBoardVersionResponse = {
+  /** Die **neue** Version. Eine Wiederherstellung loescht nichts, sondern legt einen neuen Stand an. */
+  readonly version: number
+  readonly restoredFrom: number
+  /** ISO-8601. */
+  readonly savedAt: string
+}
+
+/**
+ * Import einer `.excalidraw`-Datei als neuer Stand.
+ *
+ * `file` ist der unveraenderte Inhalt der Datei. Er wird vollstaendig geprueft, bevor irgendetwas davon
+ * gespeichert wird; `baseVersion` schuetzt wie bei der Speicherung vor dem Ueberschreiben eines neueren
+ * Standes.
+ */
+export type ImportBoardSceneRequest = {
+  readonly boardId: string
+  readonly baseVersion: number
+  readonly file: unknown
+}
+
+export type ImportBoardSceneResponse = {
+  readonly version: number
+  /** ISO-8601. */
+  readonly savedAt: string
+  readonly importedElements: number
+  readonly importedFiles: number
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
 /* Interne Boardfreigaben                                                                                */
 /* ---------------------------------------------------------------------------------------------------- */
 

@@ -54,6 +54,7 @@ const ALLE_AKTIONEN: readonly BoardAction[] = [
   'board:archive',
   'board:unarchive',
   'scene:write',
+  'scene:restore',
   'grant:manage',
   'board:transfer-ownership',
 ]
@@ -104,14 +105,26 @@ const ERLAUBT: Readonly<Record<BoardRole, readonly BoardAction[]>> = {
   viewer: ['board:read'],
 }
 
+/**
+ * `scene:restore` ist die einzige Aktion, die **nicht** allein aus der Boardstufe folgt: sie traegt
+ * zusaetzlich der Workspace-`admin`, weil er fuer den Bestand des Arbeitsbereichs einsteht. Deshalb steht
+ * sie hier als eigene, von Hand gesetzte Regel und nicht in `ERLAUBT`.
+ */
+function darfWiederherstellen(stufe: BoardRole, role: WorkspaceRole | null): boolean {
+  return stufe === 'owner' || role === 'admin'
+}
+
 function erwartung(
   stufe: BoardRole | 'kein-zugriff',
   action: BoardAction,
+  role: WorkspaceRole | null = null,
 ): { allowed: true } | { allowed: false; reason: BoardDenialReason } {
   if (stufe === 'kein-zugriff') {
     return { allowed: false, reason: 'not-visible' }
   }
-  return ERLAUBT[stufe].includes(action) ? { allowed: true } : { allowed: false, reason: 'insufficient-role' }
+  const erlaubt =
+    action === 'scene:restore' ? darfWiederherstellen(stufe, role) : ERLAUBT[stufe].includes(action)
+  return erlaubt ? { allowed: true } : { allowed: false, reason: 'insufficient-role' }
 }
 
 describe('Boardberechtigung, vollstaendige Rollenmatrix', () => {
@@ -124,7 +137,7 @@ describe('Boardberechtigung, vollstaendige Rollenmatrix', () => {
           expect(
             decideBoardAccess(subject({ role, boardRole }), AKTIV, BOARD, action),
             `${schluessel(role, boardRole)} -> ${action}`,
-          ).toEqual(erwartung(stufe as BoardRole | 'kein-zugriff', action))
+          ).toEqual(erwartung(stufe as BoardRole | 'kein-zugriff', action, role))
         }
       }
     }
@@ -146,7 +159,7 @@ describe('Boardberechtigung, vollstaendige Rollenmatrix', () => {
         }
         // Entarchivieren bleibt moeglich - fuer jeden, der das Board auch sonst aendern duerfte.
         expect(decideBoardAccess(subject({ role, boardRole }), AKTIV, BOARD_ARCHIVIERT, 'board:unarchive')).toEqual(
-          erwartung(stufe, 'board:unarchive'),
+          erwartung(stufe, 'board:unarchive', role),
         )
       }
     }

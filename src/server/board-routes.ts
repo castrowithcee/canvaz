@@ -68,7 +68,6 @@ import {
 import type { BoardId, BoardStatus } from '../domain/board/model.js'
 import {
   MAX_BOARD_TITLE_LENGTH,
-  SCENE_VERSION_RETENTION,
   normalizeBoardTitle,
   parseBaseVersion,
   parseBoardGrantRole,
@@ -515,7 +514,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
             return ok(409, conflict)
           }
           await tx.boards.setSceneVersion(boardId, version)
-          await tx.scenes.prune(boardId, SCENE_VERSION_RETENTION)
+          await tx.scenes.prune(boardId, context.config.sceneVersionRetention)
           const body: SaveSceneResponse = { version, savedAt: saved.createdAt.toISOString() }
           return ok(200, body)
         })

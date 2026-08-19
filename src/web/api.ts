@@ -14,6 +14,10 @@ import type {
   BoardGrantsResponse,
   BoardShareLinkView,
   BoardShareLinksResponse,
+  BoardVersionSceneResponse,
+  BoardVersionsResponse,
+  ImportBoardSceneResponse,
+  RestoreBoardVersionResponse,
   BoardStatusView,
   BoardView,
   BoardsResponse,
@@ -43,6 +47,7 @@ import {
   ASSET_FILE_ID_PARAM,
   AUTH_LOGOUT_PATH,
   BOARD_ASSETS_PATH,
+  BOARD_EXPORT_PATH,
   BOARD_GRANT_ADD_PATH,
   BOARD_GRANT_REMOVE_PATH,
   BOARD_GRANT_ROLE_PATH,
@@ -50,6 +55,7 @@ import {
   BOARD_GUEST_JOIN_PATH,
   BOARD_GUEST_SESSION_PATH,
   BOARD_ID_PARAM,
+  BOARD_IMPORT_PATH,
   BOARD_OWNER_PATH,
   BOARD_QUERY_PARAM,
   BOARD_RENAME_PATH,
@@ -59,6 +65,10 @@ import {
   BOARD_SHARE_LINKS_PATH,
   BOARD_STATUS_PARAM,
   BOARD_STATUS_PATH,
+  BOARD_VERSION_PARAM,
+  BOARD_VERSION_RESTORE_PATH,
+  BOARD_VERSION_SCENE_PATH,
+  BOARD_VERSIONS_PATH,
   BOARDS_PATH,
   CSRF_HEADER,
   ME_PATH,
@@ -241,6 +251,56 @@ export async function saveBoardScene(
   payload: { readonly boardId: string; readonly baseVersion: number; readonly scene: SceneSnapshot },
 ): Promise<SaveSceneResponse> {
   return request<SaveSceneResponse>(BOARD_SCENE_PATH, mutation(csrfToken, payload))
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+/* Versionsverlauf, Export und Import                                                                    */
+/* ---------------------------------------------------------------------------------------------------- */
+
+/** Versionshistorie eines Boards. Die Antwort nennt auch, ob die eigene Rolle wiederherstellen darf. */
+export async function fetchBoardVersions(boardId: string): Promise<BoardVersionsResponse> {
+  const params = new URLSearchParams({ [BOARD_ID_PARAM]: boardId })
+  return request<BoardVersionsResponse>(`${BOARD_VERSIONS_PATH}?${params.toString()}`)
+}
+
+/** Genau eine Version zum Ansehen. Sie wird dadurch nicht zum aktuellen Stand. */
+export async function fetchBoardVersionScene(
+  boardId: string,
+  version: number,
+): Promise<BoardVersionSceneResponse> {
+  const params = new URLSearchParams({
+    [BOARD_ID_PARAM]: boardId,
+    [BOARD_VERSION_PARAM]: String(version),
+  })
+  return request<BoardVersionSceneResponse>(`${BOARD_VERSION_SCENE_PATH}?${params.toString()}`)
+}
+
+/**
+ * Stellt eine fruehere Version als neuen aktuellen Stand her.
+ *
+ * `baseVersion` ist der Stand, den die Ansicht gerade zeigt. Ein 409 heisst: inzwischen hat jemand anderes
+ * gespeichert - dann wurde **nichts** geschrieben, und die Bestaetigung ist ein zweiter Aufruf mit der vom
+ * Server genannten Version.
+ */
+export async function restoreBoardVersion(
+  csrfToken: string,
+  change: { readonly boardId: string; readonly version: number; readonly baseVersion: number },
+): Promise<RestoreBoardVersionResponse> {
+  return request<RestoreBoardVersionResponse>(BOARD_VERSION_RESTORE_PATH, mutation(csrfToken, change))
+}
+
+/** Der Inhalt der `.excalidraw`-Datei dieses Boards, Bilder eingebettet. */
+export async function fetchBoardExport(boardId: string): Promise<unknown> {
+  const params = new URLSearchParams({ [BOARD_ID_PARAM]: boardId })
+  return request<unknown>(`${BOARD_EXPORT_PATH}?${params.toString()}`)
+}
+
+/** Uebernimmt eine `.excalidraw`-Datei als neuen Stand. Derselbe Konfliktschutz wie bei einer Speicherung. */
+export async function importBoardScene(
+  csrfToken: string,
+  change: { readonly boardId: string; readonly baseVersion: number; readonly file: unknown },
+): Promise<ImportBoardSceneResponse> {
+  return request<ImportBoardSceneResponse>(BOARD_IMPORT_PATH, mutation(csrfToken, change))
 }
 
 /* ---------------------------------------------------------------------------------------------------- */

@@ -222,7 +222,8 @@ Boardrolle faellt weg, und es gilt wieder die Mitgliedschaft.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Board sehen, oeffnen, Szene laden | ja | ja | ja | ja | ja | ja | nein | nein | nein |
 | umbenennen, archivieren, entarchivieren | ja | ja | ja | nein | nein | nein | nein | nein | nein |
-| Szene speichern, Bild hochladen | ja | ja | ja | nein | ja | nein | nein | nein | nein |
+| Szene speichern, Bild hochladen, importieren | ja | ja | ja | nein | ja | nein | nein | nein | nein |
+| Version wiederherstellen | ja | ja | nein | nein | nein | nein | nein | nein | nein |
 | Freigaben und Gastlinks verwalten | ja | ja | nein | nein | nein | nein | nein | nein | nein |
 | Ownerschaft uebertragen | ja | ja | nein | nein | nein | nein | nein | nein | nein |
 
@@ -391,6 +392,11 @@ Die Antwort entsteht in der Transaktion und wird erst nach dem Commit gesendet.
 | GET | `/api/boards/share-links?boardId=` | `grant:manage` | 404 unsichtbar, sonst 403 | — |
 | POST | `/api/boards/share-links/create` | `grant:manage` | 404 unsichtbar, sonst 403 | — |
 | POST | `/api/boards/share-links/revoke` | `grant:manage` | 404 unsichtbar, sonst 403 | — |
+| GET | `/api/boards/versions?boardId=` | `board:read` | 404 | — |
+| GET | `/api/boards/versions/scene?boardId=&version=` | `board:read` | 404 | — |
+| POST | `/api/boards/versions/restore` | `scene:restore` | 404 unsichtbar, sonst 403 | 409 |
+| GET | `/api/boards/export?boardId=` | `board:read` | 404 | — |
+| POST | `/api/boards/import` | `scene:write` | 404 unsichtbar, sonst 403 | 409 |
 | POST | `/api/boards/guest/join` | oeffentlich, gueltiges Token | 404 | — |
 | GET | `/api/boards/guest/session` | gueltige Gastsession | 401 | — |
 
@@ -434,9 +440,11 @@ der Mensch entscheidet.
 
 **Jede angenommene Speicherung legt eine neue Zeile in `scene_versions` an.** Das ist keine Zutat, sondern die
 Pruefung selbst: der Primaerschluessel `(board_id, version)` macht zwei Schreibvorgaenge auf derselben
-Ausgangsversion unmoeglich. Verdichtet wird bewusst nicht, damit die Daten fuer die spaetere Versionshistorie
+Ausgangsversion unmoeglich. Verdichtet wird bewusst nicht, damit die Daten fuer die Versionshistorie
 sauber entstehen. Damit die Historie nicht unbegrenzt waechst, bleiben die juengsten **100** Versionen je
-Board erhalten (`SCENE_VERSION_RETENTION`); aeltere fallen bei der naechsten Speicherung heraus.
+Board erhalten (`CANVAZ_SCENE_VERSION_RETENTION`, erlaubt 10 bis 1000); aeltere fallen bei der naechsten
+Speicherung heraus. Die begruendete Zusage ist die Begrenztheit, nicht die Zahl - eine unbegrenzte Historie
+gibt es nicht.
 
 Serialisiert wird der Vertrag aus `src/contracts/scene.ts`: Elemente, die persistierte Teilmenge des AppState
 und die Referenzen auf Bilddateien. Unbekannte Zusatzfelder werden **nur in `elements`** unveraendert
@@ -449,7 +457,8 @@ Ein **beschaedigter Datensatz wird als Fehler gemeldet und nie als leeres Board 
 naechste Speicherung die Zeichnung endgueltig ueberschreiben. Ein Board ohne jede Speicherung hat Version `0`
 und liefert den leeren Ausgangsstand; das ist sein tatsaechlicher Inhalt und kein Ersatz fuer einen Fehler.
 
-Die Groesse eines Snapshots ist mit `CANVAZ_MAX_SCENE_BYTES` begrenzt (Standard 5 MiB). Die Grenze gilt schon
+Die Groesse eines Snapshots ist mit `CANVAZ_MAX_SCENE_BYTES` begrenzt (Standard 5 MiB); sie gilt auch fuer
+einen wiederhergestellten oder importierten Stand. Die Grenze gilt schon
 fuer den Anfragekoerper, sodass ein zu grosser Koerper nie vollstaendig im Speicher landet. **Angenommen wird nur, was sich auch zuruecklesen laesst.** PostgreSQL
 kann in `jsonb` weder ein NUL-Zeichen noch ein einsames Surrogat speichern, und eine nicht endliche Zahl
 (`1e400` ist gueltiges JSON und wird beim Parsen zu `Infinity`) wuerde beim Serialisieren still zu `null`.
@@ -458,6 +467,89 @@ geprueft wird rekursiv, einschliesslich der durchgereichten Zusatzfelder von Ele
 ist die Verschachtelungstiefe auf 256 Ebenen begrenzt (`MAX_SCENE_DEPTH`): tiefer bricht `JSON.stringify`
 selbst mit einem `RangeError` ab, und daraus wuerde ein unbenannter Serverfehler statt einer benannten
 Ablehnung. Echte Szenen sind flach; die Grenze liegt weit ueber allem, was der Editor erzeugt.
+
+### Versionsverlauf, Vorschau und Wiederherstellung
+
+Jede angenommene Speicherung und jeder Realtime-Checkpoint legt eine Zeile in `scene_versions` an - die
+Historie entsteht nicht zusaetzlich, sondern ist die Versionspruefung selbst. Wer ein Board sehen darf, sieht
+seine aufbewahrten Staende mit Zeitpunkt, Urheber und Umfang; **Umfang und Groesse stehen als eigene Spalten
+neben dem Snapshot** (`element_count`, `byte_size`), damit die Liste nicht so viele vollstaendige Szenen
+lesen muss, wie sie Zeilen zeigt.
+
+**Die Vorschau ist read-only, weil sie nichts anderes kann.** Sie laeuft ueber einen eigenen, nur lesenden
+Endpunkt, tritt keinem Boardraum bei und kennt keine Ausgangsversion fuer eine Speicherung. Es gibt damit
+keinen Weg, aus einer Vorschau versehentlich einen Schreibvorgang zu machen - wer den Stand uebernehmen
+will, stellt ihn ausdruecklich wieder her.
+
+**Eine Wiederherstellung loescht nichts.** Sie schreibt eine **neue** Version mit dem Inhalt der alten; der
+bisherige Stand bleibt als eigene Version daneben stehen, und der Weg zurueck ist derselbe Weg noch einmal.
+Wiederherstellen darf der Board-Owner, der Workspace-Owner und - als einziger Fall, der nicht aus der
+Boardstufe folgt - der Workspace-`admin`: er verwaltet den Arbeitsbereich, damit dessen Bestand nicht an
+einer einzelnen Person haengt. Ein `editor` darf es nicht, obwohl er jede einzelne Zeichnung aendern
+koennte; Freigaben, Gastlinks und Ownerschaft bleiben dem `admin` umgekehrt weiterhin verwehrt. Entschieden
+wird das in `decideBoardAccess` ueber die eigene Aktion `scene:restore` - es gibt keine zweite
+Entscheidungsstelle.
+
+#### Kein unerkannt neuerer Stand
+
+Eine Wiederherstellung nennt in `baseVersion` den Stand, den der Anfragende gesehen hat - genau wie jede
+Speicherung. Weicht er ab, antwortet der Server mit **409** und der aktuellen Version, und es wird
+**nichts** geschrieben; die Oberflaeche laedt die Liste neu und benennt genau das. Erst der naechste,
+bewusste Klick auf dem frisch geladenen Stand ist die Bestaetigung. Fuer den Import gilt dieselbe Pruefung.
+
+#### Warum die Elementversionen dabei steigen
+
+Der gesamte Abgleich entscheidet je Element ueber `version` und nicht ueber den Zeitpunkt. Wuerde eine
+Wiederherstellung die alten Elemente unveraendert zurueckschreiben, traegt jeder verbundene Browser die
+neueren Fassungen weiterhin mit hoeherer `version` - und der naechste Abgleich machte die Wiederherstellung
+still rueckgaengig. `supersedeSnapshot` (`src/domain/board/versioning.ts`) hebt deshalb jedes
+wiederhergestellte Element ueber die Version, die es im aktuellen Stand hatte, und beerdigt als Tombstone,
+was nur der aktuelle Stand kennt. Das ist **kein** Element-Diff: es wird nichts verglichen und nichts
+zusammengefuehrt, sondern genau die Aussage festgeschrieben, dass dieser Stand jenen ersetzt.
+
+Der Boardraum wird danach **ersetzt statt zusammengefuehrt** (`BoardRooms.restored`) und schickt jedem
+Teilnehmer einen vollstaendigen `snapshot`. Ohne offenen Raum passiert nichts - der naechste Beitritt laedt
+den neuen Stand ohnehin aus der Datenbank.
+
+### Export und Import
+
+Exportiert und importiert wird das offene `.excalidraw`-Format - dieselbe Datei, die der Editor selbst
+schreibt und liest. Die Bilder stehen darin als eingebettete `data:`-URL, sodass ein Board **eine einzige
+Datei** bleibt; ein eigenes Archivformat waere ein Einschluss und braeuchte einen eigenen Packer. Das
+Excalidraw-Paket ist dafuer nicht noetig: `src/domain/board/excalidraw-file.ts` beschreibt ein
+dokumentiertes JSON-Dateiformat und importiert nichts aus dem Editor.
+
+Exportieren darf, wer das Board lesen darf; importieren, wer seine Szene speichern darf. Ein Import ersetzt
+den Inhalt und legt dafuer eine neue Version an - der bisherige Stand bleibt in der Historie.
+
+**Eine Importdatei ist nicht vertrauenswuerdig** und wird vollstaendig geprueft, bevor irgendetwas davon
+gespeichert wird:
+
+| Fall | Antwort |
+| --- | --- |
+| kein `.excalidraw`, unbekannte Formatversion, ungueltige Elemente oder Ansichtsangaben | 400 |
+| Verweis auf ein Bild **ausserhalb** der Datei (`http(s)://` statt `data:`) | 400, nichts wird nachgeladen |
+| Elementverweis mit ausfuehrbarem Inhalt (`javascript:`, auch mit eingestreuten Steuerzeichen) | 400 |
+| mehr als 100 eingebettete Bilder | 400 |
+| eingebettetes Bild ohne erlaubtes Bildformat oder mit falsch behauptetem Typ | 415 |
+| einzelnes Bild ueber `CANVAZ_MAX_ASSET_BYTES`, Datei ueber `CANVAZ_MAX_IMPORT_BYTES` | 413 |
+| Dateikennung, zu der im Board bereits ein **anderer** Inhalt liegt | 409 |
+| Board inzwischen gespeichert (`baseVersion` ueberholt) | 409 |
+
+Die Bilder laufen durch **dieselbe** Signaturpruefung wie ein Upload: die Magic Bytes muessen ein erlaubtes
+Format ergeben und zum in der Data-URL genannten Typ passen. Der Speicherschluessel entsteht wie immer
+inhaltsadressiert aus Boardkennung, Dateikennung und Pruefsumme, und die Dateikennung muss dieselbe gepruefte
+Form haben wie beim Upload. Die Groesse eines Imports ist mit `CANVAZ_MAX_IMPORT_BYTES` begrenzt (Standard
+20 MiB) - deutlich mehr als ein Snapshot, weil Base64 die Bytes um rund ein Drittel aufblaeht.
+
+**In der Oberflaeche** steht das alles als Abschnitt im Fluss der Boardliste, direkt neben den Freigaben und
+aus derselben Boardzeile erreichbar - dieselbe Entscheidung wie ueberall in dieser SPA: kein Dialog, kein
+Fokuskaefig, jede Ueberschrift bleibt in der Dokumentstruktur. Der Abschnitt zeigt den aktuellen Stand und
+die Aufbewahrungsgrenze, dann Export, dann Import mit dem Hinweis, dass er den Inhalt ersetzt und der
+bisherige Stand erhalten bleibt, und zuletzt den Verlauf mit *Ansehen* und *Wiederherstellen* je Zeile. Die
+Vorschau oeffnet denselben Editor auf der ganzen Flaeche und benennt im Kopf, dass sie eine Vorschau ist.
+Angeboten wird, was der Server ohnehin traegt (`mayRestore` der Antwort, `mayChangeBoard` fuer den Import) -
+Bequemlichkeit und keine Grenze.
 
 ### Editor und Content-Security-Policy
 
@@ -695,6 +787,11 @@ Fuer Gastfreigaben gibt es drei Ereignisse mit `targetType: 'board-share-link'` 
 Rolle und Ablauf) sowie `board-guest.joined`. Dieses eine Ereignis hat **keinen** internen Akteur - ein Gast
 ist kein Nutzer -, und `details` nennt Board, Rolle, Gastsession und den gewaehlten Anzeigenamen. **Kein
 Token steht in einem dieser Ereignisse**, weder das des Links noch das der Gastsession.
+
+Wiederherstellung und Import schreiben `board.scene-restored` und `board.scene-imported`
+(`targetType: 'board'`): das erste nennt die wiederhergestellte, die neue und die bisherige Version, das
+zweite die neue Version sowie die Zahl uebernommener Elemente und Bilder. **Kein Boardinhalt steht darin** -
+nur Zahlen und Bezuege.
 
 Einzelne Speicherungen schreiben keinen Nachweis: sie sind Inhalt, nicht Verwaltung, und `audit_events`
 enthaelt nie Boardinhalte und nie Tokenmaterial. Die Historie der Inhalte steht in `scene_versions`.
