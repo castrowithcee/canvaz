@@ -13,6 +13,8 @@ import { useCallback, useEffect, useState } from 'react'
 
 import type { BoardStatusView, BoardView, MeResponse, WorkspaceView } from '../contracts/api.js'
 import { MAX_BOARD_TITLE_LENGTH } from '../domain/board/model.js'
+import type { EffectiveBoardRole } from '../domain/board/policy.js'
+import { mayChangeBoard, mayManageBoard } from '../domain/board/policy.js'
 import { ApiError, createBoard, fetchBoards, renameBoard, setBoardStatus } from './api.js'
 import { BoardShare } from './board-share.js'
 
@@ -28,6 +30,17 @@ function messageOf(cause: unknown, fallback: string): string {
     return `Dafuer fehlt dir die Berechtigung. ${cause.message}`
   }
   return cause.message
+}
+
+/**
+ * Die Rolle, die der Server fuer dieses Board nennt - in der Form, in der die Policy sie liest.
+ *
+ * Die Boardliste ist immer die Antwort an ein Mitglied; ein Gast hat keine Liste. Was mit dieser Rolle
+ * moeglich ist, entscheiden `mayChangeBoard` und `mayManageBoard` - dieselben Funktionen, mit denen der
+ * Server entscheidet. Diese Datei leitet daraus nichts eigenes ab.
+ */
+function viewerRoleOf(board: BoardView): EffectiveBoardRole {
+  return { kind: 'member', role: board.viewerRole }
 }
 
 function Notice({ text }: { readonly text: string }) {
@@ -51,7 +64,7 @@ function BoardRow({
   readonly me: MeResponse
   readonly board: BoardView
   readonly editable: boolean
-  /** Wahr, wenn der Server dieses Board als eigenes ausweist - Bequemlichkeit, keine Grenze. */
+  /** Wahr, wenn die vom Server genannte Rolle die Freigabeverwaltung traegt - Bequemlichkeit, keine Grenze. */
   readonly manageable: boolean
   readonly onOpen: (board: BoardView) => void
   readonly onShare: (board: BoardView) => void
@@ -212,7 +225,8 @@ export function Boards({
   useEffect(load, [load])
 
   const archived = status === 'archived'
-  const editable = workspace.status === 'active'
+  /** Ein archivierter Arbeitsbereich ist vollstaendig unveraenderlich - unabhaengig von jeder Boardrolle. */
+  const workspaceActive = workspace.status === 'active'
 
   return (
     <section aria-labelledby="boards-heading">
@@ -305,11 +319,10 @@ export function Boards({
                 key={board.id}
                 me={me}
                 board={board}
-                editable={editable}
-                // Der Server entscheidet ueber jede Freigabeaktion. Angeboten wird der Abschnitt dort, wo
-                // seine Antwort das Board bereits als eigenes ausweist: eigener Owner oder Owner des
-                // Arbeitsbereichs.
-                manageable={board.ownerUserId === me.user.id || workspace.role === 'owner'}
+                // Angeboten wird, was die vom Server genannte Rolle traegt. Entschieden wird trotzdem am
+                // Endpunkt: die Anzeige ist Bequemlichkeit und keine Grenze.
+                editable={workspaceActive && mayChangeBoard(viewerRoleOf(board))}
+                manageable={mayManageBoard(viewerRoleOf(board))}
                 onOpen={onOpenBoard}
                 onShare={(entry) => {
                   setShareBoardId(entry.id)
@@ -334,7 +347,9 @@ export function Boards({
         />
       )}
 
-      {editable && !archived && (
+      {/* Ein Board anlegen darf jedes Mitglied eines aktiven Arbeitsbereichs; dafuer gibt es noch keine
+          Boardrolle, ueber die zu entscheiden waere. */}
+      {workspaceActive && !archived && (
         <form
           className="stack"
           onSubmit={(event) => {

@@ -51,8 +51,7 @@ import {
   parseShareLinkHours,
   shareLinkExpiry,
 } from '../domain/board/guest.js'
-import type { Board } from '../domain/board/model.js'
-import type { BoardShareLinkEntry } from '../domain/board/repositories.js'
+import type { BoardAccess, BoardShareLinkEntry } from '../domain/board/repositories.js'
 import { NOT_FOUND, createBoardGate } from './board-access.js'
 import { toBoardView, toGuestBoardView } from './board-views.js'
 import type { AppContext } from './context.js'
@@ -87,10 +86,15 @@ function toCreatedView(link: BoardShareLink, createdByDisplayName: string): Boar
   return toShareLinkView({ ...link, createdByDisplayName, guestCount: 0 })
 }
 
-function toGuestSessionResponse(board: Board, guest: AuthenticatedGuest, csrfToken: string): GuestSessionResponse {
+function toGuestSessionResponse(
+  access: BoardAccess,
+  guest: AuthenticatedGuest,
+  csrfToken: string,
+): GuestSessionResponse {
   return {
-    // Dieselbe reduzierte Sicht wie in der Szenenantwort - sie entsteht an genau einer Stelle.
-    board: toGuestBoardView(board),
+    // Dieselbe reduzierte Sicht wie in der Szenenantwort - sie entsteht an genau einer Stelle, und ihre
+    // Rolle kommt wie dort aus der Policy.
+    board: toGuestBoardView({ kind: 'guest', guest }, access),
     role: guest.role,
     displayName: guest.session.displayName,
     csrfToken,
@@ -147,7 +151,7 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
         const links = await store.shareLinks.listForBoard(boardId)
         // Diese Liste erreicht ausschliesslich der Board-Owner; sie traegt deshalb die volle Boardsicht.
         const body: BoardShareLinksResponse = {
-          board: toBoardView(access.board, access.ownerDisplayName),
+          board: toBoardView(asRequester(auth), access),
           links: links.map(toShareLinkView),
         }
         send(response, ok(200, body))
@@ -350,7 +354,9 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
               displayName: session.displayName,
             },
           })
-          return { secret, board: board.board, guest: { session, role: link.role } }
+          // Der ganze Zugriff, nicht nur der Datensatz: die Antwort nennt die Rolle des Gastes, und sie
+          // kommt aus derselben Policy wie jede Entscheidung ueber ihn.
+          return { secret, access: board, guest: { session, role: link.role } }
         })
         if (result === null) {
           context.logger('warn', 'board.guest.join.denied', { reason: 'link-ungueltig' })
@@ -358,7 +364,7 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
           return
         }
         context.logger('info', 'board.guest.joined', {
-          boardId: result.board.id,
+          boardId: result.access.board.id,
           shareLinkId: result.guest.session.shareLinkId,
           guestSessionId: result.guest.session.id,
         })
@@ -367,7 +373,7 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
           response,
           201,
           toGuestSessionResponse(
-            result.board,
+            result.access,
             result.guest,
             guestCsrfTokenFor(result.guest.session.id, config.sessionSecret),
           ),
@@ -402,7 +408,7 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
         sendJson(
           response,
           200,
-          toGuestSessionResponse(access.board, guest, guestCsrfTokenFor(guest.session.id, config.sessionSecret)),
+          toGuestSessionResponse(access, guest, guestCsrfTokenFor(guest.session.id, config.sessionSecret)),
         )
       },
     },

@@ -30,6 +30,7 @@ import type {
   BoardGrantChangeResponse,
   BoardGrantView,
   BoardGrantsResponse,
+  BoardView,
   BoardsResponse,
   SceneResponse,
   SaveSceneResponse,
@@ -64,7 +65,7 @@ import {
   parseSceneSnapshot,
   serializeSceneSnapshot,
 } from '../contracts/scene.js'
-import type { BoardStatus } from '../domain/board/model.js'
+import type { BoardId, BoardStatus } from '../domain/board/model.js'
 import {
   MAX_BOARD_TITLE_LENGTH,
   SCENE_VERSION_RETENTION,
@@ -89,7 +90,8 @@ import type { Route } from './http.js'
 import { readBinaryBodyLimited, sendBytes, sendError } from './http.js'
 import type { Reply } from './reply.js'
 import { fail, guardBoardMutation, guardMutation, isReply, ok, readUuid, send } from './reply.js'
-import { asRequester, userOf } from './requester.js'
+import type { Requester } from './requester.js'
+import { asRequester, userOf, viewerOf } from './requester.js'
 
 /** Laenger als jeder zulaessige Titel; alles darueber kann kein sinnvoller Filter sein. */
 const MAX_FILTER_LENGTH = MAX_BOARD_TITLE_LENGTH
@@ -229,6 +231,21 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
     })
   }
 
+  /**
+   * Boardsicht nach einer Aenderung, die die eigene Rolle beruehren kann.
+   *
+   * Der Datensatz wird dafuer noch einmal ueber **denselben** Weg geladen wie ueberall sonst; die Zeile ist
+   * in dieser Transaktion ohnehin gesperrt. Die Alternative waere, die neuen Rollen in der Route aus den
+   * alten herzuleiten - und genau diese zweite Fassung soll es nicht geben.
+   */
+  async function reloadedBoardView(tx: BoardStore, requester: Requester, boardId: BoardId): Promise<BoardView> {
+    const access = await tx.boards.findForUpdate(boardId, viewerOf(requester), context.now())
+    if (access === null) {
+      throw new Error('Board nach der Aenderung nicht mehr auffindbar')
+    }
+    return toBoardView(requester, access)
+  }
+
   return [
     {
       method: 'GET',
@@ -257,10 +274,22 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
         }
         const status: BoardStatus = parseBoardStatus(url.searchParams.get(BOARD_STATUS_PARAM)) ?? 'active'
         const title = (url.searchParams.get(BOARD_QUERY_PARAM) ?? '').trim().slice(0, MAX_FILTER_LENGTH)
-        const found = await store.boards.listForWorkspace(workspaceId, { status, title })
+        const found = await store.boards.listForWorkspace(workspaceId, auth.user.id, { status, title })
+        const requester = asRequester(auth)
         const body: BoardsResponse = {
           workspace: toWorkspaceView(access.workspace, access.role),
-          boards: found.map((entry) => toBoardView(entry.board, entry.ownerDisplayName)),
+          // Jede Zeile traegt die Rollen desselben Ladevorgangs: die Mitgliedschaft aus dem Arbeitsbereich
+          // und die eigene Boardrolle aus der Freigabezeile dieses Boards.
+          boards: found.map((entry) =>
+            toBoardView(requester, {
+              board: entry.board,
+              workspace: access.workspace,
+              role: access.role,
+              boardRole: entry.boardRole,
+              guestRole: null,
+              ownerDisplayName: entry.ownerDisplayName,
+            }),
+          ),
         }
         send(response, ok(200, body))
       },
@@ -305,7 +334,9 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
             workspaceId,
             details: { title: board.title },
           })
-          return ok(201, toBoardView(board, guarded.auth.user.displayName))
+          // Frisch geladen statt aus der Anlage zusammengesetzt: die Rolle des Erstellers auf seinem neuen
+          // Board entsteht damit auf demselben Weg wie jede andere.
+          return ok(201, await reloadedBoardView(tx, asRequester(guarded.auth), board.id))
         })
         send(response, reply)
       },
@@ -333,7 +364,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
             workspaceId: renamed.workspaceId,
             details: { previousTitle: access.board.title, title: renamed.title },
           })
-          return ok(200, toBoardView(renamed, access.ownerDisplayName))
+          return ok(200, toBoardView(asRequester(auth), { ...access, board: renamed }))
         })
       },
     },
@@ -361,7 +392,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
             workspaceId: updated.workspaceId,
             details: { status },
           })
-          return ok(200, toBoardView(updated, access.ownerDisplayName))
+          return ok(200, toBoardView(asRequester(auth), { ...access, board: updated }))
         })
       },
     },
@@ -400,8 +431,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
         }
         const body: SceneResponse = sceneResponseFor(
           requester,
-          access.board,
-          access.ownerDisplayName,
+          access,
           latest?.version ?? 0,
           // Version 0 heisst: noch nie gespeichert. Der leere Ausgangsstand ist kein Ersatz fuer einen
           // fehlgeschlagenen Ladevorgang, sondern der tatsaechliche Inhalt eines neuen Boards.
@@ -524,7 +554,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
         }
         const grants = await store.grants.listForBoard(boardId)
         const body: BoardGrantsResponse = {
-          board: toBoardView(access.board, access.ownerDisplayName),
+          board: toBoardView(asRequester(auth), access),
           grants: grants.map(toGrantView),
         }
         send(response, ok(200, body))
@@ -673,7 +703,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
             return denial
           }
           if (userId === access.board.ownerId) {
-            return ok(200, toBoardView(access.board, access.ownerDisplayName))
+            return ok(200, toBoardView(asRequester(auth), access))
           }
           const found = await requireGrantTarget(tx, access, userId)
           if (isReply(found)) {
@@ -694,7 +724,9 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
             boardId: updated.id,
             ownerId: userId,
           })
-          return ok(200, toBoardView(updated, found.target.displayName))
+          // Die Uebertragung aendert die eigene Rolle: der bisherige Owner faellt auf seine Mitgliedschaft
+          // zurueck. Die neue Sicht kommt deshalb aus einem frischen Ladevorgang.
+          return ok(200, await reloadedBoardView(tx, asRequester(auth), updated.id))
         })
       },
     },

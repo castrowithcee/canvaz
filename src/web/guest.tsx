@@ -230,7 +230,6 @@ export function GuestApp() {
         // Ein Gast erfaehrt nichts ueber den Arbeitsbereich seines Boards. Ist er archiviert, sagt der
         // Server das ueber das Schreibrecht - die Ansicht muss es nicht wissen, um es anzuzeigen.
         workspaceArchived={false}
-        guestRole={session.role}
         guestName={session.displayName}
         onClose={null}
       />

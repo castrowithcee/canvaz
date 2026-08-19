@@ -350,8 +350,15 @@ describe('Gastbeitritt', () => {
     expect(gast.session.displayName).toBe('Gast aus Nord')
     expect(gast.session.board.id).toBe(board.id)
     expect(gast.session.board.title).toBe('Skizze')
-    // Die Gastsicht traegt keinen Workspacebezug und keine Ownerangaben.
-    expect(Object.keys(gast.session.board).sort()).toEqual(['id', 'sceneVersion', 'status', 'title'])
+    // Die Gastsicht traegt keinen Workspacebezug und keine Ownerangaben - nur den Inhalt und die eigene
+    // Rolle, die der Gast mit dem Beitritt ohnehin erfaehrt.
+    expect(Object.keys(gast.session.board).sort()).toEqual([
+      'id',
+      'sceneVersion',
+      'status',
+      'title',
+      'viewerRole',
+    ])
 
     // Auch das Gastgeheimnis steht nur als Hash in der Datenbank.
     const rows = await pool.query<{ token_hash: string; display_name: string; board_id: string }>(
@@ -576,7 +583,13 @@ describe('Rechte eines Gastes', () => {
     expect(roh).not.toContain(ada.profile.user.displayName)
     const inhalt = JSON.parse(roh) as GuestBoardSceneResponse
     expect(inhalt.viewer).toBe('guest')
-    expect(Object.keys(inhalt.board).sort()).toEqual(['id', 'sceneVersion', 'status', 'title'])
+    expect(Object.keys(inhalt.board).sort()).toEqual([
+      'id',
+      'sceneVersion',
+      'status',
+      'title',
+      'viewerRole',
+    ])
     expect(inhalt.board.title).toBe('Skizze')
 
     // Der Gastzugang selbst sagt genauso wenig.
@@ -593,6 +606,18 @@ describe('Rechte eines Gastes', () => {
     expect(internInhalt.board.workspaceId).toBe(board.workspaceId)
     expect(internInhalt.board.ownerUserId).toBe(ada.profile.user.id)
     expect(internInhalt.board.ownerDisplayName).toBe(ada.profile.user.displayName)
+  })
+
+  it('nennt einem Gast die Rolle seines Freigabelinks', async () => {
+    const { ada, board } = await aufbau()
+    // Ohne ausdrueckliche Rolle gilt `guest-viewer`.
+    const link = await createShareLink(ada, board.id)
+    const gast = await joinAsGuest(link.token, 'Lesegast')
+    expect(gast.session.board.viewerRole).toBe('guest-viewer')
+
+    const geladen = await guestGet(gast, `${BOARD_SCENE_PATH}?${BOARD_ID_PARAM}=${board.id}`)
+    expect(geladen.status).toBe(200)
+    expect(((await geladen.json()) as GuestBoardSceneResponse).board.viewerRole).toBe('guest-viewer')
   })
 
   it('gibt einem Gast auch beim Speichern und ueber Bilder nichts Internes preis', async () => {

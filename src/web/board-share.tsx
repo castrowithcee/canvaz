@@ -28,6 +28,8 @@ import type {
   WorkspaceMemberView,
 } from '../contracts/api.js'
 import { MAX_SHARE_LINK_HOURS } from '../domain/board/guest.js'
+import type { EffectiveBoardRole } from '../domain/board/policy.js'
+import { mayManageBoard } from '../domain/board/policy.js'
 import {
   ApiError,
   changeBoardGrantRole,
@@ -81,6 +83,14 @@ function messageOf(cause: unknown, fallback: string): string {
   return cause.message
 }
 
+/**
+ * Die Rolle, die der Server fuer dieses Board nennt. Ob sie die Verwaltung traegt, entscheidet
+ * `mayManageBoard` - dieselbe Funktion wie auf der Serverseite. Diese Datei prueft keine Berechtigung selbst.
+ */
+function viewerRoleOf(board: BoardView): EffectiveBoardRole {
+  return { kind: 'member', role: board.viewerRole }
+}
+
 function Notice({ text }: { readonly text: string }) {
   return (
     <p className="notice notice--error" role="alert">
@@ -102,12 +112,14 @@ function GrantRow({
   me,
   board,
   grant,
+  manageable,
   onChanged,
   onError,
 }: {
   readonly me: MeResponse
   readonly board: BoardView
   readonly grant: BoardGrantView
+  readonly manageable: boolean
   readonly onChanged: () => void
   readonly onError: (message: string) => void
 }) {
@@ -136,6 +148,8 @@ function GrantRow({
       <td>{grant.displayName}</td>
       <td>{grant.email ?? '—'}</td>
       <td>
+        {!manageable && GRANT_ROLE_LABELS[grant.role]}
+        {manageable && (
         <select
           aria-label={`Boardrolle von ${grant.displayName}`}
           value={role}
@@ -149,9 +163,12 @@ function GrantRow({
             </option>
           ))}
         </select>
+        )}
       </td>
       <td>{formatDate(grant.grantedAt)}</td>
       <td>
+        {manageable && (
+          <>
         <button
           type="button"
           disabled={busy || role === grant.role}
@@ -176,6 +193,8 @@ function GrantRow({
         >
           Zugriff von {grant.displayName} entziehen
         </button>
+          </>
+        )}
       </td>
     </tr>
   )
@@ -667,6 +686,8 @@ type Loaded = {
 type LinkState =
   | { readonly kind: 'loading' }
   | { readonly kind: 'ready'; readonly links: readonly BoardShareLinkView[] }
+  /** Die eigene Rolle traegt die Gastlinks nicht; sie werden deshalb gar nicht erst angefragt. */
+  | { readonly kind: 'unavailable' }
   | { readonly kind: 'failed'; readonly message: string }
 
 export function BoardShare({
@@ -700,18 +721,23 @@ export function BoardShare({
           kind: 'ready',
           loaded: { board: response.board, grants: response.grants, members: members.members },
         })
+        // Die Gastlinks sind ein eigener Ladevorgang: sie verlangen die Verwaltung, die Freigabeliste nur
+        // das Leserecht. Wer die Rolle dafuer nicht traegt, bekommt hier gar keine Anfrage - und in der
+        // Ansicht den Grund als Text.
+        if (!mayManageBoard(viewerRoleOf(response.board))) {
+          setLinks({ kind: 'unavailable' })
+          return
+        }
+        await fetchBoardShareLinks(boardId)
+          .then((linkResponse) => {
+            setLinks({ kind: 'ready', links: linkResponse.links })
+          })
+          .catch((cause: unknown) => {
+            setLinks({ kind: 'failed', message: messageOf(cause, 'Die Gastlinks konnten nicht geladen werden.') })
+          })
       })
       .catch((cause: unknown) => {
         setState({ kind: 'failed', message: messageOf(cause, 'Die Freigaben konnten nicht geladen werden.') })
-      })
-    // Die Gastlinks sind ein eigener Ladevorgang: sie verlangen `grant:manage`, die Freigabeliste nur
-    // `board:read`. Wer nur lesen darf, sieht deshalb die Liste und hier eine benannte Ablehnung.
-    fetchBoardShareLinks(boardId)
-      .then((response) => {
-        setLinks({ kind: 'ready', links: response.links })
-      })
-      .catch((cause: unknown) => {
-        setLinks({ kind: 'failed', message: messageOf(cause, 'Die Gastlinks konnten nicht geladen werden.') })
       })
   }, [boardId])
 
@@ -750,6 +776,8 @@ export function BoardShare({
   }
 
   const { board, grants, members } = state.loaded
+  /** Was der Server fuer diese Rolle zulaesst - nicht, was diese Ansicht fuer richtig haelt. */
+  const manageable = mayManageBoard(viewerRoleOf(board))
   const granted = new Set(grants.map((grant) => grant.userId))
   /** Empfaenger einer neuen Freigabe: Mitglieder ohne eigene Boardrolle. Der Owner traegt seine bereits. */
   const openMembers = members.filter(
@@ -766,6 +794,12 @@ export function BoardShare({
         Owner: <strong>{board.ownerDisplayName}</strong>
         {board.ownerUserId === me.user.id && <> (du)</>}
       </p>
+      {!manageable && (
+        <p className="hint">
+          Diese Freigaben kannst du sehen, aber nicht aendern: dafuer braucht es die Ownerschaft dieses
+          Boards.
+        </p>
+      )}
       {board.status === 'archived' && (
         <p className="hint">
           Dieses Board ist archiviert. Freigaben und Gastlinks bleiben lesbar, aenderbar sind sie erst nach dem
@@ -799,6 +833,7 @@ export function BoardShare({
                 me={me}
                 board={board}
                 grant={grant}
+                manageable={manageable}
                 onChanged={reload}
                 onError={setActionError}
               />
@@ -807,14 +842,21 @@ export function BoardShare({
         </table>
       )}
 
-      <h6>Board freigeben</h6>
-      <AddGrant me={me} board={board} candidates={openMembers} onChanged={reload} />
+      {manageable && (
+        <>
+          <h6>Board freigeben</h6>
+          <AddGrant me={me} board={board} candidates={openMembers} onChanged={reload} />
 
-      <h6>Ownerschaft uebertragen</h6>
-      <TransferOwnership me={me} board={board} candidates={transferable} onChanged={reload} />
+          <h6>Ownerschaft uebertragen</h6>
+          <TransferOwnership me={me} board={board} candidates={transferable} onChanged={reload} />
+        </>
+      )}
 
       <h6>Gastlinks</h6>
       {links.kind === 'loading' && <p aria-live="polite">Gastlinks werden geladen …</p>}
+      {links.kind === 'unavailable' && (
+        <p>Gastlinks sieht und verwaltet der Owner dieses Boards.</p>
+      )}
       {links.kind === 'failed' && <Notice text={links.message} />}
       {links.kind === 'ready' && (
         <ShareLinks me={me} board={board} links={links.links} onChanged={reload} />

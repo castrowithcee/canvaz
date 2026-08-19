@@ -246,6 +246,18 @@ dabei nicht. Ein **deaktivierter** Nutzer verliert jeden Zugriff bereits in `aut
 archivierten Arbeitsbereich laesst sich kein Board mehr anlegen, umbenennen, archivieren, speichern oder
 freigeben. Bei einem archivierten Board bleibt nur das Entarchivieren.
 
+**Jede Boardantwort nennt die effektive Rolle des Anfragenden** (`viewerRole`, in der Boardliste und in
+beiden Formen der Szenenantwort). Sie wird nicht in einer Route aus Rollenfeldern nachgebaut, sondern kommt
+aus `effectiveBoardRole` - derselben Funktion, aus der `decideBoardAccess` seine Stufe bildet: erst
+`board:read`, dann die Stufe, mit der weitergerechnet wird. Was diese Rolle traegt, beantworten
+`mayChangeBoard` und `mayManageBoard`, und **die Entscheidung selbst benutzt genau diese beiden**. Damit gibt
+es keine zweite Wahrheit: eine Oberflaeche kann anbieten, was der Server ohnehin zulaesst, ohne die Regeln
+nachzubauen - und bleibt trotzdem nur Bequemlichkeit, weil abgelehnt weiterhin am Endpunkt wird.
+
+Der **Archivzustand geht in die Rolle nicht ein**. Er steht im Board und im Arbeitsbereich; ihn in die Rolle
+zu falten wuerde aus einem Owner scheinbar einen Viewer machen, der dann nicht einmal mehr entarchivieren
+duerfte.
+
 ### Interne Freigaben
 
 Eine **Freigabe** gibt einem vorhandenen internen Nutzer eine eigene Rolle auf genau einem Board. Vergeben
@@ -275,9 +287,11 @@ vorhandenen Freigaben mit ihrer Rolle, die Auswahl der Empfaenger aus der Mitgli
 Arbeitsbereichs und zu jeder Rolle einen Satz ueber ihre Wirkung. Die Uebertragung der Ownerschaft geschieht
 in zwei Schritten: Auswahl, dann eine ausdrueckliche Bestaetigung, die benennt, was danach gilt.
 
-Angeboten wird der Abschnitt dort, wo die Serverantwort das Board bereits als eigenes ausweist
-(`board.ownerUserId`, Ownerrolle im Arbeitsbereich). Das ist Bequemlichkeit und keine Grenze: **entschieden
-wird jede einzelne Aktion serverseitig**, und jede Ablehnung erscheint als Text statt zu verschwinden.
+Angeboten wird der Abschnitt dort, wo die Serverantwort die Verwaltung ohnehin traegt - `viewerRole` der
+`BoardView`, gelesen mit `mayManageBoard`. Dasselbe gilt fuer Umbenennen und Archivieren in der Boardliste
+(`mayChangeBoard`): ein `viewer` bekommt diese Schaltflaechen gar nicht erst angeboten. Das ist
+Bequemlichkeit und keine Grenze: **entschieden wird jede einzelne Aktion serverseitig**, und jede Ablehnung
+erscheint als Text statt zu verschwinden.
 
 ### Oeffentliche Gastfreigaben
 
@@ -320,7 +334,8 @@ Eine gespeicherte Szenenversion eines Gastes traegt **keinen** Autor (`scene_ver
 leer): ein Gast ist kein Nutzer und steht in keiner Nutzerspalte.
 
 **Ein Gastlink offenbart keinen Arbeitsbereich und keinen internen Nutzer.** Jede Antwort an einen Gast
-zeigt vom Board nur `GuestBoardView` - Kennung, Titel, Status und Version. Keine Workspacekennung, keine
+zeigt vom Board nur `GuestBoardView` - Kennung, Titel, Status, Version und seine eigene Gastrolle
+(`viewerRole`, dieselbe, die er mit dem Beitritt ohnehin erfaehrt). Keine Workspacekennung, keine
 Ownerkennung, kein Owner-Anzeigename. Das gilt fuer den Gastzugang (`/api/boards/guest/session`) und fuer die
 Szene (`GET /api/boards/scene`) gleichermassen; die uebrigen Antworten auf seinem Weg tragen ohnehin nur
 Inhalt (`version`/`savedAt` beim Speichern, `BinaryFileRef` beim Bild, dessen Speicherschluessel aus
@@ -925,11 +940,11 @@ jedes Speicherproblem.
 **Nur Lesen ist ein benannter Zustand.** Der Editor sagt in einem `role="status"`-Bereich, ob er bearbeitet
 oder nur liest, und im zweiten Fall warum: archivierter Arbeitsbereich, archiviertes Board, fehlendes
 Schreibrecht oder ein Freigabelink mit Leserecht. Er bietet dann keine Speicheraktion an, und die
-Zeichenflaeche steht im Lesemodus. Behauptet wird dabei nichts: das Schreibrecht kommt bei einem Gast aus
-der Rolle seiner Gastsession und bei einem Mitglied aus dem Beitritt in den Boardraum (`joined.canWrite`).
-Solange der Server sich noch nicht geaeussert hat, bleibt die Flaeche bedienbar - eine abgelehnte
-Speicherung ist sichtbar, eine grundlos gesperrte Flaeche waere nicht erklaerbar. Die Grenze liegt ohnehin
-im Server; die Ansicht stellt sie nur dar.
+Zeichenflaeche steht im Lesemodus. Behauptet wird dabei nichts: die Szenenantwort nennt die effektive Rolle
+(`viewerRole`), und ob sie aendern darf, sagt `mayChangeBoard` - dieselbe Funktion, mit der der Server
+entscheidet. Der Modus steht damit schon **vor** dem Beitritt in den Boardraum fest und auch dann, wenn die
+Realtime-Strecke gar nicht zustande kommt. Die Grenze liegt trotzdem im Server; die Ansicht stellt sie nur
+dar.
 
 **Aendert sich das Recht waehrend der Sitzung, wechselt die Ansicht ohne Neuladen.** Ein `access` mit
 `canWrite: false` stellt die Zeichenflaeche auf Lesen, nimmt die Speicheraktion weg und benennt den Wechsel;

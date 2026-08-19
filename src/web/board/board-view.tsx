@@ -31,12 +31,13 @@
  *
  * ## Nur Lesen
  *
- * Das Schreibrecht behauptet diese Ansicht nicht selbst. Es kommt vom Server: bei einem Gast aus der Rolle
- * seiner Gastsession, bei einem Mitglied aus dem Beitritt in den Boardraum (`joined.canWrite`). Bis der
- * Server sich geaeussert hat, ist es unbekannt - dann bleibt die Zeichenflaeche bedienbar, und eine
- * abgelehnte Speicherung waere ohnehin sichtbar. Aendert sich das Recht waehrend der Sitzung (`access`),
- * wechselt die Ansicht ohne Neuladen: die Zeichenflaeche geht in den Lesemodus, die Speicheraktion
- * verschwindet, und der Wechsel wird in einem `role="status"`-Bereich benannt.
+ * Das Schreibrecht behauptet diese Ansicht nicht selbst. Es steht schon in der Szenenantwort: sie nennt die
+ * effektive Rolle des Anfragenden (`viewerRole`), und ob diese Rolle aendern darf, sagt `mayChangeBoard` -
+ * dieselbe Funktion, mit der der Server entscheidet. Der Modus steht damit **vor** dem Beitritt in den
+ * Boardraum fest und auch dann, wenn die Realtime-Strecke gar nicht zustande kommt. Aendert sich das Recht
+ * waehrend der Sitzung (`access`), wechselt die Ansicht ohne Neuladen: die Zeichenflaeche geht in den
+ * Lesemodus, die Speicheraktion verschwindet, und der Wechsel wird in einem `role="status"`-Bereich
+ * benannt.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -44,11 +45,12 @@ import type { ReactNode } from 'react'
 
 import '@excalidraw/excalidraw/index.css'
 
-import type { BoardStatusView, GuestRoleView } from '../../contracts/api.js'
+import type { BoardStatusView } from '../../contracts/api.js'
 import type { PresenceView } from '../../contracts/realtime.js'
 import type { BinaryFileRef, SceneSnapshot } from '../../contracts/scene.js'
 import { SCENE_SCHEMA_VERSION } from '../../contracts/scene.js'
-import { guestMayWrite } from '../../domain/board/guest.js'
+import type { EffectiveBoardRole } from '../../domain/board/policy.js'
+import { mayChangeBoard } from '../../domain/board/policy.js'
 import { ApiError, fetchBoardAssetDataUrl, fetchBoardScene, saveBoardScene, uploadBoardAsset } from '../api.js'
 import type { BoardEditorPort, EditorPeer } from './board-editor-port.js'
 import { BoardCanvas } from './excalidraw-adapter.js'
@@ -66,6 +68,8 @@ const AUTOSAVE_DELAY_MS = 1_500
 type Loaded = {
   readonly title: string
   readonly status: BoardStatusView
+  /** Effektive Rolle des Anfragenden, wie der Server sie nennt. Sie wird hier nicht ausgerechnet. */
+  readonly role: EffectiveBoardRole
   readonly version: number
   readonly scene: SceneSnapshot
 }
@@ -167,7 +171,6 @@ export function BoardEditor({
   boardId,
   csrfToken,
   workspaceArchived,
-  guestRole,
   guestName,
   onClose,
 }: {
@@ -175,15 +178,14 @@ export function BoardEditor({
   /** Token der eigenen Sitzung - der internen oder der des Gastes. */
   readonly csrfToken: string
   readonly workspaceArchived: boolean
-  /** Rolle der Gastsession oder `null` fuer ein Mitglied. Ein Gast kennt seinen Arbeitsbereich nicht. */
-  readonly guestRole: GuestRoleView | null
-  /** Selbst gewaehlter Anzeigename des Gastes; `null` fuer ein Mitglied. */
+  /**
+   * Selbst gewaehlter Anzeigename des Gastes; `null` fuer ein Mitglied. Rein beschreibend - ob jemand Gast
+   * ist, steht in der Szenenantwort und nicht in dieser Angabe.
+   */
   readonly guestName: string | null
   /** `null` heisst: es gibt keinen Weg zurueck. Genau das gilt fuer einen Gast. */
   readonly onClose: (() => void) | null
 }) {
-  // Der Gastweg und der interne Weg schliessen sich aus; welche Rolle schreiben darf, sagt der Domain-Core.
-  const initialCanWrite = guestRole === null ? null : guestMayWrite(guestRole)
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
   const [save, setSave] = useState<SaveState>({ kind: 'idle' })
   const [adapter, setAdapter] = useState<BoardEditorPort | null>(null)
@@ -195,13 +197,12 @@ export function BoardEditor({
   /** Zuletzt vom Server benannt abgelehnte Nachricht. */
   const [rejected, setRejected] = useState<string | null>(null)
   /**
-   * Vom Server aufgeloestes Schreibrecht. `null` heisst: noch keine Aussage des Servers.
+   * Vom Server aufgeloestes Schreibrecht. `null` heisst nur: die Szene ist noch nicht geladen.
    *
-   * Bei einem Gast steht sie sofort fest - seine Gastsession nennt die Rolle seines Links. Ein Mitglied
-   * erfaehrt sie mit dem Beitritt in den Boardraum; bis dahin bleibt die Zeichenflaeche bedienbar, denn
-   * eine abgelehnte Speicherung waere sichtbar, eine faelschlich gesperrte Flaeche dagegen nicht erklaerbar.
+   * Danach kommt es aus der Rolle in der Szenenantwort und spaeter aus dem Boardraum (`joined`, `access`) -
+   * beides Aussagen des Servers, beide ueber dieselbe Policy gebildet.
    */
-  const [canWrite, setCanWrite] = useState<boolean | null>(initialCanWrite)
+  const [canWrite, setCanWrite] = useState<boolean | null>(null)
   /** Benannter Wechsel des Schreibrechts waehrend der Sitzung. */
   const [accessNote, setAccessNote] = useState<string | null>(null)
   const [peers, setPeers] = useState<readonly EditorPeer[]>([])
@@ -224,7 +225,7 @@ export function BoardEditor({
   /** Spiegel von `live` fuer die Rueckrufe des Editors, die nicht neu aufgebaut werden sollen. */
   const liveRef = useRef(false)
   /** Zuletzt vom Server genanntes Schreibrecht. Er unterscheidet die erste Aussage von einer Aenderung. */
-  const canWriteRef = useRef<boolean | null>(initialCanWrite)
+  const canWriteRef = useRef<boolean | null>(null)
 
   const load = useCallback(() => {
     setState({ kind: 'loading' })
@@ -235,8 +236,8 @@ export function BoardEditor({
     setAttempt(0)
     setResyncedAt(null)
     setRejected(null)
-    setCanWrite(initialCanWrite)
-    canWriteRef.current = initialCanWrite
+    setCanWrite(null)
+    canWriteRef.current = null
     setAccessNote(null)
     setPeers([])
     setMountKey((current) => current + 1)
@@ -247,13 +248,22 @@ export function BoardEditor({
       .then((response) => {
         versionRef.current = response.version
         filesRef.current = { ...response.scene.files }
-        // Verzweigt auf `viewer`: die Gastantwort traegt eine eigene, reduzierte Boardsicht. Titel und
-        // Status stehen in beiden - mehr braucht der Editor nicht.
+        // Verzweigt auf `viewer`: die Gastantwort traegt eine eigene, reduzierte Boardsicht. Titel, Status
+        // und die eigene Rolle stehen in beiden - mehr braucht der Editor nicht.
+        const role: EffectiveBoardRole =
+          response.viewer === 'guest'
+            ? { kind: 'guest', role: response.board.viewerRole }
+            : { kind: 'member', role: response.board.viewerRole }
+        // Der Modus steht damit sofort fest, ohne auf den Boardraum zu warten.
+        const erlaubt = mayChangeBoard(role)
+        setCanWrite(erlaubt)
+        canWriteRef.current = erlaubt
         setState({
           kind: 'ready',
           loaded: {
             title: response.board.title,
             status: response.board.status,
+            role,
             version: response.version,
             scene: response.scene,
           },
@@ -273,7 +283,7 @@ export function BoardEditor({
           message: cause instanceof ApiError ? cause.message : 'Das Board konnte nicht geladen werden.',
         })
       })
-  }, [boardId, initialCanWrite])
+  }, [boardId])
 
   useEffect(load, [load])
 
@@ -580,7 +590,7 @@ export function BoardEditor({
         <p className="notice notice--error" role="alert">
           Dieses Board ist nicht (mehr) fuer dich freigegeben oder existiert nicht.
         </p>
-        {guestRole !== null && (
+        {guestName !== null && (
           // Die haeufigste Ursache auf dem Gastweg: eine interne Sitzung im selben Browser. Sie hat Vorrang,
           // und dann entscheidet die eigene Berechtigung statt des Freigabelinks.
           <p className="hint">
@@ -618,7 +628,7 @@ export function BoardEditor({
     workspaceArchived,
     boardArchived: state.loaded.status === 'archived',
     canWrite,
-    guestViewer: guestRole === 'guest-viewer',
+    guestViewer: state.loaded.role.kind === 'guest' && state.loaded.role.role === 'guest-viewer',
   })
 
   return (

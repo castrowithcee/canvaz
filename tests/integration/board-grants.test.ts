@@ -21,13 +21,16 @@ import {
   BOARD_RENAME_PATH,
   BOARD_SCENE_PATH,
   BOARD_STATUS_PATH,
+  BOARDS_PATH,
   CSRF_HEADER,
+  WORKSPACE_ID_PARAM,
   WORKSPACE_MEMBER_REMOVE_PATH,
 } from '../../src/contracts/api.js'
 import type {
   BoardGrantsResponse,
   BoardSceneResponse,
   BoardView,
+  BoardsResponse,
   ErrorResponse,
 } from '../../src/contracts/api.js'
 import type { SceneSnapshot } from '../../src/contracts/scene.js'
@@ -135,6 +138,29 @@ async function grantsOf(account: Account, boardId: string): Promise<BoardGrantsR
   const response = await account.jar.fetch(`${app.baseUrl}${BOARD_GRANTS_PATH}?${BOARD_ID_PARAM}=${boardId}`)
   expect(response.status).toBe(200)
   return (await response.json()) as BoardGrantsResponse
+}
+
+/** Die effektive Rolle, die die Szenenantwort dem Anfragenden nennt. */
+async function rolleImEditor(account: Account, boardId: string): Promise<string> {
+  const response = await oeffne(account, boardId)
+  expect(response.status).toBe(200)
+  const body = (await response.json()) as BoardSceneResponse
+  expect(body.viewer).toBe('member')
+  return body.board.viewerRole
+}
+
+/** Dieselbe Rolle, wie die Boardliste sie fuer dieses Board nennt. */
+async function rolleInDerListe(account: Account, workspaceId: string, boardId: string): Promise<string> {
+  const response = await account.jar.fetch(
+    `${app.baseUrl}${BOARDS_PATH}?${WORKSPACE_ID_PARAM}=${workspaceId}`,
+  )
+  expect(response.status).toBe(200)
+  const body = (await response.json()) as BoardsResponse
+  const eintrag = body.boards.find((board) => board.id === boardId)
+  if (eintrag === undefined) {
+    throw new Error('Board nicht in der Liste')
+  }
+  return eintrag.viewerRole
 }
 
 async function gespeicherterOwner(boardId: string): Promise<string> {
@@ -565,5 +591,26 @@ describe('Boardrolle wirkt auf die offene Verbindung', () => {
 
     expect((await client.next('error')).code).toBe('board-nicht-gefunden')
     expect(await client.closeCode).toBe(BOARD_ACCESS_REVOKED_CLOSE_CODE)
+  })
+})
+
+
+/* ---------------------------------------------------------------------------------------------------- */
+/* Effektive Rolle in der Antwort                                                                        */
+/* ---------------------------------------------------------------------------------------------------- */
+
+describe('Effektive Rolle in der Antwort', () => {
+  it('nennt dem Anfragenden die Rolle, mit der die Policy ueber ihn entscheidet', async () => {
+    const { ada, bob, carl, workspace, board } = await team()
+
+    // Board-Owner, Workspace-Owner auf einem fremden Board und ein Mitglied ohne Freigabe.
+    expect(await rolleImEditor(bob, board.id)).toBe('owner')
+    expect(await rolleImEditor(ada, board.id)).toBe('owner')
+    expect(await rolleImEditor(carl, board.id)).toBe('editor')
+
+    expect((await freigabe(bob, board.id, carl.profile.user.id, 'viewer')).status).toBe(201)
+    expect(await rolleImEditor(carl, board.id)).toBe('viewer')
+    // Dieselbe Aussage traegt die Liste, aus der die Oberflaeche ihre Bedienelemente ableitet.
+    expect(await rolleInDerListe(carl, workspace.id, board.id)).toBe('viewer')
   })
 })

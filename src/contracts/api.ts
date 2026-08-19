@@ -226,6 +226,16 @@ export type BoardView = {
   readonly status: BoardStatusView
   readonly ownerUserId: string
   readonly ownerDisplayName: string
+  /**
+   * Effektive Rolle des Anfragenden auf genau diesem Board.
+   *
+   * Sie kommt aus derselben Policy, die auch jede Aktion entscheidet, und ist damit keine zweite Wahrheit:
+   * eine Oberflaeche kann daran ablesen, was sie ueberhaupt anbieten soll, ohne die Regeln nachzubauen. Sie
+   * ist trotzdem **keine Grenze** - abgelehnt wird weiterhin am Endpunkt.
+   *
+   * Der Archivzustand geht nicht ein; er steht in `status` und im Zustand des Arbeitsbereichs.
+   */
+  readonly viewerRole: BoardRoleView
   /** Nummer der zuletzt gespeicherten Szene. `0` heisst: noch nie gespeichert. */
   readonly sceneVersion: number
   /** ISO-8601. */
@@ -458,6 +468,15 @@ export type GuestBoardView = {
   readonly id: string
   readonly title: string
   readonly status: BoardStatusView
+  /**
+   * Effektive Rolle des Anfragenden auf diesem Board - dieselbe Aussage wie `viewerRole` der `BoardView`,
+   * nur im Vokabular der Gastrollen. Damit steht sie in **beiden** Antwortformen an derselben Stelle, und
+   * wer die Antwort verarbeitet, braucht dafuer keine Fallunterscheidung.
+   *
+   * Sie verraet nichts Internes: es ist die Rolle seines eigenen Links, die er beim Beitritt ohnehin
+   * erfahren hat (`GuestSessionResponse.role`).
+   */
+  readonly viewerRole: GuestRoleView
   /** Nummer der zuletzt gespeicherten Szene. `0` heisst: noch nie gespeichert. */
   readonly sceneVersion: number
 }

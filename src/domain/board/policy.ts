@@ -141,6 +141,38 @@ function boardLevel(subject: BoardSubject): BoardRole {
 }
 
 /**
+ * Die effektive Rolle des Anfragenden auf einem Board - genau die, mit der `decideBoardAccess` entscheidet.
+ *
+ * Sie traegt ihre Herkunft mit: intern eine Boardrolle, als Gast eine Gastrolle. Beide Ebenen mischen sich
+ * auch hier nicht, und niemand kann eine Gastrolle versehentlich als interne Stufe lesen.
+ */
+export type EffectiveBoardRole =
+  | { readonly kind: 'member'; readonly role: BoardRole }
+  | { readonly kind: 'guest'; readonly role: GuestRole }
+
+/**
+ * Traegt diese Rolle Aenderungen am Board?
+ *
+ * Genau die Frage, die `decideBoardAccess` fuer `scene:write`, `board:rename` und die beiden Archivaktionen
+ * stellt - deshalb steht sie hier einmal und wird von der Entscheidung selbst benutzt. Der Zustand von
+ * Board und Arbeitsbereich geht **nicht** ein: archiviert heisst unveraenderlich, und das entscheidet
+ * `decideBoardAccess` davor.
+ */
+export function mayChangeBoard(effective: EffectiveBoardRole): boolean {
+  return effective.kind === 'guest' ? guestMayWrite(effective.role) : effective.role !== 'viewer'
+}
+
+/**
+ * Traegt diese Rolle die Verantwortung fuer das Board - Freigaben, Gastlinks und Ownerschaft?
+ *
+ * Nur der Owner. Ein `editor` gibt sein Recht nicht weiter, und einem Gast ist die Verwaltung in jedem
+ * Zustand verwehrt.
+ */
+export function mayManageBoard(effective: EffectiveBoardRole): boolean {
+  return effective.kind === 'member' && effective.role === 'owner'
+}
+
+/**
  * Entscheidet die Aktion eines Gastes.
  *
  * Dieselbe Reihenfolge wie im internen Weg - erst Sichtbarkeit, dann die beiden Archivzustaende, zuletzt
@@ -177,7 +209,7 @@ function decideGuestAccess(
   // Nur die Szene, und die auch nur mit ausdruecklichem Schreibrecht. Stammdaten, Freigaben und
   // Ownerschaft eines Boards gehoeren dem Arbeitsbereich - ein Gast gehoert ihm nicht an.
   if (action === 'scene:write') {
-    return guestMayWrite(grant.role) ? ALLOWED : denied('insufficient-role')
+    return mayChangeBoard({ kind: 'guest', role: grant.role }) ? ALLOWED : denied('insufficient-role')
   }
   return denied('insufficient-role')
 }
@@ -229,13 +261,13 @@ export function decideBoardAccess(
     return denied('board-archived')
   }
 
-  const level = boardLevel(subject)
+  const level: EffectiveBoardRole = { kind: 'member', role: boardLevel(subject) }
   switch (action) {
     case 'grant:manage':
     case 'board:transfer-ownership':
       // Wer das Board verantwortet, entscheidet, wer daran arbeitet. Ein `editor` gibt sein Recht nicht
       // weiter, sonst waere die Abstufung mit einem Schritt wieder aufgehoben.
-      return level === 'owner' ? ALLOWED : denied('insufficient-role')
+      return mayManageBoard(level) ? ALLOWED : denied('insufficient-role')
     case 'board:create':
     case 'board:rename':
     case 'board:archive':
@@ -243,6 +275,32 @@ export function decideBoardAccess(
     case 'scene:write':
       // Inhalt und Stammdaten des Boards gehoeren zusammen: wer die Szene speichern darf, darf das Board
       // auch benennen und archivieren. Ein `viewer` darf beides nicht.
-      return level === 'viewer' ? denied('insufficient-role') : ALLOWED
+      return mayChangeBoard(level) ? ALLOWED : denied('insufficient-role')
   }
+}
+
+/**
+ * Die effektive Rolle des Anfragenden, hergeleitet aus **derselben** Entscheidung, die auch die Aktionen
+ * traegt: erst `board:read` - wer nicht lesen darf, hat auf diesem Board keine Rolle (`null`) -, dann die
+ * Stufe, mit der `decideBoardAccess` weiterrechnet.
+ *
+ * Sie wird nirgends sonst gebildet. Eine Route, die sie aus Rollenfeldern nachbaut, waere genau die zweite
+ * Fassung, die eines Tages von der Entscheidung abweicht; eine Anzeige, die daraus Faehigkeiten ableitet,
+ * benutzt `mayChangeBoard` und `mayManageBoard` und damit wieder dieselben Regeln.
+ *
+ * Der **Archivzustand geht nicht ein**. Er ist eine eigene, ohnehin sichtbare Eigenschaft des Boards und
+ * seines Arbeitsbereichs; ihn in die Rolle zu falten wuerde aus einem Owner scheinbar einen Viewer machen,
+ * der dann nicht einmal mehr entarchivieren duerfte.
+ */
+export function effectiveBoardRole(
+  subject: BoardSubject,
+  workspace: { readonly status: WorkspaceStatus },
+  board: BoardState,
+): EffectiveBoardRole | null {
+  if (!decideBoardAccess(subject, workspace, board, 'board:read').allowed) {
+    return null
+  }
+  return subject.guestGrant === null
+    ? { kind: 'member', role: boardLevel(subject) }
+    : { kind: 'guest', role: subject.guestGrant.role }
 }

@@ -291,20 +291,32 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
     audit: base.audit,
 
     boards: {
-      async listForWorkspace(workspaceId: WorkspaceId, filter: BoardFilter): Promise<readonly BoardListEntry[]> {
+      async listForWorkspace(
+        workspaceId: WorkspaceId,
+        userId: UserId,
+        filter: BoardFilter,
+      ): Promise<readonly BoardListEntry[]> {
         // `position(... in ...)` statt `like`: der Suchbegriff darf keine Platzhalter enthalten koennen.
-        const result = await db.query<BoardRow & { owner_display_name: string }>(
+        // Die eigene Freigabezeile kommt als `left join` mit: sie gehoert zu genau dieser Zeile und zu
+        // diesem Zeitpunkt, und eine zweite Abfrage je Board waere beides nicht.
+        const result = await db.query<BoardRow & { owner_display_name: string; grant_role: string | null }>(
           `select b.id, b.workspace_id, b.title, b.owner_user_id, b.status, b.current_scene_version,
-                  b.created_at, b.updated_at, u.display_name as owner_display_name
+                  b.created_at, b.updated_at, u.display_name as owner_display_name, g.role as grant_role
              from boards b
              join users u on u.id = b.owner_user_id
+             left join board_grants g on g.board_id = b.id and g.user_id = $4
             where b.workspace_id = $1
               and b.status = $2
               and ($3 = '' or position(lower($3) in lower(b.title)) > 0)
             order by lower(b.title), b.id`,
-          [workspaceId, filter.status, filter.title],
+          [workspaceId, filter.status, filter.title, userId],
         )
-        return result.rows.map((row) => ({ board: toBoard(row), ownerDisplayName: row.owner_display_name }))
+        return result.rows.map((row) => ({
+          board: toBoard(row),
+          ownerDisplayName: row.owner_display_name,
+          // Dieselbe Aufloesung wie beim einzelnen Board: der Owner schlaegt jede Freigabezeile.
+          boardRole: resolveBoardRole(row.owner_user_id, userId, (row.grant_role as BoardGrantRole | null) ?? null),
+        }))
       },
 
       async findForViewer(id: BoardId, viewer: BoardViewer, now: Date): Promise<BoardAccess | null> {

@@ -193,7 +193,6 @@ function Shell({ me, onSignedOut }: { readonly me: MeResponse; readonly onSigned
           boardId={openBoard.board.id}
           csrfToken={me.csrfToken}
           workspaceArchived={openBoard.workspaceArchived}
-          guestRole={null}
           guestName={null}
           onClose={() => {
             setOpenBoard(null)

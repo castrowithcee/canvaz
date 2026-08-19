@@ -56,6 +56,13 @@ export type BoardAccess = {
 export type BoardListEntry = {
   readonly board: Board
   readonly ownerDisplayName: string
+  /**
+   * Eigene Boardrolle des Anfragenden auf genau dieser Zeile - `null` heisst: keine ausdrueckliche, dann
+   * entscheidet die Mitgliedschaft. Sie kommt aus derselben Abfrage wie die Zeile selbst; einzeln
+   * nachgeladen waeren es so viele Abfragen wie Boards, und die Liste zeigte Rollen aus einem anderen
+   * Zeitpunkt als die Boards.
+   */
+  readonly boardRole: BoardRole | null
 }
 
 export type BoardFilter = {
@@ -66,7 +73,17 @@ export type BoardFilter = {
 
 export interface BoardRepository {
   /** Ausschliesslich Boards des angegebenen Workspace. Die Sichtbarkeit des Workspace prueft der Aufrufer. */
-  listForWorkspace(workspaceId: WorkspaceId, filter: BoardFilter): Promise<readonly BoardListEntry[]>
+  /**
+   * Boards eines Arbeitsbereichs samt der eigenen Boardrolle des Anfragenden.
+   *
+   * `userId` ist bewusst Pflicht und nicht optional: eine Liste ohne Anfragenden koennte keine Rolle nennen,
+   * und ein Gast hat gar keine Liste - er kennt genau ein Board.
+   */
+  listForWorkspace(
+    workspaceId: WorkspaceId,
+    userId: UserId,
+    filter: BoardFilter,
+  ): Promise<readonly BoardListEntry[]>
   /**
    * Board samt Workspace und eigener Rolle. `null` heisst: existiert nicht - oder, bei einem Gast, sein
    * Zugang gilt nicht (mehr) fuer dieses Board.
