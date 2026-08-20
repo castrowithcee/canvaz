@@ -17,6 +17,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { BoardTrashEntryView, MeResponse, TrashActionResultView, WorkspaceView } from '../contracts/api.js'
 import { ApiError, fetchBoardTrash, purgeBoardsFromTrash, restoreBoardsFromTrash } from './api.js'
 import { Link } from './router.js'
+import { ConfirmDialog, Empty, Loading, Notice } from './ui.js'
 
 function messageOf(cause: unknown, fallback: string): string {
   if (!(cause instanceof ApiError)) {
@@ -26,14 +27,6 @@ function messageOf(cause: unknown, fallback: string): string {
     return `Dafuer fehlt dir die Berechtigung. ${cause.message}`
   }
   return cause.message
-}
-
-function Notice({ text }: { readonly text: string }) {
-  return (
-    <p className="notice notice--error" role="alert">
-      {text}
-    </p>
-  )
 }
 
 /** Verbleibende Frist als Satz. Angefangene Tage zaehlen mit - abgelaufen ist erst, was wirklich vorbei ist. */
@@ -94,7 +87,7 @@ export function BoardTrash({
     return (
       <section aria-labelledby="papierkorb-heading">
         <h2 id="papierkorb-heading">Papierkorb</h2>
-        <p aria-live="polite">Der Papierkorb wird geladen …</p>
+        <Loading text="Der Papierkorb wird geladen …" />
       </section>
     )
   }
@@ -163,92 +156,97 @@ export function BoardTrash({
       {actionError !== null && <Notice text={actionError} />}
 
       {results !== null && (
-        <div className="notice" role="status">
+        <Notice kind="success">
           <p>{results.kind === 'restore' ? 'Wiederhergestellt:' : 'Endgueltig geloescht:'}</p>
-          <ul>
+          <ul className="list list--bullets">
             {results.entries.map((entry) => (
               <li key={entry.boardId}>
                 {entry.title}: {entry.ok ? 'erledigt' : (entry.error ?? 'fehlgeschlagen')}
               </li>
             ))}
           </ul>
-        </div>
+        </Notice>
       )}
 
-      {boards.length === 0 && <p>Der Papierkorb dieses Arbeitsbereichs ist leer.</p>}
+      {boards.length === 0 && <Empty text="Der Papierkorb dieses Arbeitsbereichs ist leer." />}
 
       {boards.length > 0 && (
         <>
-          <table className="users">
-            <caption className="visually-hidden">Geloeschte Boards in {workspace.name}</caption>
-            <thead>
-              <tr>
-                <th scope="col">Auswahl</th>
-                <th scope="col">Titel</th>
-                <th scope="col">Urspruenglicher Ordner</th>
-                <th scope="col">Geloescht von</th>
-                <th scope="col">Geloescht am</th>
-                <th scope="col">Frist</th>
-                <th scope="col">Aktion</th>
-              </tr>
-            </thead>
-            <tbody>
-              {boards.map((entry) => (
-                <tr key={entry.id}>
-                  <td>
-                    <input
-                      type="checkbox"
-                      id={`trash-select-${entry.id}`}
-                      checked={selected.includes(entry.id)}
-                      onChange={(event) => {
-                        setSelected((current) =>
-                          event.target.checked
-                            ? [...current, entry.id]
-                            : current.filter((id) => id !== entry.id),
-                        )
-                        setConfirming(null)
-                      }}
-                    />
-                    <label className="visually-hidden" htmlFor={`trash-select-${entry.id}`}>
-                      {entry.title} auswaehlen
-                    </label>
-                  </td>
-                  <td>
-                    {entry.title}
-                    {entry.status === 'archived' && ' (archiviert)'}
-                  </td>
-                  <td>{entry.folderName ?? 'Arbeitsbereich (kein Ordner)'}</td>
-                  <td>{entry.deletedByDisplayName ?? 'Konto entfernt'}</td>
-                  <td>{new Date(entry.deletedAt).toLocaleString('de-DE')}</td>
-                  <td>{remainingText(entry.purgeAt, now)}</td>
-                  <td>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => {
-                        run('restore', [entry.id])
-                      }}
-                    >
-                      {entry.title} wiederherstellen
-                    </button>{' '}
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => {
-                        setActionError(null)
-                        setConfirming([entry.id])
-                      }}
-                    >
-                      {entry.title} endgueltig loeschen
-                    </button>
-                  </td>
+          <div className="table-wrap">
+            <table className="table">
+              <caption className="visually-hidden">Geloeschte Boards in {workspace.name}</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Auswahl</th>
+                  <th scope="col">Titel</th>
+                  <th scope="col">Urspruenglicher Ordner</th>
+                  <th scope="col">Geloescht von</th>
+                  <th scope="col">Geloescht am</th>
+                  <th scope="col">Frist</th>
+                  <th scope="col">Aktion</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {boards.map((entry) => (
+                  <tr key={entry.id}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        id={`trash-select-${entry.id}`}
+                        checked={selected.includes(entry.id)}
+                        onChange={(event) => {
+                          setSelected((current) =>
+                            event.target.checked
+                              ? [...current, entry.id]
+                              : current.filter((id) => id !== entry.id),
+                          )
+                          setConfirming(null)
+                        }}
+                      />
+                      <label className="visually-hidden" htmlFor={`trash-select-${entry.id}`}>
+                        {entry.title} auswaehlen
+                      </label>
+                    </td>
+                    <td>
+                      {entry.title}
+                      {entry.status === 'archived' && ' (archiviert)'}
+                    </td>
+                    <td>{entry.folderName ?? 'Arbeitsbereich (kein Ordner)'}</td>
+                    <td>{entry.deletedByDisplayName ?? 'Konto entfernt'}</td>
+                    <td>{new Date(entry.deletedAt).toLocaleString('de-DE')}</td>
+                    <td>{remainingText(entry.purgeAt, now)}</td>
+                    <td>
+                      <span className="actions">
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => {
+                            run('restore', [entry.id])
+                          }}
+                        >
+                          {entry.title} wiederherstellen
+                        </button>
+                        <button
+                          className="button--danger"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => {
+                            setActionError(null)
+                            setConfirming([entry.id])
+                          }}
+                        >
+                          {entry.title} endgueltig loeschen
+                        </button>
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
           <h5>Auswahl</h5>
-          <p>
+          <p className="actions">
             <button
               type="button"
               disabled={busy || selected.length === 0}
@@ -257,8 +255,9 @@ export function BoardTrash({
               }}
             >
               Auswahl wiederherstellen ({String(selected.length)})
-            </button>{' '}
+            </button>
             <button
+              className="button--danger"
               type="button"
               disabled={busy || selected.length === 0}
               onClick={() => {
@@ -275,7 +274,7 @@ export function BoardTrash({
       {/* Das endgueltige Loeschen ist nicht rueckgaengig zu machen und bekommt deshalb eine eigene,
           deutlichere Bestaetigung als das Loeschen in den Papierkorb. */}
       {confirming !== null && confirming.length > 0 && (
-        <div className="notice notice--error" role="alert">
+        <ConfirmDialog danger>
           <p>
             <strong>
               {confirming.length === 1
@@ -287,13 +286,14 @@ export function BoardTrash({
             Szenen, Versionen, Bilder, Freigaben und Gastlinks werden dabei vollstaendig entfernt. Das ist
             <strong> nicht rueckgaengig zu machen</strong> und auch nicht mehr wiederherzustellen.
           </p>
-          <ul>
+          <ul className="list list--bullets">
             {confirming.map((boardId) => (
               <li key={boardId}>{titleOf(boardId)}</li>
             ))}
           </ul>
-          <p>
+          <p className="actions">
             <button
+              className="button--danger"
               type="button"
               disabled={busy}
               onClick={() => {
@@ -301,7 +301,7 @@ export function BoardTrash({
               }}
             >
               Ja, endgueltig loeschen
-            </button>{' '}
+            </button>
             <button
               type="button"
               disabled={busy}
@@ -312,7 +312,7 @@ export function BoardTrash({
               Endgueltiges Loeschen abbrechen
             </button>
           </p>
-        </div>
+        </ConfirmDialog>
       )}
     </section>
   )

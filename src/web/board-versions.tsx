@@ -29,6 +29,7 @@ import {
   importBoardScene,
   restoreBoardVersion,
 } from './api.js'
+import { Empty, Loading, Notice } from './ui.js'
 
 /** Uebersetzt eine Serverantwort in einen Satz. 404 und 403 bekommen bewusst eigene Texte. */
 function messageOf(cause: unknown, fallback: string): string {
@@ -46,14 +47,6 @@ function messageOf(cause: unknown, fallback: string): string {
 
 function viewerRoleOf(board: BoardView): EffectiveBoardRole {
   return { kind: 'member', role: board.viewerRole }
-}
-
-function Notice({ text }: { readonly text: string }) {
-  return (
-    <p className="notice notice--error" role="alert">
-      {text}
-    </p>
-  )
 }
 
 function formatMoment(iso: string): string {
@@ -122,6 +115,7 @@ function VersionRow({
       <td>{String(version.elementCount)}</td>
       <td>{formatBytes(version.byteSize)}</td>
       <td>
+        <span className="actions">
         <button
           type="button"
           onClick={() => {
@@ -129,7 +123,7 @@ function VersionRow({
           }}
         >
           Version {String(version.version)} ansehen
-        </button>{' '}
+        </button>
         {restorable && !current && (
           <button
             type="button"
@@ -162,6 +156,7 @@ function VersionRow({
             Version {String(version.version)} wiederherstellen
           </button>
         )}
+        </span>
       </td>
     </tr>
   )
@@ -239,7 +234,7 @@ export function BoardVersions({
     return (
       <section aria-labelledby="board-versions-heading">
         <h5 id="board-versions-heading">Versionen</h5>
-        <p aria-live="polite">Versionen werden geladen …</p>
+        <Loading text="Versionen werden geladen …" />
         {closeButton}
       </section>
     )
@@ -316,17 +311,19 @@ export function BoardVersions({
       )}
       {actionError !== null && actionError !== '' && <Notice text={actionError} />}
       {note !== null && (
-        <p className="notice" role="status">
-          {note}{' '}
-          <button
-            type="button"
-            onClick={() => {
-              setNote(null)
-            }}
-          >
-            Hinweis ausblenden
-          </button>
-        </p>
+        <Notice kind="success">
+          <p>{note}</p>
+          <p className="actions">
+            <button
+              type="button"
+              onClick={() => {
+                setNote(null)
+              }}
+            >
+              Hinweis ausblenden
+            </button>
+          </p>
+        </Notice>
       )}
 
       <h6>Export</h6>
@@ -359,10 +356,7 @@ export function BoardVersions({
 
       <h6>Import</h6>
       {!importable ? (
-        <p>
-          Importieren darf, wer die Szene dieses Boards speichern darf - in einem aktiven Arbeitsbereich und
-          einem nicht archivierten Board.
-        </p>
+        <Empty text="Importieren darf, wer die Szene dieses Boards speichern darf - in einem aktiven Arbeitsbereich und einem nicht archivierten Board." />
       ) : (
         <>
           <p>
@@ -371,7 +365,7 @@ export function BoardVersions({
             sich jederzeit wiederherstellen.
           </p>
           <form
-            className="stack"
+            className="stack card"
             onSubmit={(event) => {
               event.preventDefault()
               if (chosen !== null) {
@@ -392,7 +386,7 @@ export function BoardVersions({
               />
             </div>
             <p>
-              <button type="submit" disabled={busy || chosen === null}>
+              <button className="button--primary" type="submit" disabled={busy || chosen === null}>
                 Datei importieren
               </button>
             </p>
@@ -402,48 +396,50 @@ export function BoardVersions({
 
       <h6>Verlauf</h6>
       {versions.length === 0 ? (
-        <p>Zu diesem Board wurde noch nichts gespeichert. Sobald jemand zeichnet, entstehen hier Versionen.</p>
+        <Empty text="Zu diesem Board wurde noch nichts gespeichert. Sobald jemand zeichnet, entstehen hier Versionen." />
       ) : (
-        <table className="users">
-          <caption className="visually-hidden">Aufbewahrte Versionen von {board.title}</caption>
-          <thead>
-            <tr>
-              <th scope="col">Version</th>
-              <th scope="col">Gespeichert</th>
-              <th scope="col">Von</th>
-              <th scope="col">Elemente</th>
-              <th scope="col">Groesse</th>
-              <th scope="col">Aktion</th>
-            </tr>
-          </thead>
-          <tbody>
-            {versions.map((version) => (
-              <VersionRow
-                key={version.version}
-                me={me}
-                board={board}
-                version={version}
-                restorable={mayRestore && !workspaceArchived && board.status === 'active'}
-                onPreview={onPreview}
-                onRestored={(created) => {
-                  setNote(
-                    `Wiederhergestellt als Version ${String(created)}. ` +
-                      'Der bisherige Stand bleibt als eigene Version erhalten.',
-                  )
-                  reload()
-                }}
-                onConflict={() => {
-                  setNote(
-                    'Dieses Board wurde inzwischen gespeichert. Es wurde nichts ueberschrieben, und die ' +
-                      'Liste ist neu geladen. Ein erneuter Klick stellt auf dem jetzt angezeigten Stand wieder her.',
-                  )
-                  reload()
-                }}
-                onError={setActionError}
-              />
-            ))}
-          </tbody>
-        </table>
+        <div className="table-wrap">
+          <table className="table">
+            <caption className="visually-hidden">Aufbewahrte Versionen von {board.title}</caption>
+            <thead>
+              <tr>
+                <th scope="col">Version</th>
+                <th scope="col">Gespeichert</th>
+                <th scope="col">Von</th>
+                <th scope="col">Elemente</th>
+                <th scope="col">Groesse</th>
+                <th scope="col">Aktion</th>
+              </tr>
+            </thead>
+            <tbody>
+              {versions.map((version) => (
+                <VersionRow
+                  key={version.version}
+                  me={me}
+                  board={board}
+                  version={version}
+                  restorable={mayRestore && !workspaceArchived && board.status === 'active'}
+                  onPreview={onPreview}
+                  onRestored={(created) => {
+                    setNote(
+                      `Wiederhergestellt als Version ${String(created)}. ` +
+                        'Der bisherige Stand bleibt als eigene Version erhalten.',
+                    )
+                    reload()
+                  }}
+                  onConflict={() => {
+                    setNote(
+                      'Dieses Board wurde inzwischen gespeichert. Es wurde nichts ueberschrieben, und die ' +
+                        'Liste ist neu geladen. Ein erneuter Klick stellt auf dem jetzt angezeigten Stand wieder her.',
+                    )
+                    reload()
+                  }}
+                  onError={setActionError}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       {closeButton}
     </section>

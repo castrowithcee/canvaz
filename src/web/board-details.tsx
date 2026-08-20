@@ -35,6 +35,7 @@ import { BoardShare } from './board-share.js'
 import { BoardVersions } from './board-versions.js'
 import { FolderSelect } from './folders.js'
 import { Link, navigate } from './router.js'
+import { ConfirmDialog, Loading, Notice } from './ui.js'
 
 const ROLE_LABELS: Readonly<Record<BoardRoleView, string>> = {
   owner: 'Owner',
@@ -59,14 +60,6 @@ function messageOf(cause: unknown, fallback: string): string {
 /** Die Rolle, die der Server fuer dieses Board nennt - in der Form, in der die Policy sie liest. */
 function viewerRoleOf(board: BoardView): EffectiveBoardRole {
   return { kind: 'member', role: board.viewerRole }
-}
-
-function Notice({ text }: { readonly text: string }) {
-  return (
-    <p className="notice notice--error" role="alert">
-      {text}
-    </p>
-  )
 }
 
 /**
@@ -148,14 +141,15 @@ function MoveToWorkspace({
         </p>
       )}
       {confirming && selected !== null && (
-        <div className="notice" role="alert">
+        <ConfirmDialog>
           <p>
             <strong>{board.title}</strong> wirklich nach <strong>{selected.name}</strong> verschieben? Die
             internen Freigaben und die Gastlinks dieses Boards enden damit.
           </p>
-          <p>
+          <p className="actions">
             <button
               type="button"
+              className="button--primary"
               disabled={busy}
               onClick={() => {
                 setBusy(true)
@@ -175,7 +169,7 @@ function MoveToWorkspace({
               }}
             >
               Ja, nach {selected.name} verschieben
-            </button>{' '}
+            </button>
             <button
               type="button"
               disabled={busy}
@@ -186,7 +180,7 @@ function MoveToWorkspace({
               Wechsel abbrechen
             </button>
           </p>
-        </div>
+        </ConfirmDialog>
       )}
     </div>
   )
@@ -229,13 +223,14 @@ function TrashBoard({
           </button>
         </p>
       ) : (
-        <div className="notice" role="alert">
+        <ConfirmDialog danger>
           <p>
             <strong>{board.title}</strong> wirklich in den Papierkorb legen? Das Board verschwindet sofort aus
             allen Listen, laesst sich nicht mehr oeffnen, und jeder Freigabe- und Gastzugriff endet.
           </p>
-          <p>
+          <p className="actions">
             <button
+              className="button--danger"
               type="button"
               disabled={busy}
               onClick={() => {
@@ -252,7 +247,7 @@ function TrashBoard({
               }}
             >
               Ja, {board.title} in den Papierkorb legen
-            </button>{' '}
+            </button>
             <button
               type="button"
               disabled={busy}
@@ -263,7 +258,7 @@ function TrashBoard({
               Loeschen abbrechen
             </button>
           </p>
-        </div>
+        </ConfirmDialog>
       )}
     </div>
   )
@@ -334,7 +329,7 @@ export function BoardDetails({
     return (
       <section aria-labelledby="board-details-heading">
         <h2 id="board-details-heading">Board</h2>
-        <p aria-live="polite">Das Board wird geladen …</p>
+        <Loading text="Das Board wird geladen …" />
       </section>
     )
   }
@@ -344,7 +339,7 @@ export function BoardDetails({
         <h2 id="board-details-heading">Board</h2>
         <Notice text={state.message} />
         <p>
-          <Link className="button" route={{ kind: 'arbeitsbereich', workspaceId, folder: null }}>
+          <Link className="button button--primary" route={{ kind: 'arbeitsbereich', workspaceId, folder: null }}>
             Zur Boardliste
           </Link>
         </p>
@@ -386,14 +381,16 @@ export function BoardDetails({
   return (
     <section aria-labelledby="board-details-heading">
       <h2 id="board-details-heading">{current.title}</h2>
-      <p>
+      <p className="actions">
         <Link
-          className="button"
+          className="button button--primary"
           route={{ kind: 'board', workspaceId, boardId: current.id, version: null }}
         >
           Board oeffnen
-        </Link>{' '}
-        <Link route={{ kind: 'arbeitsbereich', workspaceId, folder: null }}>Zur Boardliste</Link>
+        </Link>
+        <Link className="button" route={{ kind: 'arbeitsbereich', workspaceId, folder: null }}>
+          Zur Boardliste
+        </Link>
       </p>
 
       <dl className="details">
@@ -438,7 +435,7 @@ export function BoardDetails({
           <h5>Titel</h5>
           {renaming ? (
             <form
-              className="stack"
+              className="stack card"
               onSubmit={(event) => {
                 event.preventDefault()
                 run(renameBoard(me.csrfToken, current.id, title), 'Das Board konnte nicht umbenannt werden.')
@@ -457,10 +454,10 @@ export function BoardDetails({
                   }}
                 />
               </div>
-              <p>
-                <button type="submit" disabled={busy || title.trim().length === 0}>
+              <p className="actions">
+                <button className="button--primary" type="submit" disabled={busy || title.trim().length === 0}>
                   Titel speichern
-                </button>{' '}
+                </button>
                 <button
                   type="button"
                   onClick={() => {
@@ -561,7 +558,7 @@ export function BoardDetails({
       )}
 
       <h5>Freigaben und Versionen</h5>
-      <p>
+      <p className="actions">
         <button
           type="button"
           onClick={() => {
@@ -569,7 +566,7 @@ export function BoardDetails({
           }}
         >
           {panel === 'freigaben' ? 'Freigaben schliessen' : 'Freigaben verwalten'}
-        </button>{' '}
+        </button>
         <button
           type="button"
           onClick={() => {

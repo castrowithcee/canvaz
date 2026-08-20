@@ -42,6 +42,7 @@ import {
   shareBoard,
   transferBoardOwnership,
 } from './api.js'
+import { ConfirmDialog, Empty, Loading, Notice } from './ui.js'
 
 const GRANT_ROLES: readonly BoardGrantRoleView[] = ['editor', 'viewer']
 
@@ -89,14 +90,6 @@ function messageOf(cause: unknown, fallback: string): string {
  */
 function viewerRoleOf(board: BoardView): EffectiveBoardRole {
   return { kind: 'member', role: board.viewerRole }
-}
-
-function Notice({ text }: { readonly text: string }) {
-  return (
-    <p className="notice notice--error" role="alert">
-      {text}
-    </p>
-  )
 }
 
 function formatDate(iso: string): string {
@@ -168,32 +161,32 @@ function GrantRow({
       <td>{formatDate(grant.grantedAt)}</td>
       <td>
         {manageable && (
-          <>
-        <button
-          type="button"
-          disabled={busy || role === grant.role}
-          onClick={() => {
-            run(
-              changeBoardGrantRole(me.csrfToken, { boardId: board.id, userId: grant.userId, role }),
-              'Die Rolle konnte nicht geaendert werden.',
-            )
-          }}
-        >
-          Rolle von {grant.displayName} speichern
-        </button>{' '}
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => {
-            run(
-              revokeBoardGrant(me.csrfToken, { boardId: board.id, userId: grant.userId }),
-              'Die Freigabe konnte nicht entzogen werden.',
-            )
-          }}
-        >
-          Zugriff von {grant.displayName} entziehen
-        </button>
-          </>
+          <span className="actions">
+            <button
+              type="button"
+              disabled={busy || role === grant.role}
+              onClick={() => {
+                run(
+                  changeBoardGrantRole(me.csrfToken, { boardId: board.id, userId: grant.userId, role }),
+                  'Die Rolle konnte nicht geaendert werden.',
+                )
+              }}
+            >
+              Rolle von {grant.displayName} speichern
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                run(
+                  revokeBoardGrant(me.csrfToken, { boardId: board.id, userId: grant.userId }),
+                  'Die Freigabe konnte nicht entzogen werden.',
+                )
+              }}
+            >
+              Zugriff von {grant.displayName} entziehen
+            </button>
+          </span>
         )}
       </td>
     </tr>
@@ -234,12 +227,12 @@ function AddGrant({
   const selected = matches.find((member) => member.userId === userId) ?? null
 
   if (candidates.length === 0) {
-    return <p>Alle Mitglieder dieses Arbeitsbereichs haben bereits eine eigene Rolle auf diesem Board.</p>
+    return <Empty text="Alle Mitglieder dieses Arbeitsbereichs haben bereits eine eigene Rolle auf diesem Board." />
   }
 
   return (
     <form
-      className="stack"
+      className="stack card"
       onSubmit={(event) => {
         event.preventDefault()
         if (selected === null) {
@@ -281,7 +274,7 @@ function AddGrant({
 
       <fieldset>
         <legend>Empfaenger der Freigabe</legend>
-        {matches.length === 0 && <p>Kein Mitglied passt zu dieser Suche.</p>}
+        {matches.length === 0 && <Empty text="Kein Mitglied passt zu dieser Suche." />}
         {matches.map((member) => (
           <p key={member.userId}>
             <input
@@ -320,7 +313,7 @@ function AddGrant({
         {GRANT_ROLE_HINTS[role]}
       </p>
       <p>
-        <button type="submit" disabled={busy || selected === null}>
+        <button className="button--primary" type="submit" disabled={busy || selected === null}>
           {selected === null ? 'Board freigeben' : `Board fuer ${selected.displayName} freigeben`}
         </button>
       </p>
@@ -354,7 +347,7 @@ function TransferOwnership({
   const selected = candidates.find((member) => member.userId === userId) ?? null
 
   if (candidates.length === 0) {
-    return <p>Dieser Arbeitsbereich hat kein weiteres Mitglied, das die Ownerschaft uebernehmen koennte.</p>
+    return <Empty text="Dieser Arbeitsbereich hat kein weiteres Mitglied, das die Ownerschaft uebernehmen koennte." />
   }
 
   return (
@@ -398,13 +391,14 @@ function TransferOwnership({
         </p>
       )}
       {confirming && selected !== null && (
-        <div className="notice" role="alert">
+        <ConfirmDialog danger>
           <p>
             Ownerschaft von <strong>{board.title}</strong> wirklich an <strong>{selected.displayName}</strong>{' '}
             uebertragen? Du kannst das danach nicht selbst rueckgaengig machen.
           </p>
-          <p>
+          <p className="actions">
             <button
+              className="button--danger"
               type="button"
               disabled={busy}
               onClick={() => {
@@ -425,7 +419,7 @@ function TransferOwnership({
               }}
             >
               Ja, Ownerschaft an {selected.displayName} uebertragen
-            </button>{' '}
+            </button>
             <button
               type="button"
               disabled={busy}
@@ -436,7 +430,7 @@ function TransferOwnership({
               Uebertragung abbrechen
             </button>
           </p>
-        </div>
+        </ConfirmDialog>
       )}
       {error !== null && <Notice text={error} />}
     </div>
@@ -479,7 +473,7 @@ function ShareLinks({
   return (
     <>
       <form
-        className="stack"
+        className="stack card"
         onSubmit={(event) => {
           event.preventDefault()
           setBusy(true)
@@ -543,7 +537,7 @@ function ShareLinks({
           Hoechstens {String(MAX_SHARE_LINK_HOURS)} Stunden. Ohne Angabe endet der Link erst mit dem Widerruf.
         </p>
         <p>
-          <button type="submit" disabled={busy}>
+          <button className="button--primary" type="submit" disabled={busy}>
             Gastlink anlegen
           </button>
         </p>
@@ -551,7 +545,7 @@ function ShareLinks({
       </form>
 
       {created !== null && (
-        <div className="notice" role="status">
+        <Notice kind="success">
           <p>
             <strong>Dieser Link erscheint genau einmal.</strong> Er laesst sich danach nicht erneut abrufen -
             auch nicht ueber diese Liste. Kopiere ihn jetzt; ist er verloren, widerrufe ihn und lege einen
@@ -568,8 +562,9 @@ function ShareLinks({
               }}
             />
           </div>
-          <p>
+          <p className="actions">
             <button
+              className="button--primary"
               type="button"
               onClick={() => {
                 navigator.clipboard
@@ -583,7 +578,7 @@ function ShareLinks({
               }}
             >
               Link kopieren
-            </button>{' '}
+            </button>
             <button
               type="button"
               onClick={() => {
@@ -596,31 +591,33 @@ function ShareLinks({
           </p>
           {/* Kein eigener Live-Bereich: die Rueckmeldung steht bereits im `role="status"` dieses Blocks. */}
           <p className="hint">{copied ?? ''}</p>
-        </div>
+        </Notice>
       )}
 
       {links.length === 0 ? (
-        <p>Fuer dieses Board gibt es noch keinen Gastlink.</p>
+        <Empty text="Fuer dieses Board gibt es noch keinen Gastlink." />
       ) : (
-        <table className="users">
-          <caption className="visually-hidden">Gastlinks von {board.title}</caption>
-          <thead>
-            <tr>
-              <th scope="col">Rolle</th>
-              <th scope="col">Angelegt von</th>
-              <th scope="col">Angelegt</th>
-              <th scope="col">Ablauf</th>
-              <th scope="col">Zustand</th>
-              <th scope="col">Gaeste</th>
-              <th scope="col">Aktion</th>
-            </tr>
-          </thead>
-          <tbody>
-            {links.map((link) => (
-              <ShareLinkRow key={link.id} me={me} board={board} link={link} now={now} onChanged={onChanged} />
-            ))}
-          </tbody>
-        </table>
+        <div className="table-wrap">
+          <table className="table">
+            <caption className="visually-hidden">Gastlinks von {board.title}</caption>
+            <thead>
+              <tr>
+                <th scope="col">Rolle</th>
+                <th scope="col">Angelegt von</th>
+                <th scope="col">Angelegt</th>
+                <th scope="col">Ablauf</th>
+                <th scope="col">Zustand</th>
+                <th scope="col">Gaeste</th>
+                <th scope="col">Aktion</th>
+              </tr>
+            </thead>
+            <tbody>
+              {links.map((link) => (
+                <ShareLinkRow key={link.id} me={me} board={board} link={link} now={now} onChanged={onChanged} />
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </>
   )
@@ -760,7 +757,7 @@ export function BoardShare({
     return (
       <section aria-labelledby="board-share-heading">
         <h5 id="board-share-heading">Freigaben</h5>
-        <p aria-live="polite">Freigaben werden geladen …</p>
+        <Loading text="Freigaben werden geladen …" />
         {closeButton}
       </section>
     )
@@ -810,36 +807,35 @@ export function BoardShare({
 
       <h6>Interne Freigaben</h6>
       {grants.length === 0 ? (
-        <p>
-          Es gibt keine ausdrueckliche Freigabe. Damit gilt fuer jedes Mitglied des Arbeitsbereichs die Rolle
-          seiner Mitgliedschaft.
-        </p>
+        <Empty text="Es gibt keine ausdrueckliche Freigabe. Damit gilt fuer jedes Mitglied des Arbeitsbereichs die Rolle seiner Mitgliedschaft." />
       ) : (
-        <table className="users">
-          <caption className="visually-hidden">Interne Freigaben von {board.title}</caption>
-          <thead>
-            <tr>
-              <th scope="col">Name</th>
-              <th scope="col">E-Mail</th>
-              <th scope="col">Rolle</th>
-              <th scope="col">Freigegeben</th>
-              <th scope="col">Aktion</th>
-            </tr>
-          </thead>
-          <tbody>
-            {grants.map((grant) => (
-              <GrantRow
-                key={grant.userId}
-                me={me}
-                board={board}
-                grant={grant}
-                manageable={manageable}
-                onChanged={reload}
-                onError={setActionError}
-              />
-            ))}
-          </tbody>
-        </table>
+        <div className="table-wrap">
+          <table className="table">
+            <caption className="visually-hidden">Interne Freigaben von {board.title}</caption>
+            <thead>
+              <tr>
+                <th scope="col">Name</th>
+                <th scope="col">E-Mail</th>
+                <th scope="col">Rolle</th>
+                <th scope="col">Freigegeben</th>
+                <th scope="col">Aktion</th>
+              </tr>
+            </thead>
+            <tbody>
+              {grants.map((grant) => (
+                <GrantRow
+                  key={grant.userId}
+                  me={me}
+                  board={board}
+                  grant={grant}
+                  manageable={manageable}
+                  onChanged={reload}
+                  onError={setActionError}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {manageable && (
@@ -853,10 +849,8 @@ export function BoardShare({
       )}
 
       <h6>Gastlinks</h6>
-      {links.kind === 'loading' && <p aria-live="polite">Gastlinks werden geladen …</p>}
-      {links.kind === 'unavailable' && (
-        <p>Gastlinks sieht und verwaltet der Owner dieses Boards.</p>
-      )}
+      {links.kind === 'loading' && <Loading text="Gastlinks werden geladen …" />}
+      {links.kind === 'unavailable' && <Empty text="Gastlinks sieht und verwaltet der Owner dieses Boards." />}
       {links.kind === 'failed' && <Notice text={links.message} />}
       {links.kind === 'ready' && (
         <ShareLinks me={me} board={board} links={links.links} onChanged={reload} />

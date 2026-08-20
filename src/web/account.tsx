@@ -17,17 +17,10 @@ import { useCallback, useEffect, useState } from 'react'
 import type { AuthMethodsResponse, MeResponse } from '../contracts/api.js'
 import { AUTH_LOGIN_PATH, MIN_PASSWORD_LENGTH } from '../contracts/api.js'
 import { ApiError, changePassword, fetchAuthMethods, localLogin, redeemInvitation } from './api.js'
+import { Notice } from './ui.js'
 
 function messageOf(cause: unknown, fallback: string): string {
   return cause instanceof ApiError ? cause.message : fallback
-}
-
-function Notice({ text }: { readonly text: string }) {
-  return (
-    <p className="notice notice--error" role="alert">
-      {text}
-    </p>
-  )
 }
 
 function PasswordField({
@@ -75,7 +68,7 @@ function ForcedPasswordChange({ email, onChanged }: { readonly email: string; re
 
   return (
     <form
-      className="stack"
+      className="stack card"
       onSubmit={(event) => {
         event.preventDefault()
         setBusy(true)
@@ -106,7 +99,7 @@ function ForcedPasswordChange({ email, onChanged }: { readonly email: string; re
         onChange={setNewPassword}
       />
       <p>
-        <button type="submit" disabled={busy}>
+        <button className="button--primary" type="submit" disabled={busy}>
           Passwort setzen und anmelden
         </button>
       </p>
@@ -128,7 +121,7 @@ function LocalLogin({ onSignedIn }: { readonly onSignedIn: () => void }) {
 
   return (
     <form
-      className="stack"
+      className="stack card"
       onSubmit={(event) => {
         event.preventDefault()
         setBusy(true)
@@ -169,7 +162,7 @@ function LocalLogin({ onSignedIn }: { readonly onSignedIn: () => void }) {
         onChange={setPassword}
       />
       <p>
-        <button type="submit" disabled={busy}>
+        <button className="button--primary" type="submit" disabled={busy}>
           Anmelden
         </button>
       </p>
@@ -202,7 +195,7 @@ export function LoginView({ error, onSignedIn }: { readonly error: string | null
         <section aria-labelledby="anmeldung-extern">
           <h2 id="anmeldung-extern">Oder ueber den Identity Provider</h2>
           <p>
-            <a className="button" href={AUTH_LOGIN_PATH}>
+            <a className="button button--primary" href={AUTH_LOGIN_PATH}>
               Mit Identity Provider anmelden
             </a>
           </p>
@@ -248,7 +241,7 @@ export function InviteApp() {
       <section aria-labelledby="einladung">
         <h2 id="einladung">Einladung einloesen</h2>
         <form
-          className="stack"
+          className="stack card"
           onSubmit={(event) => {
             event.preventDefault()
             setBusy(true)
@@ -273,7 +266,7 @@ export function InviteApp() {
             onChange={setPassword}
           />
           <p>
-            <button type="submit" disabled={busy}>
+            <button className="button--primary" type="submit" disabled={busy}>
               Passwort setzen und anmelden
             </button>
           </p>
@@ -331,7 +324,7 @@ export function PasswordSettings({ me, onChanged }: { readonly me: MeResponse; r
   return (
     <section aria-labelledby="passwort">
       <h2 id="passwort">Passwort</h2>
-      <form className="stack" onSubmit={submit}>
+      <form className="stack card" onSubmit={submit}>
         <PasswordField
           id="eigenes-aktuelles-passwort"
           label="Bisheriges Passwort"
@@ -347,11 +340,11 @@ export function PasswordSettings({ me, onChanged }: { readonly me: MeResponse; r
           onChange={setNewPassword}
         />
         <p>
-          <button type="submit" disabled={busy}>
+          <button className="button--primary" type="submit" disabled={busy}>
             Passwort wechseln
           </button>
         </p>
-        {done && error === null && <p className="hint">Das Passwort wurde gewechselt.</p>}
+        {done && error === null && <Notice kind="success" text="Das Passwort wurde gewechselt." />}
         {error !== null && <Notice text={error} />}
       </form>
     </section>

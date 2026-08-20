@@ -18,6 +18,7 @@ import { MAX_BOARD_TITLE_LENGTH } from '../domain/board/model.js'
 import { ApiError, createBoard, fetchBoards, fetchFolders } from './api.js'
 import { Folders } from './folders.js'
 import { Link } from './router.js'
+import { Empty, Loading, Notice } from './ui.js'
 
 /** Uebersetzt eine Serverantwort in einen Satz. 404 und 403 bekommen bewusst eigene Texte. */
 function messageOf(cause: unknown, fallback: string): string {
@@ -31,14 +32,6 @@ function messageOf(cause: unknown, fallback: string): string {
     return `Dafuer fehlt dir die Berechtigung. ${cause.message}`
   }
   return cause.message
-}
-
-function Notice({ text }: { readonly text: string }) {
-  return (
-    <p className="notice notice--error" role="alert">
-      {text}
-    </p>
-  )
 }
 
 export function Boards({
@@ -150,8 +143,8 @@ export function Boards({
               setQuery(event.target.value)
             }}
           />
-          <p>
-            <button type="submit">Boardliste filtern</button>{' '}
+          <p className="actions">
+            <button type="submit">Boardliste filtern</button>
             {term !== '' && (
               <button
                 type="button"
@@ -180,76 +173,88 @@ export function Boards({
       </div>
 
       {error !== null && (
-        <p className="notice notice--error" role="alert">
-          {error}{' '}
-          <button type="button" onClick={load}>
-            Erneut laden
-          </button>
-        </p>
+        <Notice>
+          <p>{error}</p>
+          <p className="actions">
+            <button type="button" onClick={load}>
+              Erneut laden
+            </button>
+          </p>
+        </Notice>
       )}
       {actionError !== null && actionError !== '' && <Notice text={actionError} />}
 
-      {list === null && <p aria-live="polite">Boards werden geladen …</p>}
+      {list === null && <Loading text="Boards werden geladen …" />}
       {list !== null && list.length === 0 && error === null && (
-        <p>
-          {archived
-            ? 'Es gibt keine archivierten Boards.'
-            : term !== ''
-              ? `Kein Board mit "${term}" im Titel.`
-              : folder === null
-                ? 'In diesem Arbeitsbereich gibt es noch kein Board. Lege das erste an.'
-                : 'Hier liegt noch kein Board.'}
-        </p>
+        <Empty
+          text={
+            archived
+              ? 'Es gibt keine archivierten Boards.'
+              : term !== ''
+                ? `Kein Board mit "${term}" im Titel.`
+                : folder === null
+                  ? 'In diesem Arbeitsbereich gibt es noch kein Board. Lege das erste an.'
+                  : 'Hier liegt noch kein Board.'
+          }
+        />
       )}
       {list !== null && list.length > 0 && (
-        <table className="users">
-          <caption className="visually-hidden">
-            {archived ? 'Archivierte Boards' : 'Aktive Boards'} in {workspace.name}
-          </caption>
-          <thead>
-            <tr>
-              <th scope="col">Titel</th>
-              <th scope="col">Ordner</th>
-              <th scope="col">Owner</th>
-              <th scope="col">Stand</th>
-              <th scope="col">Geaendert</th>
-              <th scope="col">Aktion</th>
-            </tr>
-          </thead>
-          <tbody>
-            {list.map((board) => (
-              <tr key={board.id}>
-                <td>
-                  <Link route={{ kind: 'boarddetails', workspaceId: workspace.id, boardId: board.id }}>
-                    {board.title}
-                  </Link>
-                </td>
-                <td>{folders.find((entry) => entry.id === board.folderId)?.name ?? 'Arbeitsbereich'}</td>
-                <td>{board.ownerDisplayName}</td>
-                <td>{board.sceneVersion === 0 ? 'noch leer' : `Version ${String(board.sceneVersion)}`}</td>
-                <td>{new Date(board.updatedAt).toLocaleDateString('de-DE')}</td>
-                <td>
-                  <Link
-                    className="button"
-                    route={{ kind: 'board', workspaceId: workspace.id, boardId: board.id, version: null }}
-                  >
-                    {board.title} oeffnen
-                  </Link>{' '}
-                  <Link route={{ kind: 'boarddetails', workspaceId: workspace.id, boardId: board.id }}>
-                    Details von {board.title}
-                  </Link>
-                </td>
+        <div className="table-wrap">
+          <table className="table">
+            <caption className="visually-hidden">
+              {archived ? 'Archivierte Boards' : 'Aktive Boards'} in {workspace.name}
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">Titel</th>
+                <th scope="col">Ordner</th>
+                <th scope="col">Owner</th>
+                <th scope="col">Stand</th>
+                <th scope="col">Geaendert</th>
+                <th scope="col">Aktion</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {list.map((board) => (
+                <tr key={board.id}>
+                  <td>
+                    <Link route={{ kind: 'boarddetails', workspaceId: workspace.id, boardId: board.id }}>
+                      {board.title}
+                    </Link>
+                  </td>
+                  <td>{folders.find((entry) => entry.id === board.folderId)?.name ?? 'Arbeitsbereich'}</td>
+                  <td>{board.ownerDisplayName}</td>
+                  <td>{board.sceneVersion === 0 ? 'noch leer' : `Version ${String(board.sceneVersion)}`}</td>
+                  <td>{new Date(board.updatedAt).toLocaleDateString('de-DE')}</td>
+                  <td>
+                    <span className="actions">
+                      <Link
+                        className="button button--primary"
+                        route={{ kind: 'board', workspaceId: workspace.id, boardId: board.id, version: null }}
+                      >
+                        {board.title} oeffnen
+                      </Link>
+                      <Link
+                        className="button"
+                        route={{ kind: 'boarddetails', workspaceId: workspace.id, boardId: board.id }}
+                      >
+                        Details von {board.title}
+                      </Link>
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {/* Ein Board anlegen darf jedes Mitglied eines aktiven Arbeitsbereichs; dafuer gibt es noch keine
           Boardrolle, ueber die zu entscheiden waere. */}
+      {workspaceActive && !archived && <h4>Neues Board anlegen</h4>}
       {workspaceActive && !archived && (
         <form
-          className="stack"
+          className="stack card"
           onSubmit={(event) => {
             event.preventDefault()
             setCreating(true)
@@ -280,7 +285,7 @@ export function Boards({
             />
           </div>
           <p>
-            <button type="submit" disabled={creating || newTitle.trim().length === 0}>
+            <button className="button--primary" type="submit" disabled={creating || newTitle.trim().length === 0}>
               Board anlegen
             </button>
           </p>

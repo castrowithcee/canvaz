@@ -16,6 +16,7 @@ import { BOARD_FOLDER_ROOT } from '../contracts/api.js'
 import { MAX_FOLDER_NAME_LENGTH } from '../domain/folder/model.js'
 import { ApiError, createFolder, moveFolder, removeFolder, renameFolder } from './api.js'
 import { Link } from './router.js'
+import { Empty, Notice } from './ui.js'
 
 /** Uebersetzt eine Serverantwort in einen Satz. 404 und 403 bekommen bewusst eigene Texte. */
 export function folderMessageOf(cause: unknown, fallback: string): string {
@@ -230,10 +231,10 @@ function FolderRow({
                 setName(event.target.value)
               }}
             />
-            <p>
-              <button type="submit" disabled={busy || name.trim().length === 0}>
+            <p className="actions">
+              <button className="button--primary" type="submit" disabled={busy || name.trim().length === 0}>
                 Namen speichern
-              </button>{' '}
+              </button>
               <button
                 type="button"
                 onClick={() => {
@@ -267,7 +268,7 @@ function FolderRow({
       </td>
       <td>
         {!renaming && (
-          <>
+          <span className="actions">
             <button
               type="button"
               disabled={busy}
@@ -276,7 +277,7 @@ function FolderRow({
               }}
             >
               {folder.name} umbenennen
-            </button>{' '}
+            </button>
             <button
               type="button"
               disabled={busy}
@@ -286,7 +287,7 @@ function FolderRow({
             >
               {folder.name} entfernen
             </button>
-          </>
+          </span>
         )}
       </td>
     </tr>
@@ -327,55 +328,51 @@ export function Folders({
     <section aria-labelledby="folders-heading">
       <h4 id="folders-heading">Ordner</h4>
 
-      {error !== null && error !== '' && (
-        <p className="notice notice--error" role="alert">
-          {error}
-        </p>
-      )}
+      {error !== null && error !== '' && <Notice text={error} />}
 
       {folders.length === 0 ? (
-        <p className="hint">
-          Noch kein Ordner. Alle Boards liegen unmittelbar im Arbeitsbereich.
-        </p>
+        <Empty text="Noch kein Ordner. Alle Boards liegen unmittelbar im Arbeitsbereich." />
       ) : (
-        <table className="users">
-          <caption className="visually-hidden">Ordner in {workspace.name}</caption>
-          <thead>
-            <tr>
-              <th scope="col">Ordner</th>
-              <th scope="col">Liegt in</th>
-              <th scope="col">Aktion</th>
-            </tr>
-          </thead>
-          <tbody>
-            {orderFolders(folders).map((entry) =>
-              editable ? (
-                <FolderRow
-                  key={entry.folder.id}
-                  me={me}
-                  entry={entry}
-                  folders={folders}
-                  onChanged={onChanged}
-                  onError={setError}
-                />
-              ) : (
-                <tr key={entry.folder.id}>
-                  <td style={{ paddingLeft: `${String(entry.depth)}rem` }}>{entry.folder.name}</td>
-                  <td>
-                    {folders.find((candidate) => candidate.id === entry.folder.parentId)?.name ??
-                      'Arbeitsbereich'}
-                  </td>
-                  <td>—</td>
-                </tr>
-              ),
-            )}
-          </tbody>
-        </table>
+        <div className="table-wrap">
+          <table className="table">
+            <caption className="visually-hidden">Ordner in {workspace.name}</caption>
+            <thead>
+              <tr>
+                <th scope="col">Ordner</th>
+                <th scope="col">Liegt in</th>
+                <th scope="col">Aktion</th>
+              </tr>
+            </thead>
+            <tbody>
+              {orderFolders(folders).map((entry) =>
+                editable ? (
+                  <FolderRow
+                    key={entry.folder.id}
+                    me={me}
+                    entry={entry}
+                    folders={folders}
+                    onChanged={onChanged}
+                    onError={setError}
+                  />
+                ) : (
+                  <tr key={entry.folder.id}>
+                    <td style={{ paddingLeft: `${String(entry.depth)}rem` }}>{entry.folder.name}</td>
+                    <td>
+                      {folders.find((candidate) => candidate.id === entry.folder.parentId)?.name ??
+                        'Arbeitsbereich'}
+                    </td>
+                    <td>—</td>
+                  </tr>
+                ),
+              )}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {editable && (
         <form
-          className="stack"
+          className="stack card"
           onSubmit={(event) => {
             event.preventDefault()
             setCreating(true)
@@ -413,7 +410,7 @@ export function Folders({
             onChange={setParentId}
           />
           <p>
-            <button type="submit" disabled={creating || newName.trim().length === 0}>
+            <button className="button--primary" type="submit" disabled={creating || newName.trim().length === 0}>
               Ordner anlegen
             </button>
           </p>

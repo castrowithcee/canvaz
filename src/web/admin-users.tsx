@@ -24,17 +24,10 @@ import {
   revokeUserInvitation,
   setUserStatus,
 } from './api.js'
+import { Empty, Loading, Notice } from './ui.js'
 
 function messageOf(cause: unknown, fallback: string): string {
   return cause instanceof ApiError ? cause.message : fallback
-}
-
-function Notice({ text }: { readonly text: string }) {
-  return (
-    <p className="notice notice--error" role="alert">
-      {text}
-    </p>
-  )
 }
 
 function statusLabel(status: AdminUserView['status']): string {
@@ -51,11 +44,12 @@ function accessLabel(user: AdminUserView): string {
 /** Ein frisch erzeugter Einladungslink. Er steht genau hier und wird nirgends aufbewahrt. */
 function InvitationHint({ url }: { readonly url: string }) {
   return (
-    <p className="notice">
-      Einladungslink (gilt genau einmal, ausserhalb der Anwendung uebergeben):
-      <br />
-      <code>{url}</code>
-    </p>
+    <Notice kind="success">
+      <p>Einladungslink (gilt genau einmal, ausserhalb der Anwendung uebergeben):</p>
+      <p>
+        <code>{url}</code>
+      </p>
+    </Notice>
   )
 }
 
@@ -70,7 +64,7 @@ function CreateAccount({ me, onCreated }: { readonly me: MeResponse; readonly on
 
   return (
     <form
-      className="stack"
+      className="stack card"
       onSubmit={(event) => {
         event.preventDefault()
         setBusy(true)
@@ -152,7 +146,7 @@ function CreateAccount({ me, onCreated }: { readonly me: MeResponse; readonly on
         </div>
       )}
       <p>
-        <button type="submit" disabled={busy}>
+        <button className="button--primary" type="submit" disabled={busy}>
           Konto anlegen
         </button>
       </p>
@@ -178,7 +172,7 @@ function ResetPassword({
 
   return (
     <form
-      className="stack"
+      className="stack card"
       onSubmit={(event) => {
         event.preventDefault()
         setBusy(true)
@@ -211,7 +205,7 @@ function ResetPassword({
         />
       </div>
       <p>
-        <button type="submit" disabled={busy}>
+        <button className="button--primary" type="submit" disabled={busy}>
           Passwort setzen
         </button>
       </p>
@@ -277,9 +271,14 @@ export function AdminUsers({ me }: { readonly me: MeResponse }) {
     <section aria-labelledby="admin-heading">
       <h2 id="admin-heading">Systemadministration</h2>
       {error !== null && (
-        <p className="notice notice--error" role="alert">
-          {error} <button type="button" onClick={load}>Erneut laden</button>
-        </p>
+        <Notice>
+          <p>{error}</p>
+          <p className="actions">
+            <button type="button" onClick={load}>
+              Erneut laden
+            </button>
+          </p>
+        </Notice>
       )}
 
       <h3>Konto anlegen</h3>
@@ -287,111 +286,115 @@ export function AdminUsers({ me }: { readonly me: MeResponse }) {
 
       <h3>Konten</h3>
       {invitation !== null && <InvitationHint url={invitation} />}
-      {users === null && <p aria-live="polite">Nutzer werden geladen …</p>}
-      {users !== null && users.length === 0 && error === null && <p>Es gibt noch keine Nutzer.</p>}
+      {users === null && <Loading text="Nutzer werden geladen …" />}
+      {users !== null && users.length === 0 && error === null && <Empty text="Es gibt noch keine Nutzer." />}
       {users !== null && users.length > 0 && (
-        <table className="users">
-          <caption className="visually-hidden">Alle Nutzer dieser Instanz</caption>
-          <thead>
-            <tr>
-              <th scope="col">Anzeigename</th>
-              <th scope="col">E-Mail</th>
-              <th scope="col">Status</th>
-              <th scope="col">Rolle</th>
-              <th scope="col">Zugang</th>
-              <th scope="col">Aktion</th>
-            </tr>
-          </thead>
-          <tbody>
-            {users.map((user) => {
-              const isSelf = user.id === me.user.id
-              const activate = user.status !== 'active'
-              // Ein gesperrter Knopf ist nicht fokussierbar, ein `title` daran wuerde nie vorgelesen. Die
-              // Begruendung steht deshalb als Text daneben und ist dem Knopf zugeordnet.
-              const reasonId = isSelf && !activate ? `sperrgrund-${user.id}` : undefined
-              const busy = pendingId === user.id
-              return (
-                <tr key={user.id}>
-                  <td>{user.displayName}</td>
-                  <td>{user.email ?? '—'}</td>
-                  <td>{statusLabel(user.status)}</td>
-                  <td>{user.isSystemAdmin ? 'Systemadmin' : 'Nutzer'}</td>
-                  <td>{accessLabel(user)}</td>
-                  <td>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        run(
-                          user.id,
-                          setUserStatus(me.csrfToken, {
-                            userId: user.id,
-                            status: activate ? 'active' : 'deactivated',
-                          }),
-                          'Die Aenderung konnte nicht gespeichert werden.',
-                        )
-                      }}
-                      disabled={(isSelf && !activate) || busy}
-                      aria-describedby={reasonId}
-                    >
-                      {activate ? `${user.displayName} aktivieren` : `${user.displayName} deaktivieren`}
-                    </button>{' '}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        invite(user)
-                      }}
-                      disabled={busy}
-                      aria-label={`Einladung fuer ${user.displayName} erzeugen`}
-                    >
-                      Einladung erzeugen
-                    </button>{' '}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setResetFor(resetFor === user.id ? null : user.id)
-                      }}
-                      disabled={busy}
-                      aria-label={`Passwort von ${user.displayName} zuruecksetzen`}
-                    >
-                      Passwort zuruecksetzen
-                    </button>{' '}
-                    {user.invitationExpiresAt !== null && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          run(
-                            user.id,
-                            revokeUserInvitation(me.csrfToken, user.id),
-                            'Die Einladung konnte nicht widerrufen werden.',
-                          )
-                        }}
-                        disabled={busy}
-                        aria-label={`Einladung fuer ${user.displayName} widerrufen`}
-                      >
-                        Einladung widerrufen
-                      </button>
-                    )}
-                    {reasonId !== undefined && (
-                      <p className="hint" id={reasonId}>
-                        Ein Systemadmin kann sich nicht selbst deaktivieren.
-                      </p>
-                    )}
-                    {resetFor === user.id && (
-                      <ResetPassword
-                        me={me}
-                        user={user}
-                        onDone={() => {
-                          setResetFor(null)
-                          load()
-                        }}
-                      />
-                    )}
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
+        <div className="table-wrap">
+          <table className="table">
+            <caption className="visually-hidden">Alle Nutzer dieser Instanz</caption>
+            <thead>
+              <tr>
+                <th scope="col">Anzeigename</th>
+                <th scope="col">E-Mail</th>
+                <th scope="col">Status</th>
+                <th scope="col">Rolle</th>
+                <th scope="col">Zugang</th>
+                <th scope="col">Aktion</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.map((user) => {
+                const isSelf = user.id === me.user.id
+                const activate = user.status !== 'active'
+                // Ein gesperrter Knopf ist nicht fokussierbar, ein `title` daran wuerde nie vorgelesen. Die
+                // Begruendung steht deshalb als Text daneben und ist dem Knopf zugeordnet.
+                const reasonId = isSelf && !activate ? `sperrgrund-${user.id}` : undefined
+                const busy = pendingId === user.id
+                return (
+                  <tr key={user.id}>
+                    <td>{user.displayName}</td>
+                    <td>{user.email ?? '—'}</td>
+                    <td>{statusLabel(user.status)}</td>
+                    <td>{user.isSystemAdmin ? 'Systemadmin' : 'Nutzer'}</td>
+                    <td>{accessLabel(user)}</td>
+                    <td>
+                      <span className="actions">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            run(
+                              user.id,
+                              setUserStatus(me.csrfToken, {
+                                userId: user.id,
+                                status: activate ? 'active' : 'deactivated',
+                              }),
+                              'Die Aenderung konnte nicht gespeichert werden.',
+                            )
+                          }}
+                          disabled={(isSelf && !activate) || busy}
+                          aria-describedby={reasonId}
+                        >
+                          {activate ? `${user.displayName} aktivieren` : `${user.displayName} deaktivieren`}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            invite(user)
+                          }}
+                          disabled={busy}
+                          aria-label={`Einladung fuer ${user.displayName} erzeugen`}
+                        >
+                          Einladung erzeugen
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setResetFor(resetFor === user.id ? null : user.id)
+                          }}
+                          disabled={busy}
+                          aria-label={`Passwort von ${user.displayName} zuruecksetzen`}
+                        >
+                          Passwort zuruecksetzen
+                        </button>
+                        {user.invitationExpiresAt !== null && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              run(
+                                user.id,
+                                revokeUserInvitation(me.csrfToken, user.id),
+                                'Die Einladung konnte nicht widerrufen werden.',
+                              )
+                            }}
+                            disabled={busy}
+                            aria-label={`Einladung fuer ${user.displayName} widerrufen`}
+                          >
+                            Einladung widerrufen
+                          </button>
+                        )}
+                      </span>
+                      {reasonId !== undefined && (
+                        <p className="hint" id={reasonId}>
+                          Ein Systemadmin kann sich nicht selbst deaktivieren.
+                        </p>
+                      )}
+                      {resetFor === user.id && (
+                        <ResetPassword
+                          me={me}
+                          user={user}
+                          onDone={() => {
+                            setResetFor(null)
+                            load()
+                          }}
+                        />
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
     </section>
   )

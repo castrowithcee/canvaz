@@ -25,6 +25,7 @@ import type { GuestSessionResponse } from '../contracts/api.js'
 import { MAX_GUEST_DISPLAY_NAME_LENGTH } from '../domain/board/guest.js'
 import { ApiError, fetchGuestSession, joinBoardAsGuest } from './api.js'
 import { BoardEditor } from './board/lazy-editor.js'
+import { Loading, Notice } from './ui.js'
 
 /** Das Token steht im Fragment und ist base64url kodiert; es braucht keine Dekodierung. */
 function readTokenFromFragment(): string | null {
@@ -77,7 +78,7 @@ function JoinForm({
         den Mitbearbeitern dieses Boards. Ein Konto brauchst du dafuer nicht.
       </p>
       <form
-        className="stack"
+        className="stack card"
         onSubmit={(event) => {
           event.preventDefault()
           setBusy(true)
@@ -119,15 +120,11 @@ function JoinForm({
           eine Board und endet von selbst.
         </p>
         <p>
-          <button type="submit" disabled={busy || displayName.trim().length === 0}>
+          <button className="button--primary" type="submit" disabled={busy || displayName.trim().length === 0}>
             Board als Gast oeffnen
           </button>
         </p>
-        {error !== null && (
-          <p className="notice notice--error" role="alert">
-            {error}
-          </p>
-        )}
+        {error !== null && <Notice text={error} />}
       </form>
     </>
   )
@@ -160,17 +157,15 @@ export function GuestApp() {
   if (state.kind === 'checking') {
     return (
       <Shell>
-        <p aria-live="polite">Gastzugang wird geprueft …</p>
+        <Loading text="Gastzugang wird geprueft …" />
       </Shell>
     )
   }
   if (state.kind === 'failed') {
     return (
       <Shell>
-        <p className="notice notice--error" role="alert">
-          {state.message}
-        </p>
-        <p>
+        <Notice text={state.message} />
+        <p className="actions">
           <button type="button" onClick={load}>
             Erneut versuchen
           </button>
@@ -181,9 +176,7 @@ export function GuestApp() {
   if (state.kind === 'invalid') {
     return (
       <Shell>
-        <p className="notice notice--error" role="alert">
-          Dieser Gastzugang gilt nicht mehr. Er ist abgelaufen oder wurde widerrufen.
-        </p>
+        <Notice text="Dieser Gastzugang gilt nicht mehr. Er ist abgelaufen oder wurde widerrufen." />
         <p>
           Oeffne den Freigabelink erneut, den du bekommen hast. Gilt auch er nicht mehr, braucht es einen
           neuen - ein Link laesst sich nicht wiederherstellen.
@@ -196,9 +189,7 @@ export function GuestApp() {
     if (token === null) {
       return (
         <Shell>
-          <p className="notice notice--error" role="alert">
-            In dieser Adresse steht kein Freigabelink.
-          </p>
+          <Notice text="In dieser Adresse steht kein Freigabelink." />
         </Shell>
       )
     }
@@ -220,7 +211,7 @@ export function GuestApp() {
     <Suspense
       fallback={
         <Shell>
-          <p aria-live="polite">Editor wird geladen …</p>
+          <Loading text="Editor wird geladen …" />
         </Shell>
       }
     >

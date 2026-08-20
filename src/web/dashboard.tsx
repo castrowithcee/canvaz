@@ -20,6 +20,7 @@ import { DASHBOARD_FILTERS } from '../contracts/api.js'
 import { MAX_BOARD_TITLE_LENGTH } from '../domain/board/model.js'
 import { ApiError, createBoard, fetchDashboard } from './api.js'
 import { Link, navigate } from './router.js'
+import { Empty, Loading, Notice } from './ui.js'
 
 /** Beschriftung der vier Filter. Dieselbe Reihenfolge wie `DASHBOARD_FILTERS`. */
 const FILTER_LABELS: Readonly<Record<DashboardFilterView, string>> = {
@@ -115,7 +116,7 @@ export function Dashboard({
           deshalb zuerst einen an, danach entsteht dein erstes Board hier.
         </p>
         <p>
-          <Link className="button" route={{ kind: 'arbeitsbereiche' }}>
+          <Link className="button button--primary" route={{ kind: 'arbeitsbereiche' }}>
             Ersten Arbeitsbereich anlegen
           </Link>
         </p>
@@ -155,8 +156,8 @@ export function Dashboard({
             setQuery(event.target.value)
           }}
         />
-        <p>
-          <button type="submit">Liste filtern</button>{' '}
+        <p className="actions">
+          <button type="submit">Liste filtern</button>
           {term !== '' && (
             <button
               type="button"
@@ -172,68 +173,75 @@ export function Dashboard({
       </form>
 
       {error !== null && (
-        <p className="notice notice--error" role="alert">
-          {error}{' '}
-          <button type="button" onClick={load}>
-            Erneut laden
-          </button>
-        </p>
+        <Notice>
+          <p>{error}</p>
+          <p className="actions">
+            <button type="button" onClick={load}>
+              Erneut laden
+            </button>
+          </p>
+        </Notice>
       )}
 
-      {boards === null && <p aria-live="polite">Boards werden geladen …</p>}
+      {boards === null && <Loading text="Boards werden geladen …" />}
       {boards !== null && boards.length === 0 && error === null && (
-        <p>
-          {term !== ''
-            ? `Kein Board mit "${term}" im Titel.`
-            : filter === null
-              ? 'In deinen Arbeitsbereichen gibt es noch kein Board. Lege das erste an.'
-              : `Kein Board unter "${FILTER_LABELS[filter]}".`}
-        </p>
+        <Empty
+          text={
+            term !== ''
+              ? `Kein Board mit "${term}" im Titel.`
+              : filter === null
+                ? 'In deinen Arbeitsbereichen gibt es noch kein Board. Lege das erste an.'
+                : `Kein Board unter "${FILTER_LABELS[filter]}".`
+          }
+        />
       )}
       {boards !== null && boards.length > 0 && (
-        <table className="users">
-          <caption className="visually-hidden">
-            Zuletzt geaenderte Boards{filter === null ? '' : `, gefiltert nach "${FILTER_LABELS[filter]}"`}
-          </caption>
-          <thead>
-            <tr>
-              <th scope="col">Titel</th>
-              <th scope="col">Arbeitsbereich</th>
-              <th scope="col">Zugriff</th>
-              <th scope="col">Meine Rolle</th>
-              <th scope="col">Geaendert</th>
-            </tr>
-          </thead>
-          <tbody>
-            {boards.map((board) => (
-              <tr key={board.id}>
-                <td>
-                  <Link
-                    route={{
-                      kind: 'board',
-                      workspaceId: board.workspaceId,
-                      boardId: board.id,
-                      version: null,
-                    }}
-                  >
-                    {board.title}
-                  </Link>
-                </td>
-                <td>{board.workspaceName}</td>
-                <td>
-                  {ORIGIN_LABELS[board.accessOrigin]}
-                  <ShareMarks board={board} />
-                </td>
-                <td>{ROLE_LABELS[board.viewerRole]}</td>
-                <td>{new Date(board.updatedAt).toLocaleString('de-DE')}</td>
+        <div className="table-wrap">
+          <table className="table">
+            <caption className="visually-hidden">
+              Zuletzt geaenderte Boards{filter === null ? '' : `, gefiltert nach "${FILTER_LABELS[filter]}"`}
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">Titel</th>
+                <th scope="col">Arbeitsbereich</th>
+                <th scope="col">Zugriff</th>
+                <th scope="col">Meine Rolle</th>
+                <th scope="col">Geaendert</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {boards.map((board) => (
+                <tr key={board.id}>
+                  <td>
+                    <Link
+                      route={{
+                        kind: 'board',
+                        workspaceId: board.workspaceId,
+                        boardId: board.id,
+                        version: null,
+                      }}
+                    >
+                      {board.title}
+                    </Link>
+                  </td>
+                  <td>{board.workspaceName}</td>
+                  <td>
+                    {ORIGIN_LABELS[board.accessOrigin]}
+                    <ShareMarks board={board} />
+                  </td>
+                  <td>{ROLE_LABELS[board.viewerRole]}</td>
+                  <td>{new Date(board.updatedAt).toLocaleString('de-DE')}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
+      {target !== null && <h3>Neues Board anlegen</h3>}
       {target !== null && (
         <form
-          className="stack"
+          className="stack card"
           onSubmit={(event) => {
             event.preventDefault()
             setCreating(true)
@@ -284,15 +292,11 @@ export function Dashboard({
             </select>
           </div>
           <p>
-            <button type="submit" disabled={creating || title.trim().length === 0}>
+            <button className="button--primary" type="submit" disabled={creating || title.trim().length === 0}>
               Board anlegen und oeffnen
             </button>
           </p>
-          {createError !== null && (
-            <p className="notice notice--error" role="alert">
-              {createError}
-            </p>
-          )}
+          {createError !== null && <Notice text={createError} />}
         </form>
       )}
       {target === null && (

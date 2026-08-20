@@ -67,6 +67,7 @@ import {
   saveBoardScene,
   uploadBoardAsset,
 } from '../api.js'
+import { Loading, Notice } from '../ui.js'
 import type { BoardEditorPort, EditorPeer } from './board-editor-port.js'
 import { BoardCanvas } from './excalidraw-adapter.js'
 import { connectBoardRealtime } from './realtime-client.js'
@@ -626,16 +627,14 @@ export function BoardEditor({
   if (state.kind === 'loading') {
     return (
       <Frame title="Board" onClose={onClose}>
-        <p aria-live="polite">Board wird geladen …</p>
+        <Loading text="Board wird geladen …" />
       </Frame>
     )
   }
   if (state.kind === 'not-found') {
     return (
       <Frame title="Board nicht gefunden" onClose={onClose}>
-        <p className="notice notice--error" role="alert">
-          Dieses Board ist nicht (mehr) fuer dich freigegeben oder existiert nicht.
-        </p>
+        <Notice text="Dieses Board ist nicht (mehr) fuer dich freigegeben oder existiert nicht." />
         {guestName !== null && (
           // Die haeufigste Ursache auf dem Gastweg: eine interne Sitzung im selben Browser. Sie hat Vorrang,
           // und dann entscheidet die eigene Berechtigung statt des Freigabelinks.
@@ -651,21 +650,21 @@ export function BoardEditor({
   if (state.kind === 'forbidden') {
     return (
       <Frame title="Kein Zugriff" onClose={onClose}>
-        <p className="notice notice--error" role="alert">
-          Dafuer fehlt dir die Berechtigung. {state.message}
-        </p>
+        <Notice text={`Dafuer fehlt dir die Berechtigung. ${state.message}`} />
       </Frame>
     )
   }
   if (state.kind === 'failed') {
     return (
       <Frame title="Board" onClose={onClose}>
-        <p className="notice notice--error" role="alert">
-          {state.message}{' '}
-          <button type="button" onClick={load}>
-            Erneut laden
-          </button>
-        </p>
+        <Notice>
+          <p>{state.message}</p>
+          <p className="actions">
+            <button type="button" onClick={load}>
+              Erneut laden
+            </button>
+          </p>
+        </Notice>
       </Frame>
     )
   }
@@ -703,7 +702,12 @@ export function BoardEditor({
             : `Mit dabei: ${peers.map((peer) => peer.displayName).join(', ')}`}
         </p>
         {!viewOnly && (
-          <button type="button" onClick={persist} disabled={save.kind === 'saving' || adapter === null}>
+          <button
+            className="button--primary"
+            type="button"
+            onClick={persist}
+            disabled={save.kind === 'saving' || adapter === null}
+          >
             Board speichern
           </button>
         )}
@@ -719,37 +723,33 @@ export function BoardEditor({
         )}
       </header>
       {accessNote !== null && (
-        <p className="notice" role="status">
-          {accessNote}{' '}
-          <button
-            type="button"
-            onClick={() => {
-              setAccessNote(null)
-            }}
-          >
-            Hinweis ausblenden
-          </button>
-        </p>
+        <Notice kind="info">
+          <p>{accessNote}</p>
+          <p className="actions">
+            <button
+              type="button"
+              onClick={() => {
+                setAccessNote(null)
+              }}
+            >
+              Hinweis ausblenden
+            </button>
+          </p>
+        </Notice>
       )}
-      {assetProblem !== null && (
-        <p className="notice notice--error" role="alert">
-          {assetProblem}
-        </p>
-      )}
+      {assetProblem !== null && <Notice text={assetProblem} />}
       {rejected !== null && (
-        <p className="notice notice--error" role="alert">
-          Der Server hat eine Nachricht abgelehnt: {rejected}{' '}
-          <button type="button" onClick={() => setRejected(null)}>
-            Hinweis ausblenden
-          </button>
-        </p>
+        <Notice>
+          <p>Der Server hat eine Nachricht abgelehnt: {rejected}</p>
+          <p className="actions">
+            <button type="button" onClick={() => setRejected(null)}>
+              Hinweis ausblenden
+            </button>
+          </p>
+        </Notice>
       )}
       {save.kind === 'conflict' && (
-        <p className="notice notice--error" role="alert">
-          Dieses Board wurde inzwischen an anderer Stelle gespeichert. Deine Zeichnung ist noch da, wurde aber
-          nicht uebernommen und hat nichts ueberschrieben. Lade das Board neu, um auf dem aktuellen Stand
-          weiterzuarbeiten.
-        </p>
+        <Notice text="Dieses Board wurde inzwischen an anderer Stelle gespeichert. Deine Zeichnung ist noch da, wurde aber nicht uebernommen und hat nichts ueberschrieben. Lade das Board neu, um auf dem aktuellen Stand weiterzuarbeiten." />
       )}
       <div className="board__canvas">
         <BoardCanvas
@@ -778,8 +778,8 @@ function Frame({
       <h2 id="board-frame-heading">{title}</h2>
       {children}
       {onClose !== null && (
-        <p>
-          <button type="button" onClick={onClose}>
+        <p className="actions">
+          <button className="button--primary" type="button" onClick={onClose}>
             Zurueck zur Boardliste
           </button>
         </p>

@@ -30,6 +30,7 @@ import { FolderTree } from './folders.js'
 import { GuestApp } from './guest.js'
 import type { AppRoute } from './router.js'
 import { Link, navigateBack, useRoute } from './router.js'
+import { Empty, Loading, Notice } from './ui.js'
 import { WorkspaceMembers, WorkspaceOverview, WorkspaceSettings } from './workspaces.js'
 
 const LOGIN_ERROR_TEXTS: Readonly<Record<LoginErrorCode, string>> = {
@@ -58,14 +59,6 @@ function clearLoginError(): void {
   window.history.replaceState(window.history.state, '', url.pathname + url.search)
 }
 
-function Notice({ text }: { readonly text: string }) {
-  return (
-    <p className="notice notice--error" role="alert">
-      {text}
-    </p>
-  )
-}
-
 /** Eine benannte Ansicht statt eines leeren Bildschirms - fuer unbekannte, fremde und fehlende Objekte. */
 function NotFound({ text }: { readonly text: string }) {
   return (
@@ -73,7 +66,7 @@ function NotFound({ text }: { readonly text: string }) {
       <h2 id="nicht-gefunden">Diese Ansicht gibt es nicht</h2>
       <p>{text}</p>
       <p>
-        <Link className="button" route={{ kind: 'einstieg', filter: null }}>
+        <Link className="button button--primary" route={{ kind: 'einstieg', filter: null }}>
           Zum Dashboard
         </Link>
       </p>
@@ -195,7 +188,7 @@ function Sidebar({
   return (
     <nav className="app__sidebar" aria-label="Arbeitsbereich und Boards">
       <h2 className="sidebar__title">Arbeitsbereiche</h2>
-      {workspaces.length === 0 && <p className="hint">Noch kein Arbeitsbereich.</p>}
+      {workspaces.length === 0 && <Empty text="Noch kein Arbeitsbereich." />}
       <ul className="sidebar__list">
         {workspaces.map((workspace) => (
           <li key={workspace.id}>
@@ -225,17 +218,19 @@ function Sidebar({
           />
 
           <h2 className="sidebar__title">Boards in {active.name}</h2>
-          {boards === null && <p aria-live="polite">Boards werden geladen …</p>}
+          {boards === null && <Loading text="Boards werden geladen …" />}
           {error !== null && (
-            <p className="notice notice--error" role="alert">
-              {error}{' '}
-              <button type="button" onClick={load}>
-                Erneut laden
-              </button>
-            </p>
+            <Notice>
+              <p>{error}</p>
+              <p className="actions">
+                <button type="button" onClick={load}>
+                  Erneut laden
+                </button>
+              </p>
+            </Notice>
           )}
           {boards !== null && boards.length === 0 && error === null && (
-            <p className="hint">Noch kein aktives Board.</p>
+            <Empty text="Noch kein aktives Board." />
           )}
           <ul className="sidebar__list">
             {(boards ?? []).map((board) => (
@@ -411,9 +406,9 @@ function Shell({
 
   if (workspaces === null) {
     return (
-      <main className="shell" aria-live="polite">
+      <main className="shell">
         <h1>Canvaz</h1>
-        <p>Arbeitsbereiche werden geladen …</p>
+        <Loading text="Arbeitsbereiche werden geladen …" />
       </main>
     )
   }
@@ -429,9 +424,9 @@ function Shell({
     return (
       <Suspense
         fallback={
-          <main className="shell" aria-live="polite">
+          <main className="shell">
             <h1>Canvaz</h1>
-            <p>Editor wird geladen …</p>
+            <Loading text="Editor wird geladen …" />
           </main>
         }
       >
@@ -452,16 +447,21 @@ function Shell({
 
   return (
     <div className="app">
+      <a className="skip" href="#inhalt">
+        Zum Inhalt springen
+      </a>
       <Header me={me} route={route} onSignedOut={onSignedOut} />
       <Sidebar workspaces={workspaces} active={activeWorkspace} route={route} boardsToken={boardsToken} />
-      <main className="app__main">
+      <main className="app__main" id="inhalt" tabIndex={-1}>
         {error !== null && (
-          <p className="notice notice--error" role="alert">
-            {error}{' '}
-            <button type="button" onClick={load}>
-              Erneut laden
-            </button>
-          </p>
+          <Notice>
+            <p>{error}</p>
+            <p className="actions">
+              <button type="button" onClick={load}>
+                Erneut laden
+              </button>
+            </p>
+          </Notice>
         )}
         <Content
           me={me}
@@ -512,9 +512,9 @@ function MemberApp() {
 
   if (state.kind === 'loading') {
     return (
-      <main className="shell" aria-live="polite">
+      <main className="shell">
         <h1>Canvaz</h1>
-        <p>Sitzung wird geprueft …</p>
+        <Loading text="Sitzung wird geprueft …" />
       </main>
     )
   }
@@ -522,10 +522,8 @@ function MemberApp() {
     return (
       <main className="shell">
         <h1>Canvaz</h1>
-        <p className="notice notice--error" role="alert">
-          {state.message}
-        </p>
-        <p>
+        <Notice text={state.message} />
+        <p className="actions">
           <button type="button" onClick={load}>
             Erneut versuchen
           </button>

@@ -29,6 +29,7 @@ import {
   setWorkspaceStatus,
 } from './api.js'
 import { Link } from './router.js'
+import { Empty, Loading, Notice } from './ui.js'
 
 const ROLE_LABELS: Readonly<Record<WorkspaceRoleView, string>> = {
   owner: 'Owner',
@@ -55,14 +56,6 @@ function messageOf(cause: unknown, fallback: string): string {
   return cause.message
 }
 
-function Notice({ text }: { readonly text: string }) {
-  return (
-    <p className="notice notice--error" role="alert">
-      {text}
-    </p>
-  )
-}
-
 function CreateWorkspace({ me, onCreated }: { readonly me: MeResponse; readonly onCreated: () => void }) {
   const [name, setName] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -70,7 +63,7 @@ function CreateWorkspace({ me, onCreated }: { readonly me: MeResponse; readonly 
 
   return (
     <form
-      className="stack"
+      className="stack card"
       onSubmit={(event) => {
         event.preventDefault()
         setBusy(true)
@@ -102,7 +95,7 @@ function CreateWorkspace({ me, onCreated }: { readonly me: MeResponse; readonly 
         />
       </div>
       <p>
-        <button type="submit" disabled={busy || name.trim().length === 0}>
+        <button className="button--primary" type="submit" disabled={busy || name.trim().length === 0}>
           Arbeitsbereich anlegen
         </button>
       </p>
@@ -163,7 +156,7 @@ function AddMember({
   return (
     <>
       <form
-        className="stack"
+        className="stack card"
         onSubmit={(event) => {
           event.preventDefault()
           runSearch()
@@ -187,23 +180,21 @@ function AddMember({
           Nutzer: angezeigt werden nur genaue Treffer, hoechstens {String(WORKSPACE_MEMBER_MAX_CANDIDATES)}.
         </p>
         <p>
-          <button type="submit" disabled={!searchable}>
+          <button className="button--primary" type="submit" disabled={!searchable}>
             Suchen
           </button>
         </p>
       </form>
 
-      <p aria-live="polite">
-        {search.kind === 'searching' && 'Es wird gesucht …'}
-        {search.kind === 'found' &&
-          search.users.length === 0 &&
-          'Kein Treffer. Adresse oder Anzeigename muessen genau stimmen.'}
-      </p>
+      {search.kind === 'searching' && <Loading text="Es wird gesucht …" />}
+      {search.kind === 'found' && search.users.length === 0 && (
+        <Empty text="Kein Treffer. Adresse oder Anzeigename muessen genau stimmen." />
+      )}
       {search.kind === 'failed' && <Notice text={search.message} />}
 
       {search.kind === 'found' && search.users.length > 0 && (
         <form
-          className="stack"
+          className="stack card"
           onSubmit={(event) => {
             event.preventDefault()
             setBusy(true)
@@ -260,7 +251,7 @@ function AddMember({
             </select>
           </div>
           <p>
-            <button type="submit" disabled={busy || userId === ''}>
+            <button className="button--primary" type="submit" disabled={busy || userId === ''}>
               Mitglied hinzufuegen
             </button>
           </p>
@@ -335,7 +326,7 @@ function MemberRow({
       </td>
       <td>
         {editable && (
-          <>
+          <span className="actions">
             <button
               type="button"
               disabled={busy || role === member.role}
@@ -351,7 +342,7 @@ function MemberRow({
               }}
             >
               Rolle von {member.displayName} speichern
-            </button>{' '}
+            </button>
             <button
               type="button"
               disabled={busy}
@@ -364,7 +355,7 @@ function MemberRow({
             >
               {member.displayName} entfernen
             </button>
-          </>
+          </span>
         )}
       </td>
     </tr>
@@ -407,7 +398,7 @@ export function WorkspaceSettings({
 
       {canManage && active && (
         <form
-          className="stack"
+          className="stack card"
           onSubmit={(event) => {
             event.preventDefault()
             setError(null)
@@ -431,7 +422,7 @@ export function WorkspaceSettings({
             />
           </div>
           <p>
-            <button type="submit" disabled={name.trim().length === 0}>
+            <button className="button--primary" type="submit" disabled={name.trim().length === 0}>
               Namen speichern
             </button>
           </p>
@@ -459,7 +450,9 @@ export function WorkspaceSettings({
         </p>
       )}
 
-      {!canManage && !canArchive && <p>Deine Rolle traegt keine Einstellungen dieses Arbeitsbereichs.</p>}
+      {!canManage && !canArchive && (
+        <Empty text="Deine Rolle traegt keine Einstellungen dieses Arbeitsbereichs." />
+      )}
     </section>
   )
 }
@@ -509,11 +502,11 @@ export function WorkspaceMembers({
   return (
     <section aria-labelledby="workspace-members-heading">
       <h2 id="workspace-members-heading">Mitglieder: {workspace.name}</h2>
-      {state.kind === 'loading' && <p aria-live="polite">Mitglieder werden geladen …</p>}
+      {state.kind === 'loading' && <Loading text="Mitglieder werden geladen …" />}
       {state.kind === 'failed' && (
         <>
           <Notice text={state.message} />
-          <p>
+          <p className="actions">
             <button type="button" onClick={load}>
               Erneut laden
             </button>
@@ -524,31 +517,33 @@ export function WorkspaceMembers({
 
       {state.kind === 'ready' && (
         <>
-          <table className="users">
-            <caption className="visually-hidden">Mitglieder von {workspace.name}</caption>
-            <thead>
-              <tr>
-                <th scope="col">Name</th>
-                <th scope="col">E-Mail</th>
-                <th scope="col">Rolle</th>
-                <th scope="col">Aktion</th>
-              </tr>
-            </thead>
-            <tbody>
-              {state.members.map((member) => (
-                <MemberRow
-                  key={member.userId}
-                  me={me}
-                  workspace={workspace}
-                  member={member}
-                  canManage={canManage}
-                  canAssignOwner={canAssignOwner}
-                  onChanged={reload}
-                  onError={setActionError}
-                />
-              ))}
-            </tbody>
-          </table>
+          <div className="table-wrap">
+            <table className="table">
+              <caption className="visually-hidden">Mitglieder von {workspace.name}</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Name</th>
+                  <th scope="col">E-Mail</th>
+                  <th scope="col">Rolle</th>
+                  <th scope="col">Aktion</th>
+                </tr>
+              </thead>
+              <tbody>
+                {state.members.map((member) => (
+                  <MemberRow
+                    key={member.userId}
+                    me={me}
+                    workspace={workspace}
+                    member={member}
+                    canManage={canManage}
+                    canAssignOwner={canAssignOwner}
+                    onChanged={reload}
+                    onError={setActionError}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
 
           {canManage && active && (
             <>
@@ -580,37 +575,41 @@ export function WorkspaceOverview({
   return (
     <section aria-labelledby="workspaces-heading">
       <h2 id="workspaces-heading">Arbeitsbereiche</h2>
-      {workspaces.length === 0 && <p>Du gehoerst noch keinem Arbeitsbereich an. Lege den ersten an.</p>}
+      {workspaces.length === 0 && (
+        <Empty text="Du gehoerst noch keinem Arbeitsbereich an. Lege den ersten an." />
+      )}
       {workspaces.length > 0 && (
-        <table className="users">
-          <caption className="visually-hidden">Arbeitsbereiche, denen du angehoerst</caption>
-          <thead>
-            <tr>
-              <th scope="col">Name</th>
-              <th scope="col">Rolle</th>
-              <th scope="col">Status</th>
-              <th scope="col">Ansichten</th>
-            </tr>
-          </thead>
-          <tbody>
-            {workspaces.map((workspace) => (
-              <tr key={workspace.id}>
-                <td>
-                  <Link route={{ kind: 'arbeitsbereich', workspaceId: workspace.id, folder: null }}>
-                    {workspace.name}
-                  </Link>
-                </td>
-                <td>{workspace.role === null ? '—' : ROLE_LABELS[workspace.role]}</td>
-                <td>{workspace.status === 'active' ? 'aktiv' : 'archiviert'}</td>
-                <td>
-                  <Link route={{ kind: 'mitglieder', workspaceId: workspace.id }}>Mitglieder</Link>
-                  {' · '}
-                  <Link route={{ kind: 'einstellungen', workspaceId: workspace.id }}>Einstellungen</Link>
-                </td>
+        <div className="table-wrap">
+          <table className="table">
+            <caption className="visually-hidden">Arbeitsbereiche, denen du angehoerst</caption>
+            <thead>
+              <tr>
+                <th scope="col">Name</th>
+                <th scope="col">Rolle</th>
+                <th scope="col">Status</th>
+                <th scope="col">Ansichten</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {workspaces.map((workspace) => (
+                <tr key={workspace.id}>
+                  <td>
+                    <Link route={{ kind: 'arbeitsbereich', workspaceId: workspace.id, folder: null }}>
+                      {workspace.name}
+                    </Link>
+                  </td>
+                  <td>{workspace.role === null ? '—' : ROLE_LABELS[workspace.role]}</td>
+                  <td>{workspace.status === 'active' ? 'aktiv' : 'archiviert'}</td>
+                  <td>
+                    <Link route={{ kind: 'mitglieder', workspaceId: workspace.id }}>Mitglieder</Link>
+                    {' · '}
+                    <Link route={{ kind: 'einstellungen', workspaceId: workspace.id }}>Einstellungen</Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       <h3>Neuen Arbeitsbereich anlegen</h3>
