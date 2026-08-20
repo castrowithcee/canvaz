@@ -44,8 +44,8 @@ const AKTIV = { status: 'active' } as const
 const ARCHIVIERT = { status: 'archived' } as const
 
 /** Das betroffene Board. Seine Kennung zaehlt erst fuer Gaeste, gehoert aber zum Zustand. */
-const BOARD = { id: 'board-1', status: 'active' } as const
-const BOARD_ARCHIVIERT = { id: 'board-1', status: 'archived' } as const
+const BOARD = { id: 'board-1', status: 'active', deletedAt: null } as const
+const BOARD_ARCHIVIERT = { id: 'board-1', status: 'archived', deletedAt: null } as const
 
 const ALLE_AKTIONEN: readonly BoardAction[] = [
   'board:read',
@@ -307,5 +307,62 @@ describe('Boardeingaben', () => {
     expect(resolveBoardRole('ada', 'ada', 'viewer')).toBe('owner')
     expect(resolveBoardRole('ada', 'bob', 'viewer')).toBe('viewer')
     expect(resolveBoardRole('ada', 'bob', null)).toBeNull()
+  })
+})
+
+/* ---------------------------------------------------------------------------------------------------- */
+/* Papierkorb                                                                                            */
+/* ---------------------------------------------------------------------------------------------------- */
+
+/** Dasselbe Board, nur im Papierkorb. Der Archivzustand bleibt davon unberuehrt. */
+const BOARD_GELOESCHT = { id: 'board-1', status: 'active', deletedAt: new Date('2026-01-01T00:00:00Z') } as const
+
+describe('Papierkorb', () => {
+  it('macht ein Board im Papierkorb fuer jede gewoehnliche Aktion unsichtbar - auch fuer seinen Owner', () => {
+    for (const action of ALLE_AKTIONEN) {
+      const entschieden = decideBoardAccess(subject({ role: 'owner', boardRole: 'owner' }), AKTIV, BOARD_GELOESCHT, action)
+      expect(entschieden, action).toEqual({ allowed: false, reason: 'not-visible' })
+    }
+  })
+
+  it('gibt Loeschen, Zuruecknehmen und endgueltiges Entfernen nur der Bestandsverantwortung', () => {
+    const owner = subject({ role: 'member', boardRole: 'owner' })
+    const editor = subject({ role: 'member', boardRole: 'editor' })
+    const admin = subject({ role: 'admin', boardRole: 'editor' })
+
+    expect(decideBoardAccess(owner, AKTIV, BOARD, 'board:trash').allowed).toBe(true)
+    expect(decideBoardAccess(admin, AKTIV, BOARD, 'board:trash').allowed).toBe(true)
+    expect(decideBoardAccess(editor, AKTIV, BOARD, 'board:trash')).toEqual({
+      allowed: false,
+      reason: 'insufficient-role',
+    })
+    expect(decideBoardAccess(owner, AKTIV, BOARD_GELOESCHT, 'board:restore').allowed).toBe(true)
+    expect(decideBoardAccess(owner, AKTIV, BOARD_GELOESCHT, 'board:purge').allowed).toBe(true)
+    expect(decideBoardAccess(editor, AKTIV, BOARD_GELOESCHT, 'board:purge')).toEqual({
+      allowed: false,
+      reason: 'insufficient-role',
+    })
+  })
+
+  it('laesst ein archiviertes Board loeschbar, ein archivierter Arbeitsbereich aber nicht', () => {
+    const owner = subject({ role: 'member', boardRole: 'owner' })
+    expect(decideBoardAccess(owner, AKTIV, BOARD_ARCHIVIERT, 'board:trash').allowed).toBe(true)
+    expect(decideBoardAccess(owner, ARCHIVIERT, BOARD, 'board:trash')).toEqual({
+      allowed: false,
+      reason: 'workspace-archived',
+    })
+  })
+
+  it('traegt den Wechsel des Arbeitsbereichs dieselbe Verantwortung wie das Loeschen', () => {
+    expect(
+      decideBoardAccess(subject({ role: 'member', boardRole: 'owner' }), AKTIV, BOARD, 'board:move-workspace').allowed,
+    ).toBe(true)
+    // Die Ordnerablage bleibt davon unberuehrt: sie ist eine Stammdatenangabe und keine Bestandsentscheidung.
+    expect(
+      decideBoardAccess(subject({ role: 'member', boardRole: 'editor' }), AKTIV, BOARD, 'board:move').allowed,
+    ).toBe(true)
+    expect(
+      decideBoardAccess(subject({ role: 'member', boardRole: 'editor' }), AKTIV, BOARD, 'board:move-workspace'),
+    ).toEqual({ allowed: false, reason: 'insufficient-role' })
   })
 })

@@ -22,6 +22,7 @@ import { createMetrics } from './metrics.js'
 import { createOidcClient } from './oidc.js'
 import { createRateLimiter } from './rate-limit.js'
 import { createRealtimeGateway } from './realtime.js'
+import { startTrashRetention } from './trash.js'
 
 function loadConfigOrExit(): ReturnType<typeof loadConfig> {
   try {
@@ -77,6 +78,12 @@ const context: AppContext = {
   metrics,
   now: () => new Date(),
 }
+/**
+ * Die Aufbewahrungsfrist des Papierkorbs laeuft im Anwendungsprozess - kein Worker, keine Queue: der
+ * Betriebsvertrag kennt genau eine Instanz, und ein Intervall darin braucht keine Koordination.
+ */
+const stopTrashRetention = startTrashRetention(context)
+
 const server = createServer(
   createRequestListener(createRoutes(context), {
     webRoot: config.webRoot,
@@ -94,6 +101,7 @@ server.listen(config.port, () => {
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
+    stopTrashRetention()
     server.close(() => {
       // Erst die Raeume: was noch nicht persistiert ist, wird beim geordneten Beenden noch geschrieben.
       void rooms

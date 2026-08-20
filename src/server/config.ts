@@ -11,7 +11,7 @@
  * Startfehler und kein stiller Verzicht auf den Provider.
  */
 
-import { SCENE_VERSION_RETENTION } from '../domain/board/model.js'
+import { SCENE_VERSION_RETENTION, TRASH_RETENTION_DAYS } from '../domain/board/model.js'
 import type { AssetStorageAdapter } from '../domain/storage/asset-storage-port.js'
 import type { S3StorageConfig } from '../persistence/asset-storage-s3.js'
 
@@ -53,6 +53,15 @@ export type AppConfig = {
    * langen Sitzungen will mehr Staende, ein enger Datenbankplatz weniger.
    */
   readonly sceneVersionRetention: number
+  /**
+   * Aufbewahrungsfrist des Papierkorbs in Tagen.
+   *
+   * Nach ihr entfernt die Instanz ein geloeschtes Board ohne Zutun endgueltig. Konfigurierbar, weil ein
+   * Betrieb zwischen Rueckweg und Speicherbedarf abwaegt; der Standard bleibt bei vierzehn Tagen. Die
+   * Frist begrenzt ausschliesslich die Aufbewahrung im Papierkorb - Wiederherstellungsziel und Sicherung
+   * bleiben davon unberuehrt.
+   */
+  readonly trashRetentionDays: number
   /**
    * Obergrenze einer Importdatei in Bytes.
    *
@@ -217,6 +226,15 @@ const MIN_SCENE_VERSION_RETENTION = 10
 const MAX_SCENE_VERSION_RETENTION = 1000
 
 /**
+ * Grenzen der Papierkorbfrist. Der Standard steht im Fachkern.
+ *
+ * Ein Tag ist die kuerzeste Frist, die noch ein Rueckweg ist; ein Jahr die laengste, die noch eine
+ * Aufbewahrung und keine zweite Ablage ist.
+ */
+const MIN_TRASH_RETENTION_DAYS = 1
+const MAX_TRASH_RETENTION_DAYS = 365
+
+/**
  * 20 MiB je Importdatei. Das traegt eine grosse Zeichnung samt mehrerer Bilder in Base64 und bleibt weit
  * unter dem, was eine einzelne Anfrage im Speicher halten darf.
  */
@@ -321,6 +339,14 @@ export function loadConfig(env: Env = process.env): AppConfig {
       SCENE_VERSION_RETENTION,
       MIN_SCENE_VERSION_RETENTION,
       MAX_SCENE_VERSION_RETENTION,
+      problems,
+    ),
+    trashRetentionDays: readInteger(
+      env,
+      'CANVAZ_TRASH_RETENTION_DAYS',
+      TRASH_RETENTION_DAYS,
+      MIN_TRASH_RETENTION_DAYS,
+      MAX_TRASH_RETENTION_DAYS,
       problems,
     ),
     maxImportBytes: readInteger(

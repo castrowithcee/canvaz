@@ -451,6 +451,27 @@ export type MoveBoardRequest = {
   readonly folderId: string | null
 }
 
+/**
+ * Board in einen **anderen Arbeitsbereich** verschieben (POST).
+ *
+ * Eine andere Aktion als die Ordnerablage und deshalb ein eigener Pfad: das Board verlaesst seinen
+ * bisherigen Arbeitsbereich. Der Anfragende braucht die Bestandsverantwortung in der **Quelle** (Board-Owner
+ * oder Verwaltung des Arbeitsbereichs) und eine Mitgliedschaft im **Ziel**, die dort ein Board anlegen darf.
+ *
+ * **Freigaben und Gastlinks wandern nicht mit**: interne Freigaben werden entzogen, gueltige Gastlinks
+ * widerrufen. Sie gehoeren zu Personen und Empfaengern des bisherigen Arbeitsbereichs; stillschweigend
+ * weiterzugelten hiesse, dass ein Wechsel Zugriff verschiebt, ohne dass jemand es entscheidet.
+ */
+export const BOARD_WORKSPACE_PATH = `${API_BASE_PATH}/boards/workspace`
+
+export type MoveBoardToWorkspaceRequest = {
+  readonly boardId: string
+  /** Ziel-Arbeitsbereich. Muss ein anderer sein als der bisherige. */
+  readonly workspaceId: string
+  /** Ordner im Ziel; fehlt er oder ist er `null`, liegt das Board unmittelbar im Arbeitsbereich. */
+  readonly folderId?: string | null
+}
+
 export type BoardStatusView = 'active' | 'archived'
 
 export type BoardView = {
@@ -584,6 +605,104 @@ export type RenameBoardRequest = {
 export type SetBoardStatusRequest = {
   readonly boardId: string
   readonly status: BoardStatusView
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+/* Papierkorb                                                                                            */
+/* ---------------------------------------------------------------------------------------------------- */
+
+/**
+ * Papierkorb eines Arbeitsbereichs (GET) und Loeschen eines Boards in den Papierkorb (POST).
+ *
+ * Ein Board im Papierkorb ist **fachlich nicht mehr vorhanden**: es steht in keiner Boardliste, in keinem
+ * Dashboard und in keiner Suche, es laesst sich nicht mehr oeffnen, seine Bilder, Versionen und Exporte sind
+ * unerreichbar, und jeder interne wie externe Freigabezugriff endet sofort - auch ein noch gueltiger
+ * Gastlink fuehrt nicht mehr dorthin. Offene Verbindungen des Boards werden im selben Moment geschlossen.
+ *
+ * Es bleibt fuer die Dauer der Aufbewahrungsfrist wiederherstellbar. Danach entfernt die Instanz es ohne
+ * Zutun endgueltig; ab diesem Punkt hilft ausschliesslich die Sicherung.
+ */
+export const BOARD_TRASH_PATH = `${API_BASE_PATH}/boards/trash`
+/** Wiederherstellen aus dem Papierkorb (POST). Nimmt eine Auswahl und traegt damit den Einzelfall mit. */
+export const BOARD_TRASH_RESTORE_PATH = `${API_BASE_PATH}/boards/trash/restore`
+/** Sofortiges endgueltiges Loeschen aus dem Papierkorb (POST). Ebenfalls fuer eine Auswahl. */
+export const BOARD_TRASH_PURGE_PATH = `${API_BASE_PATH}/boards/trash/purge`
+
+/**
+ * Hoechstzahl der Boards einer Auswahl.
+ *
+ * Der Papierkorb eines Arbeitsbereichs ist kein Verzeichnis; eine Auswahl darueber hinaus ist keine Handlung
+ * eines Menschen mehr, sondern ein Skript - und das soll die Grenze nennen statt sie zu erfahren.
+ */
+export const MAX_TRASH_SELECTION = 100
+
+export type TrashBoardRequest = {
+  readonly boardId: string
+}
+
+/**
+ * Eine Zeile des Papierkorbs.
+ *
+ * Bewusst **keine** `BoardView`: die traegt die eigene Rolle aus der Policy, und ein Board im Papierkorb hat
+ * fachlich keine mehr. Was hier steht, ist genau das, was die Ansicht zeigt - Titel, urspruenglicher Ordner,
+ * loeschende Person, Zeitpunkt und verbleibende Frist.
+ */
+export type BoardTrashEntryView = {
+  readonly id: string
+  readonly workspaceId: string
+  readonly title: string
+  readonly ownerUserId: string
+  readonly ownerDisplayName: string
+  /** Urspruenglicher Ordner; `null` heisst: es lag unmittelbar im Arbeitsbereich. */
+  readonly folderId: string | null
+  readonly folderName: string | null
+  /** `null` heisst: das Konto der loeschenden Person wurde inzwischen entfernt. */
+  readonly deletedByUserId: string | null
+  readonly deletedByDisplayName: string | null
+  /** ISO-8601, Beginn der Aufbewahrungsfrist. */
+  readonly deletedAt: string
+  /** ISO-8601, Ende der Aufbewahrungsfrist. Die verbleibende Frist ist der Abstand zu jetzt. */
+  readonly purgeAt: string
+  /** Archivzustand vor dem Loeschen. Er bleibt erhalten und gilt nach dem Wiederherstellen weiter. */
+  readonly status: BoardStatusView
+}
+
+/**
+ * Papierkorb genau eines Arbeitsbereichs.
+ *
+ * Die Liste ist **serverseitig gefiltert**: sie enthaelt ausschliesslich Boards, die der Anfragende auch
+ * wiederherstellen und endgueltig loeschen darf. Wer die Bestandsverantwortung nicht traegt, bekommt eine
+ * leere Liste und auf jede Aktion eine Ablehnung.
+ */
+export type BoardTrashResponse = {
+  readonly workspace: WorkspaceView
+  /** Absteigend, zuletzt geloeschtes zuerst. */
+  readonly boards: readonly BoardTrashEntryView[]
+  /** Aufbewahrungsfrist dieser Instanz in Tagen. Der Standard sind 14 Tage. */
+  readonly retentionDays: number
+}
+
+/** Wiederherstellen und endgueltiges Loeschen nehmen dieselbe Auswahl: ein Board ist die Auswahl mit einem. */
+export type TrashSelectionRequest = {
+  readonly boardIds: readonly string[]
+}
+
+/**
+ * Ergebnis je gewaehltem Board.
+ *
+ * Eine Auswahl ist **kein Alles-oder-nichts**: ein Board, das inzwischen endgueltig entfernt wurde oder das
+ * der Anfragende nicht verantwortet, laesst die uebrigen unberuehrt. Die Antwort nennt deshalb je Kennung
+ * ein eigenes Ergebnis, und der Gesamtstatus ist immer 200.
+ */
+export type TrashActionResultView = {
+  readonly boardId: string
+  readonly ok: boolean
+  /** Grund der Ablehnung im Klartext; `null` bei Erfolg. */
+  readonly error: string | null
+}
+
+export type TrashSelectionResponse = {
+  readonly results: readonly TrashActionResultView[]
 }
 
 /**

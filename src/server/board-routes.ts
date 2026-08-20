@@ -57,6 +57,7 @@ import {
   BOARD_SCENE_PATH,
   BOARD_STATUS_PARAM,
   BOARD_STATUS_PATH,
+  BOARD_WORKSPACE_PATH,
   BOARDS_PATH,
   BOARD_DASHBOARD_PATH,
   DASHBOARD_FILTER_PARAM,
@@ -166,6 +167,9 @@ function toFileRef(asset: BoardAsset): BinaryFileRef {
 }
 
 const FOLDER_NOT_FOUND = 'Ordner nicht gefunden'
+
+/** Ein fremder und ein erfundener Arbeitsbereich sind fuer den Anfragenden dasselbe. */
+const WORKSPACE_NOT_FOUND = 'Arbeitsbereich nicht gefunden'
 
 /**
  * Ordnerfilter der Boardliste aus der Adresse.
@@ -528,6 +532,111 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
           })
           return ok(200, toBoardView(asRequester(auth), { ...access, board: moved }))
         })
+      },
+    },
+
+    /**
+     * Wechsel des Arbeitsbereichs.
+     *
+     * Eine andere Stufe als die Ordnerablage und deshalb ein eigener Endpunkt: das Board verlaesst seinen
+     * bisherigen Arbeitsbereich, und fuer alle, die es dort sahen, ist das dasselbe wie ein Loeschen. Geprueft
+     * wird deshalb **beidseitig** - `board:move-workspace` in der Quelle und `board:create` im Ziel, jeweils
+     * gegen die dortige Mitgliedschaft. Ein Wechsel kann damit niemandem einen Zugang verschaffen, den der
+     * Handelnde im Ziel nicht selbst haette.
+     *
+     * **Freigaben und Gastlinks bleiben nicht stillschweigend erhalten.** Interne Freigaben werden entzogen,
+     * gueltige Gastlinks widerrufen: eine Freigabe gilt einem Mitglied des bisherigen Arbeitsbereichs, ein
+     * Gastlink einem Empfaenger, der ein Board in genau diesem Arbeitsbereich bekommen hat. Beides in einen
+     * anderen weiterzutragen waere eine Zugriffsentscheidung, die niemand getroffen hat. Die **Ownerschaft**
+     * bleibt dagegen stehen - sie ist die Verantwortung fuer das Board und keine Freigabe; ohne Mitgliedschaft
+     * im Ziel traegt sie ihrem Inhaber dort ohnehin nichts ein.
+     */
+    {
+      method: 'POST',
+      path: BOARD_WORKSPACE_PATH,
+      handle: async ({ request, response }) => {
+        const moved: { id: BoardId | null } = { id: null }
+        await withLockedBoard(request, response, async (tx, auth, access, body) => {
+          const targetId = readUuid(body['workspaceId'])
+          const folderId = readBoardFolderId(body['folderId'])
+          if (targetId === null) {
+            return fail(404, WORKSPACE_NOT_FOUND)
+          }
+          if (folderId === undefined) {
+            return fail(404, FOLDER_NOT_FOUND)
+          }
+          const denial = deny(asRequester(auth), access.workspace, access, 'board:move-workspace')
+          if (denial !== null) {
+            return denial
+          }
+          if (targetId === access.workspace.id) {
+            // Derselbe Arbeitsbereich ist die Ordnerablage und nicht dieser Weg. Ein stiller Erfolg wuerde
+            // hier zusaetzlich Freigaben und Gastlinks entziehen, ohne dass etwas gewechselt haette.
+            return fail(400, 'Das Board liegt bereits in diesem Arbeitsbereich')
+          }
+          // Die Zielzeile wird gesperrt: eine gleichzeitige Archivierung nimmt kein Board mehr auf.
+          const target = await tx.workspaces.findForUpdate(targetId, auth.user.id)
+          if (target === null) {
+            return fail(404, WORKSPACE_NOT_FOUND)
+          }
+          const targetDenial = deny(
+            asRequester(auth),
+            target.workspace,
+            withoutBoard(target.role),
+            'board:create',
+          )
+          if (targetDenial !== null) {
+            return targetDenial
+          }
+          const unbekannt = await denyUnknownFolder(tx, targetId, folderId)
+          if (unbekannt !== null) {
+            return unbekannt
+          }
+          const removedGrants = await tx.grants.removeAllForBoard(access.board.id)
+          const revokedLinks = await tx.shareLinks.revokeAllForBoard(access.board.id, context.now())
+          const board = await tx.boards.setWorkspace(access.board.id, targetId, folderId)
+          const details = {
+            title: board.title,
+            previousWorkspaceId: access.workspace.id,
+            workspaceId: targetId,
+            folderId,
+            removedGrants,
+            revokedShareLinks: revokedLinks.length,
+          }
+          // Zwei Nachweise, einer je Arbeitsbereich: das Protokoll der Quelle soll den Abgang zeigen und
+          // nicht nur eine Luecke, das des Ziels den Zugang.
+          await tx.audit.record({
+            actorId: auth.user.id,
+            action: 'board.workspace-left',
+            targetType: 'board',
+            targetId: board.id,
+            workspaceId: access.workspace.id,
+            details,
+          })
+          await tx.audit.record({
+            actorId: auth.user.id,
+            action: 'board.workspace-changed',
+            targetType: 'board',
+            targetId: board.id,
+            workspaceId: targetId,
+            details,
+          })
+          context.logger('info', 'board.workspace.changed', {
+            userId: auth.user.id,
+            boardId: board.id,
+            previousWorkspaceId: access.workspace.id,
+            workspaceId: targetId,
+          })
+          moved.id = board.id
+          // Die eigene Rolle kann sich mit dem Arbeitsbereich aendern; die neue Sicht kommt deshalb aus
+          // einem frischen Ladevorgang.
+          return ok(200, await reloadedBoardView(tx, asRequester(auth), board.id))
+        })
+        if (moved.id !== null) {
+          // Erst nach dem Commit: wer im Ziel nichts mehr darf und jeder Gast eines widerrufenen Links
+          // verliert seine Verbindung sofort statt beim naechsten Takt der Nachpruefung.
+          context.rooms.closeBoard(moved.id)
+        }
       },
     },
 

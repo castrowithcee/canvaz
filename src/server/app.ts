@@ -11,6 +11,7 @@ import { createAdminRoutes } from './admin-routes.js'
 import { createAuthRoutes } from './auth-routes.js'
 import { createBoardRoutes } from './board-routes.js'
 import { createBoardShareRoutes } from './board-share-routes.js'
+import { createBoardTrashRoutes } from './board-trash-routes.js'
 import { createBoardVersionRoutes } from './board-version-routes.js'
 import type { AppContext } from './context.js'
 import { createFolderRoutes } from './folder-routes.js'
@@ -89,6 +90,7 @@ export function createRoutes(context: AppContext): readonly Route[] {
     ...createWorkspaceRoutes(context),
     ...createFolderRoutes(context),
     ...createBoardRoutes(context),
+    ...createBoardTrashRoutes(context),
     ...createBoardShareRoutes(context),
     ...createBoardVersionRoutes(context),
   ]

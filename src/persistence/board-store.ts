@@ -34,10 +34,12 @@ import type {
   BoardViewer,
   DashboardBoardEntry,
   DashboardQuery,
+  ExpiredTrashEntry,
   NewBoardAsset,
   NewBoardShareLink,
   SceneVersion,
   SceneVersionSummary,
+  TrashedBoardEntry,
 } from '../domain/board/repositories.js'
 import { BoardGrantConflictError, CorruptSceneError, SceneConflictError } from '../domain/board/repositories.js'
 import type { WorkspaceId, WorkspaceRole, WorkspaceStatus } from '../domain/workspace/model.js'
@@ -53,13 +55,34 @@ type BoardRow = {
   owner_user_id: string
   folder_id: string | null
   status: string
+  deleted_at: Date | null
+  deleted_by_user_id: string | null
   current_scene_version: number
   created_at: Date
   updated_at: Date
 }
 
 const BOARD_COLUMNS =
-  'id, workspace_id, title, owner_user_id, folder_id, status, current_scene_version, created_at, updated_at'
+  'id, workspace_id, title, owner_user_id, folder_id, status, deleted_at, deleted_by_user_id, ' +
+  'current_scene_version, created_at, updated_at'
+
+/** Dieselbe Spaltenliste mit Praefix - jede Abfrage mit Joins braucht sie qualifiziert. */
+function boardColumns(alias: string): string {
+  return BOARD_COLUMNS.split(', ')
+    .map((column) => `${alias}.${column}`)
+    .join(', ')
+}
+
+/**
+ * Der Papierkorb als **eine** Bedingung.
+ *
+ * Sie steht bewusst genau einmal da und wird an jede Stelle gereicht, die Boards liest: den einzelnen
+ * Datensatz, die Boardliste und das Dashboard. Eine zweite, leicht abweichende Formulierung waere genau die
+ * Stelle, an der ein geloeschtes Board eines Tages doch noch erscheint.
+ */
+function trashCondition(alias: string, trashed: boolean): string {
+  return `${alias}.deleted_at is ${trashed ? 'not null' : 'null'}`
+}
 
 function toBoard(row: BoardRow): Board {
   return {
@@ -70,6 +93,7 @@ function toBoard(row: BoardRow): Board {
     folderId: row.folder_id,
     // Der Check-Constraint laesst nur diese Werte zu.
     status: row.status as BoardStatus,
+    deletedAt: row.deleted_at,
     sceneVersion: row.current_scene_version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -281,11 +305,17 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
     }
   }
 
+  /**
+   * `trashed` waehlt die Seite des Papierkorbs: der gewoehnliche Weg liefert **nur** vorhandene Boards, der
+   * Papierkorbweg **nur** geloeschte. Beide Seiten schliessen sich in der Abfrage selbst aus; es gibt keinen
+   * Aufruf, der beides zugleich sieht, und damit keinen, der versehentlich in den falschen Zustand greift.
+   */
   async function loadAccess(
     id: BoardId,
     viewer: BoardViewer,
     now: Date,
     lock: boolean,
+    trashed = false,
   ): Promise<BoardAccess | null> {
     // Zwei Schritte statt eines Joins ueber die Mitgliedschaft: `for update` wuerde sonst die falsche Zeile
     // sperren. Gesperrt wird ausschliesslich die Boardzeile - sie serialisiert die Speicherungen.
@@ -298,14 +328,14 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
         workspace_updated_at: Date
       }
     >(
-      `select b.id, b.workspace_id, b.title, b.owner_user_id, b.folder_id, b.status, b.current_scene_version,
-              b.created_at, b.updated_at, u.display_name as owner_display_name,
+      `select ${boardColumns('b')}, u.display_name as owner_display_name,
               w.name as workspace_name, w.status as workspace_status,
               w.created_at as workspace_created_at, w.updated_at as workspace_updated_at
          from boards b
          join workspaces w on w.id = b.workspace_id
          join users u on u.id = b.owner_user_id
-        where b.id = $1${lock ? ' for no key update of b' : ''}`,
+        where b.id = $1
+          and ${trashCondition('b', trashed)}${lock ? ' for no key update of b' : ''}`,
       [id],
     )
     const row = found.rows[0]
@@ -353,12 +383,12 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
           }
         }
         const result = await db.query<BoardRow & { owner_display_name: string; grant_role: string | null }>(
-          `select b.id, b.workspace_id, b.title, b.owner_user_id, b.folder_id, b.status, b.current_scene_version,
-                  b.created_at, b.updated_at, u.display_name as owner_display_name, g.role as grant_role
+          `select ${boardColumns('b')}, u.display_name as owner_display_name, g.role as grant_role
              from boards b
              join users u on u.id = b.owner_user_id
              left join board_grants g on g.board_id = b.id and g.user_id = $4
             where b.workspace_id = $1
+              and ${trashCondition('b', false)}
               and b.status = $2
               and ($3 = '' or position(lower($3) in lower(b.title)) > 0)
               and ${folderCondition}
@@ -394,8 +424,7 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
             shared_externally: boolean
           }
         >(
-          `select b.id, b.workspace_id, b.title, b.owner_user_id, b.folder_id, b.status, b.current_scene_version,
-                  b.created_at, b.updated_at, u.display_name as owner_display_name,
+          `select ${boardColumns('b')}, u.display_name as owner_display_name,
                   w.name as workspace_name, w.status as workspace_status,
                   w.created_at as workspace_created_at, w.updated_at as workspace_updated_at,
                   m.role as workspace_role, g.role as grant_role,
@@ -406,7 +435,8 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
              join workspace_memberships m on m.workspace_id = b.workspace_id and m.user_id = $1
              join users u on u.id = b.owner_user_id
              left join board_grants g on g.board_id = b.id and g.user_id = $1
-            where b.status = 'active'
+            where ${trashCondition('b', false)}
+              and b.status = 'active'
               and ($2 = '' or position(lower($2) in lower(b.title)) > 0)
               and ${query.kind === null ? 'true' : DASHBOARD_CONDITIONS[query.kind]}
             order by b.updated_at desc, b.id
@@ -500,6 +530,137 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
         )
         return toBoard(requireRow(result.rows[0], `Unbekanntes Board ${id}`))
       },
+
+      /* -- Papierkorb -------------------------------------------------------------------------------- */
+
+      async listTrashed(workspaceId: WorkspaceId, userId: UserId): Promise<readonly TrashedBoardEntry[]> {
+        // Ordnername und loeschende Person kommen als `left join` mit: die Ansicht nennt beide, und eine
+        // zweite Abfrage je Zeile waere eine Rundreise je Board.
+        const result = await db.query<
+          BoardRow & {
+            owner_display_name: string
+            grant_role: string | null
+            folder_name: string | null
+            deleted_by_display_name: string | null
+          }
+        >(
+          `select ${boardColumns('b')}, u.display_name as owner_display_name, g.role as grant_role,
+                  f.name as folder_name, d.display_name as deleted_by_display_name
+             from boards b
+             join users u on u.id = b.owner_user_id
+             left join board_grants g on g.board_id = b.id and g.user_id = $2
+             left join board_folders f on f.id = b.folder_id
+             left join users d on d.id = b.deleted_by_user_id
+            where b.workspace_id = $1
+              and ${trashCondition('b', true)}
+            order by b.deleted_at desc, b.id`,
+          [workspaceId, userId],
+        )
+        return result.rows.map((row) => ({
+          board: toBoard(row),
+          ownerDisplayName: row.owner_display_name,
+          boardRole: resolveBoardRole(row.owner_user_id, userId, (row.grant_role as BoardGrantRole | null) ?? null),
+          folderName: row.folder_name,
+          // Die Abfrage liefert ausschliesslich Zeilen mit gesetztem Loeschzeitpunkt.
+          deletedAt: row.deleted_at as Date,
+          deletedByUserId: row.deleted_by_user_id,
+          deletedByDisplayName: row.deleted_by_display_name,
+        }))
+      },
+
+      async findTrashedForUpdate(id: BoardId, userId: UserId): Promise<BoardAccess | null> {
+        if (!inTransaction) {
+          throw new Error('findTrashedForUpdate ist nur innerhalb einer Transaktion gueltig')
+        }
+        // Der Zeitpunkt zaehlt hier nur fuer die Gastrolle, und ein Gast erreicht den Papierkorb nie.
+        return loadAccess(id, { kind: 'user', userId }, new Date(), true, true)
+      },
+
+      async lockTrashed(id: BoardId): Promise<Board | null> {
+        if (!inTransaction) {
+          throw new Error('lockTrashed ist nur innerhalb einer Transaktion gueltig')
+        }
+        const result = await db.query<BoardRow>(
+          `select ${BOARD_COLUMNS}
+             from boards
+            where id = $1
+              and deleted_at is not null
+            for no key update`,
+          [id],
+        )
+        const row = result.rows[0]
+        return row === undefined ? null : toBoard(row)
+      },
+
+      async moveToTrash(id: BoardId, deletedAt: Date, deletedBy: UserId): Promise<Board> {
+        const result = await db.query<BoardRow>(
+          `update boards set deleted_at = $2, deleted_by_user_id = $3, updated_at = now()
+            where id = $1
+            returning ${BOARD_COLUMNS}`,
+          [id, deletedAt, deletedBy],
+        )
+        return toBoard(requireRow(result.rows[0], `Unbekanntes Board ${id}`))
+      },
+
+      async restoreFromTrash(id: BoardId, folderId: FolderId | null): Promise<Board> {
+        // `status` bleibt unberuehrt: ein archiviertes Board kehrt archiviert zurueck.
+        const result = await db.query<BoardRow>(
+          `update boards set deleted_at = null, deleted_by_user_id = null, folder_id = $2, updated_at = now()
+            where id = $1
+            returning ${BOARD_COLUMNS}`,
+          [id, folderId],
+        )
+        return toBoard(requireRow(result.rows[0], `Unbekanntes Board ${id}`))
+      },
+
+      async listExpiredTrash(deadline: Date, limit: number): Promise<readonly ExpiredTrashEntry[]> {
+        const result = await db.query<{
+          id: string
+          workspace_id: string
+          title: string
+          deleted_at: Date
+        }>(
+          `select id, workspace_id, title, deleted_at
+             from boards
+            where deleted_at is not null
+              and deleted_at <= $1
+            order by deleted_at
+            limit $2`,
+          [deadline, limit],
+        )
+        return result.rows.map((row) => ({
+          boardId: row.id,
+          workspaceId: row.workspace_id,
+          title: row.title,
+          deletedAt: row.deleted_at,
+        }))
+      },
+
+      async setWorkspace(id: BoardId, workspaceId: WorkspaceId, folderId: FolderId | null): Promise<Board> {
+        if (!inTransaction) {
+          throw new Error('setWorkspace ist nur innerhalb einer Transaktion gueltig')
+        }
+        // Assets und Freigabelinks haengen ueber `(board_id, workspace_id)` am Board. Solange jede einzelne
+        // Anweisung sofort geprueft wird, kann keine Reihenfolge sie gemeinsam bewegen - der Elternschluessel
+        // und die Kinder muessten gleichzeitig wandern. Migration 0009 macht genau diese beiden
+        // Fremdschluessel aufschiebbar; hier wird die Pruefung fuer diese eine Transaktion ans Ende gestellt.
+        await db.query('set constraints all deferred')
+        await db.query('update board_share_links set workspace_id = $2 where board_id = $1', [id, workspaceId])
+        await db.query('update board_assets set workspace_id = $2 where board_id = $1', [id, workspaceId])
+        const result = await db.query<BoardRow>(
+          `update boards set workspace_id = $2, folder_id = $3, updated_at = now()
+            where id = $1
+            returning ${BOARD_COLUMNS}`,
+          [id, workspaceId, folderId],
+        )
+        return toBoard(requireRow(result.rows[0], `Unbekanntes Board ${id}`))
+      },
+
+      async purge(id: BoardId): Promise<void> {
+        // Eine Anweisung, und die Fremdschluessel raeumen den Rest: Szenenversionen, Assetdatensaetze,
+        // Freigaben, Gastlinks und deren Gastsessions haengen mit `on delete cascade` daran.
+        await db.query('delete from boards where id = $1', [id])
+      },
     },
 
     grants: {
@@ -563,6 +724,11 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
 
       async remove(boardId: BoardId, userId: UserId): Promise<void> {
         await db.query('delete from board_grants where board_id = $1 and user_id = $2', [boardId, userId])
+      },
+
+      async removeAllForBoard(boardId: BoardId): Promise<number> {
+        const result = await db.query('delete from board_grants where board_id = $1', [boardId])
+        return result.rowCount ?? 0
       },
     },
 
@@ -631,6 +797,18 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
         )
         const row = result.rows[0]
         return row === undefined ? null : toShareLink(row)
+      },
+
+      async revokeAllForBoard(boardId: BoardId, revokedAt: Date): Promise<readonly BoardShareLinkId[]> {
+        // Nur die noch gueltigen: ein bereits widerrufener Link behaelt seinen Zeitpunkt, damit der Nachweis
+        // weiterhin sagt, wann sein Zugang endete.
+        const result = await db.query<{ id: string }>(
+          `update board_share_links set revoked_at = $2
+            where board_id = $1 and revoked_at is null
+            returning id`,
+          [boardId, revokedAt],
+        )
+        return result.rows.map((row) => row.id)
       },
     },
 
@@ -817,6 +995,14 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
           ],
         )
         return toBoardAsset(requireRow(result.rows[0], 'Assetdatensatz konnte nicht angelegt werden'))
+      },
+
+      async listStorageKeys(boardId: BoardId): Promise<readonly string[]> {
+        const result = await db.query<{ storage_key: string }>(
+          'select storage_key from board_assets where board_id = $1',
+          [boardId],
+        )
+        return result.rows.map((row) => row.storage_key)
       },
     },
 

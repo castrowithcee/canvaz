@@ -67,6 +67,31 @@ export type BoardListEntry = {
   readonly boardRole: BoardRole | null
 }
 
+/**
+ * Eine Zeile des Papierkorbs: das Board mit allem, was seine Zeile zeigt, aus **einer** Abfrage.
+ *
+ * Der urspruengliche Ordner steht mit Namen dabei, weil die Ansicht ihn nennt und eine zweite Abfrage je
+ * Zeile dafuer eine Rundreise je Board waere. Die loeschende Person ist eine Auskunft und keine
+ * Berechtigung: **wer wiederherstellen darf, entscheidet weiterhin die Policy** anhand von `boardRole`.
+ */
+export type TrashedBoardEntry = BoardListEntry & {
+  /** Name des Ordners, in dem das Board lag; `null` heisst: unmittelbar im Arbeitsbereich. */
+  readonly folderName: string | null
+  /** Nie `null`: eine Zeile des Papierkorbs hat immer einen Loeschzeitpunkt. */
+  readonly deletedAt: Date
+  readonly deletedByUserId: UserId | null
+  /** Anzeigename der loeschenden Person; `null`, wenn ihr Konto entfernt wurde. */
+  readonly deletedByDisplayName: string | null
+}
+
+/** Ein Board, dessen Aufbewahrungsfrist abgelaufen ist. Nur, was der fristgesteuerte Lauf braucht. */
+export type ExpiredTrashEntry = {
+  readonly boardId: BoardId
+  readonly workspaceId: WorkspaceId
+  readonly title: string
+  readonly deletedAt: Date
+}
+
 export type BoardFilter = {
   readonly status: BoardStatus
   /** Teilstring im Titel, ohne Platzhalterdeutung. Leer heisst: kein Filter. */
@@ -138,6 +163,10 @@ export interface BoardRepository {
    * Board samt Workspace und eigener Rolle. `null` heisst: existiert nicht - oder, bei einem Gast, sein
    * Zugang gilt nicht (mehr) fuer dieses Board.
    *
+   * **Ein Board im Papierkorb liefert dieser Weg nie.** Er ist der einzige Zugang zu einem einzelnen
+   * Boarddatensatz - Szene, Bilder, Export, Versionen, Freigaben, Gastbeitritt und Realtime laufen alle
+   * darueber -, und deshalb steht die Bedingung genau hier und nicht in jedem Aufrufer.
+   *
    * `now` entscheidet ueber Ablauf und Widerruf des Gastzugangs. Er wird bei **jedem** Aufruf frisch
    * geprueft und nirgends zwischengespeichert; deshalb wirkt ein Widerruf auch auf eine laengst offene
    * Verbindung, sobald sie das naechste Mal aufloest.
@@ -167,6 +196,60 @@ export interface BoardRepository {
   setFolder(id: BoardId, folderId: FolderId | null): Promise<Board>
   /** Setzt die aktuelle Szenenversion. Laeuft immer in derselben Transaktion wie `SceneRepository.append`. */
   setSceneVersion(id: BoardId, version: number): Promise<Board>
+
+  /* -- Papierkorb ------------------------------------------------------------------------------------ */
+
+  /**
+   * Boards im Papierkorb genau eines Arbeitsbereichs, juengste Loeschung zuerst.
+   *
+   * `userId` ist wie in `listForWorkspace` Pflicht: die Zeile traegt die eigene Boardrolle des Anfragenden,
+   * und ueber sie entscheidet die Policy, wer eine Zeile ueberhaupt sehen und zuruecknehmen darf.
+   */
+  listTrashed(workspaceId: WorkspaceId, userId: UserId): Promise<readonly TrashedBoardEntry[]>
+  /**
+   * Wie `findForUpdate`, liefert aber **ausschliesslich** ein Board im Papierkorb.
+   *
+   * Der Gegenweg zu `findForViewer`/`findForUpdate`, die umgekehrt nie eines liefern. Beide Wege sind
+   * getrennt, damit kein Aufrufer versehentlich in den jeweils anderen Zustand greift. Nur in einer
+   * Transaktion gueltig.
+   */
+  findTrashedForUpdate(id: BoardId, userId: UserId): Promise<BoardAccess | null>
+  /**
+   * Sperrt ein Board im Papierkorb ohne jeden Rollenbezug - der Weg des **fristgesteuerten Laufs**.
+   *
+   * Er handelt fuer die Instanz und nicht fuer einen Nutzer; eine Rolle waere hier eine Erfindung. Die Frist
+   * ist die ganze Berechtigung, und ob sie abgelaufen ist, prueft der Aufrufer unter genau dieser Sperre.
+   * `null` heisst: das Board ist nicht (mehr) im Papierkorb. Nur in einer Transaktion gueltig.
+   */
+  lockTrashed(id: BoardId): Promise<Board | null>
+  /** Legt das Board in den Papierkorb. Der Zeitpunkt ist der Beginn der Aufbewahrungsfrist. */
+  moveToTrash(id: BoardId, deletedAt: Date, deletedBy: UserId): Promise<Board>
+  /**
+   * Nimmt das Board aus dem Papierkorb zurueck. Der Archivzustand bleibt dabei unberuehrt - er ist eine
+   * eigene Achse und war vor dem Loeschen schon so.
+   */
+  restoreFromTrash(id: BoardId, folderId: FolderId | null): Promise<Board>
+  /**
+   * Boards, deren Aufbewahrungsfrist zum genannten Zeitpunkt abgelaufen ist. `limit` begrenzt den Lauf;
+   * was nicht hineinpasst, kommt beim naechsten dran.
+   */
+  listExpiredTrash(deadline: Date, limit: number): Promise<readonly ExpiredTrashEntry[]>
+  /**
+   * Verschiebt das Board **samt Assets und Freigabelinks** in einen anderen Arbeitsbereich.
+   *
+   * Beide fuehren den Workspacebezug doppelt und sind darueber an das Board gebunden; sie muessen deshalb
+   * in derselben Transaktion mitwandern. Nur in einer Transaktion gueltig.
+   */
+  setWorkspace(id: BoardId, workspaceId: WorkspaceId, folderId: FolderId | null): Promise<Board>
+  /**
+   * Entfernt das Board endgueltig.
+   *
+   * Szenenversionen, Assetdatensaetze, interne Freigaben, Gastlinks und Gastsessions haengen ueber
+   * Fremdschluessel mit `on delete cascade` daran und fallen in derselben Anweisung weg - die Datenbank
+   * garantiert die Vollstaendigkeit, nicht eine Reihenfolge im Anwendungscode. **Die Bytes im Storage
+   * gehoeren nicht dazu**; sie werden nach dem Commit ueber ihre Schluessel entfernt.
+   */
+  purge(id: BoardId): Promise<void>
 }
 
 /**
@@ -199,6 +282,13 @@ export interface BoardGrantRepository {
   add(boardId: BoardId, workspaceId: WorkspaceId, userId: UserId, role: BoardGrantRole): Promise<BoardGrant>
   setRole(boardId: BoardId, userId: UserId, role: BoardGrantRole): Promise<BoardGrant>
   remove(boardId: BoardId, userId: UserId): Promise<void>
+  /**
+   * Entzieht **alle** internen Freigaben eines Boards und liefert ihre Zahl.
+   *
+   * Der Wechsel des Arbeitsbereichs: eine Freigabe gilt fuer ein Mitglied des bisherigen Arbeitsbereichs
+   * und darf im Ziel niemandem etwas geben, das er dort nicht ohnehin haette.
+   */
+  removeAllForBoard(boardId: BoardId): Promise<number>
 }
 
 /** Die Freigabe besteht bereits (gleichzeitige Freigabe an denselben Nutzer). */
@@ -318,6 +408,13 @@ export interface BoardAssetRepository {
    */
   findByFileId(boardId: BoardId, fileId: string): Promise<BoardAsset | null>
   record(asset: NewBoardAsset): Promise<BoardAsset>
+  /**
+   * Speicherschluessel aller Assets eines Boards.
+   *
+   * Grundlage des endgueltigen Loeschens: die Datenbankzeilen fallen mit dem Board weg, die Bytes hinter dem
+   * Storage-Port nicht. Sie werden vor dem Loeschen gelesen und nach dem Commit entfernt.
+   */
+  listStorageKeys(boardId: BoardId): Promise<readonly string[]>
 }
 
 /* ---------------------------------------------------------------------------------------------------- */
@@ -357,6 +454,14 @@ export interface BoardShareLinkRepository {
    * zweiter Aufruf den Nachweis nicht verschiebt.
    */
   revoke(boardId: BoardId, id: BoardShareLinkId, revokedAt: Date): Promise<BoardShareLink | null>
+  /**
+   * Widerruft alle noch gueltigen Links eines Boards und liefert deren Kennungen.
+   *
+   * Der Wechsel des Arbeitsbereichs: ein Gastlink zeigt auf ein Board in einem bestimmten Arbeitsbereich,
+   * und er soll nicht stillschweigend in einen anderen weiterzeigen. Bereits widerrufene Links bleiben
+   * unberuehrt - ihr Zeitpunkt ist der Nachweis, wann der Zugang endete.
+   */
+  revokeAllForBoard(boardId: BoardId, revokedAt: Date): Promise<readonly BoardShareLinkId[]>
 }
 
 export interface GuestSessionRepository {

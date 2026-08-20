@@ -58,6 +58,13 @@ import type { BoardId, BoardRole, BoardStatus } from './model.js'
 export type BoardState = {
   readonly id: BoardId
   readonly status: BoardStatus
+  /**
+   * `null` heisst: nicht im Papierkorb. Sonst ist das Board fachlich **nicht vorhanden** - und zwar hier
+   * und nicht erst in der Abfrage, die es laedt. Beide Grenzen stehen absichtlich: die Abfrage liefert ein
+   * Board im Papierkorb gar nicht erst aus, und faende ein Weg trotzdem eines, entschiede die Policy es
+   * genauso wie eine erfundene Kennung.
+   */
+  readonly deletedAt: Date | null
 }
 
 /**
@@ -115,8 +122,23 @@ export type BoardAction =
    * und folgt der Workspacerolle (`folder:manage`).
    */
   | 'board:move'
+  /**
+   * Das Board in einen **anderen Arbeitsbereich** verschieben.
+   *
+   * Eine andere Stufe als `board:move`: die Ordnerablage ordnet innerhalb desselben Arbeitsbereichs, dieser
+   * Weg nimmt das Board aus seinem bisherigen heraus. Fuer alle, die es dort sahen, ist das dasselbe wie
+   * ein Loeschen - und traegt deshalb dieselbe Verantwortung (`mayRestoreBoard`). Im Ziel entscheidet
+   * zusaetzlich `board:create` gegen dessen eigene Mitgliedschaft.
+   */
+  | 'board:move-workspace'
   | 'board:archive'
   | 'board:unarchive'
+  /** Das Board in den Papierkorb legen. Es verschwindet damit sofort aus jeder Liste und jedem Zugriff. */
+  | 'board:trash'
+  /** Ein Board aus dem Papierkorb zuruecknehmen. Wirkt ausschliesslich auf ein Board im Papierkorb. */
+  | 'board:restore'
+  /** Ein Board endgueltig entfernen. Wirkt ausschliesslich auf ein Board im Papierkorb. */
+  | 'board:purge'
   /** Eine neue Szenenversion anlegen. */
   | 'scene:write'
   /** Einen frueheren Stand als neuen aktuellen Stand wiederherstellen. */
@@ -183,12 +205,17 @@ export function mayManageBoard(effective: EffectiveBoardRole): boolean {
 }
 
 /**
- * Traegt diese Rolle die Wiederherstellung eines frueheren Standes?
+ * Traegt diese Rolle die Verantwortung fuer den **Bestand** des Boards?
  *
  * Wer das Board verantwortet - **und zusaetzlich die Verwaltung des Arbeitsbereichs**. Eine
  * Wiederherstellung setzt den Inhalt eines Boards auf einen frueheren Stand zurueck; das ist keine laufende
  * Bearbeitung, sondern eine Korrektur, und sie gehoert denen, die fuer den Bestand einstehen. Ein `editor`
  * darf sie deshalb nicht, obwohl er jede einzelne Zeichnung aendern koennte.
+ *
+ * Dieselbe Frage entscheidet den **Papierkorb** und den **Wechsel des Arbeitsbereichs**: Loeschen,
+ * Wiederherstellen, endgueltiges Entfernen und Herausnehmen aus dem Arbeitsbereich nehmen das Board allen
+ * weg, die es bisher sahen. Das ist derselbe Eingriff in den Bestand und deshalb bewusst **eine** Regel und
+ * keine zweite, die eines Tages abweicht.
  *
  * Der Workspace-`admin` bekommt sie als einziger Fall zusaetzlich zur Boardstufe: er verwaltet den
  * Arbeitsbereich, damit dessen Bestand nicht an einer einzelnen Person haengt - dieselbe Ueberlegung, aus
@@ -201,6 +228,28 @@ export function mayManageBoard(effective: EffectiveBoardRole): boolean {
 export function mayRestoreBoard(effective: EffectiveBoardRole, workspaceRole: WorkspaceRole | null): boolean {
   return mayManageBoard(effective) || (effective.kind === 'member' && workspaceRole === 'admin')
 }
+
+/**
+ * Die beiden Aktionen, die es **nur** im Papierkorb gibt.
+ *
+ * Sie stehen einmal da und tragen beide Richtungen derselben Regel: auf einem Board im Papierkorb ist alles
+ * andere unerreichbar, und auf einem Board ausserhalb gibt es sie nicht. `board:trash` gehoert bewusst
+ * nicht dazu - es wirkt auf ein vorhandenes Board.
+ */
+const TRASH_ONLY_ACTIONS: readonly BoardAction[] = ['board:restore', 'board:purge']
+
+/**
+ * Was an einem archivierten Board noch moeglich ist: das Entarchivieren selbst und der Lebenszyklus.
+ *
+ * Ohne die drei Papierkorbaktionen waere ein archiviertes Board unloeschbar - genau die Ansammlung, die der
+ * Papierkorb aufloesen soll.
+ */
+const ARCHIVED_ALLOWED_ACTIONS: readonly BoardAction[] = [
+  'board:unarchive',
+  'board:trash',
+  'board:restore',
+  'board:purge',
+]
 
 /**
  * Entscheidet die Aktion eines Gastes.
@@ -218,7 +267,11 @@ function decideGuestAccess(
   // Ohne Board gibt es keinen Bezug, den ein Gastgrant treffen koennte - `board:create` ist fuer ihn
   // schlicht keine Aktion. Und ein anderes Board als das seine sieht fuer ihn aus wie eine erfundene
   // Kennung; dass es existiert, erfaehrt er nicht.
-  if (board === null || board.id !== grant.boardId) {
+  //
+  // Ein Board im Papierkorb steht in derselben Zeile: **auch ein gueltiger Link fuehrt nicht mehr dorthin.**
+  // Der Gast erfaehrt dabei nicht, dass es das Board einmal gab - es ist fuer ihn nicht vorhanden, und der
+  // Papierkorb selbst ist keine Aktion, die ein Gast je haette.
+  if (board === null || board.id !== grant.boardId || board.deletedAt !== null) {
     return denied('not-visible')
   }
 
@@ -276,6 +329,13 @@ export function decideBoardAccess(
     return denied('not-visible')
   }
 
+  // **Ein Board im Papierkorb ist fachlich nicht vorhanden**, nicht bloss ausgeblendet: jede Aktion ausser
+  // denen des Papierkorbs selbst bekommt dieselbe Antwort wie eine erfundene Kennung - auch das Lesen, auch
+  // fuer den Owner. Diese Frage steht deshalb vor allen anderen.
+  if (board !== null && (board.deletedAt !== null) !== TRASH_ONLY_ACTIONS.includes(action)) {
+    return denied('not-visible')
+  }
+
   // Lesen darf jede Boardrolle, auch `viewer`.
   if (action === 'board:read') {
     return ALLOWED
@@ -286,8 +346,9 @@ export function decideBoardAccess(
     return denied('workspace-archived')
   }
 
-  // Ein archiviertes Board bleibt lesbar. Aenderbar ist nur noch die Archivierung selbst.
-  if (board !== null && board.status === 'archived' && action !== 'board:unarchive') {
+  // Ein archiviertes Board bleibt lesbar. Aenderbar ist nur noch die Archivierung selbst - und sein
+  // Lebenszyklus: ein archiviertes Board muss loeschbar bleiben, sonst waere das Archiv die Endstation.
+  if (board !== null && board.status === 'archived' && !ARCHIVED_ALLOWED_ACTIONS.includes(action)) {
     return denied('board-archived')
   }
 
@@ -302,6 +363,13 @@ export function decideBoardAccess(
       // Wer das Board verantwortet, entscheidet, wer daran arbeitet. Ein `editor` gibt sein Recht nicht
       // weiter, sonst waere die Abstufung mit einem Schritt wieder aufgehoben.
       return mayManageBoard(level) ? ALLOWED : denied('insufficient-role')
+    case 'board:trash':
+    case 'board:restore':
+    case 'board:purge':
+    case 'board:move-workspace':
+      // Der Bestand des Boards: es allen wegnehmen, es zuruecknehmen oder es endgueltig entfernen. Dieselbe
+      // Verantwortung wie die Wiederherstellung eines frueheren Standes - und deshalb dieselbe Regel.
+      return mayRestoreBoard(level, subject.workspaceRole) ? ALLOWED : denied('insufficient-role')
     case 'board:create':
     case 'board:rename':
     case 'board:move':

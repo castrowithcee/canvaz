@@ -180,6 +180,18 @@ export type BoardRooms = {
    * laedt den neuen Stand ohnehin aus der Datenbank.
    */
   restored(boardId: BoardId, version: number, snapshot: SceneSnapshot): void
+  /**
+   * Beendet **alle** offenen Verbindungen genau eines Boards.
+   *
+   * Der Papierkorb und der Wechsel des Arbeitsbereichs aendern die Erreichbarkeit sofort. Die wiederkehrende
+   * Nachpruefung wuerde dieselben Verbindungen ohnehin beenden, aber erst beim naechsten Takt; dieser Weg
+   * macht daraus ein Ereignis statt einer Wartezeit - genau wie `closeShareLink` beim Widerruf eines
+   * Gastlinks. Ohne offenen Raum passiert nichts.
+   *
+   * Was noch nicht persistiert ist, wird dabei nicht verworfen: mit dem letzten Teilnehmer laeuft der
+   * Abschluss-Checkpoint wie bei jedem anderen Verlassen.
+   */
+  closeBoard(boardId: BoardId): void
   /** Offene Raeume; ausschliesslich fuer Tests und Diagnose. */
   readonly roomCount: number
   close(): Promise<void>
@@ -1100,6 +1112,16 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
       logger('info', 'board.scene.restored', { boardId, version, participants: room.participants.size })
       for (const participant of [...room.participants]) {
         sendSnapshot(participant, room)
+      }
+    },
+    closeBoard(boardId: BoardId): void {
+      const room = rooms.get(boardId)
+      if (room === undefined) {
+        return
+      }
+      // Kopie: `revoke` laesst den Teilnehmer den Raum verlassen und veraendert dabei genau diese Menge.
+      for (const participant of [...room.participants]) {
+        revoke(participant)
       }
     },
     get roomCount(): number {

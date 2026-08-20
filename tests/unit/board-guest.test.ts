@@ -29,9 +29,9 @@ import { decideBoardAccess, guestSubject } from '../../src/domain/board/policy.j
 const AKTIV = { status: 'active' } as const
 const ARCHIVIERT = { status: 'archived' } as const
 
-const BOARD = { id: 'board-1', status: 'active' } as const
-const BOARD_ARCHIVIERT = { id: 'board-1', status: 'archived' } as const
-const FREMDES_BOARD = { id: 'board-2', status: 'active' } as const
+const BOARD = { id: 'board-1', status: 'active', deletedAt: null } as const
+const BOARD_ARCHIVIERT = { id: 'board-1', status: 'archived', deletedAt: null } as const
+const FREMDES_BOARD = { id: 'board-2', status: 'active', deletedAt: null } as const
 
 const ALLE_AKTIONEN: readonly BoardAction[] = [
   'board:read',
@@ -242,5 +242,20 @@ describe('Gasteingaben und Gueltigkeit', () => {
     // Link laeuft frueher ab: dann endet auch die Gastsession frueher.
     const frueher = new Date(jetzt.getTime() + 60_000)
     expect(guestSessionExpiry(jetzt, { expiresAt: frueher })).toEqual(frueher)
+  })
+})
+
+describe('Gast und Papierkorb', () => {
+  it('fuehrt einen gueltigen Gastlink nicht mehr auf ein Board im Papierkorb', () => {
+    const geloescht = { id: 'board-1', status: 'active', deletedAt: new Date('2026-01-01T00:00:00Z') } as const
+    const gast = guestSubject('gast-1', { boardId: 'board-1', role: 'guest-editor' })
+
+    for (const action of ['board:read', 'scene:write'] as const) {
+      // Dieselbe Antwort wie fuer eine erfundene Kennung: dass es das Board gab, erfaehrt er nicht.
+      expect(decideBoardAccess(gast, AKTIV, geloescht, action), action).toEqual({
+        allowed: false,
+        reason: 'not-visible',
+      })
+    }
   })
 })

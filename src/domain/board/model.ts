@@ -65,6 +65,15 @@ export type Board = {
    */
   readonly folderId: FolderId | null
   readonly status: BoardStatus
+  /**
+   * Zeitpunkt, zu dem das Board in den Papierkorb gelegt wurde. `null` heisst: nicht im Papierkorb.
+   *
+   * Eine **eigene Achse neben `status`** und kein weiterer Statuswert: `status` sagt, ob das Board
+   * veraenderlich ist, `deletedAt` sagt, ob es ueberhaupt noch vorhanden ist. Ein Board im Papierkorb ist
+   * fachlich nicht erreichbar - weder in einer Liste noch ueber eine Freigabe noch ueber einen Gastlink -,
+   * und ein archiviertes Board behaelt beim Wiederherstellen seinen Archivzustand.
+   */
+  readonly deletedAt: Date | null
   /** Nummer der zuletzt gespeicherten Szene. `0` heisst: das Board wurde noch nie gespeichert. */
   readonly sceneVersion: number
   readonly createdAt: Date
@@ -72,6 +81,40 @@ export type Board = {
 }
 
 export const MAX_BOARD_TITLE_LENGTH = 120
+
+/**
+ * Standardfrist des Papierkorbs in Tagen.
+ *
+ * Vierzehn Tage sind lang genug, dass ein Irrtum auffaellt - eine Abwesenheit von zwei Wochen ist der
+ * uebliche Fall -, und kurz genug, dass ein Arbeitsbereich nicht dauerhaft Boards sammelt, die niemand
+ * mehr braucht. Der Wert ist der **Standard**, nicht die Zusage: der Betrieb kann ihn ueber
+ * `CANVAZ_TRASH_RETENTION_DAYS` verschieben. Die fachliche Zusage ist die Begrenztheit selbst - eine
+ * unbegrenzte Aufbewahrung gibt es nicht, und nach Ablauf hilft ausschliesslich die Sicherung.
+ */
+export const TRASH_RETENTION_DAYS = 14
+
+const MILLISECONDS_PER_DAY = 86_400_000
+
+/**
+ * Zeitpunkt, zu dem die Instanz ein Board im Papierkorb endgueltig entfernt.
+ *
+ * Eine reine Funktion und die **einzige** Stelle, die aus Loeschzeitpunkt und Frist ein Ende macht: die
+ * Anzeige der verbleibenden Frist und der fristgesteuerte Lauf rechnen damit nachweislich gleich.
+ */
+export function trashPurgeAt(deletedAt: Date, retentionDays: number): Date {
+  return new Date(deletedAt.getTime() + retentionDays * MILLISECONDS_PER_DAY)
+}
+
+/**
+ * Die Gegenrichtung derselben Frist: bis zu welchem Loeschzeitpunkt ist sie zum Zeitpunkt `now` abgelaufen?
+ *
+ * Der fristgesteuerte Lauf fragt so und nicht Zeile fuer Zeile - eine Abfrage mit einer Grenze statt einer
+ * Berechnung je Board. Beide Richtungen teilen sich denselben Tagesfaktor und koennen deshalb nicht
+ * auseinanderlaufen.
+ */
+export function trashDeadline(now: Date, retentionDays: number): Date {
+  return new Date(now.getTime() - retentionDays * MILLISECONDS_PER_DAY)
+}
 
 /**
  * Standardlaenge der aufbewahrten Szenenhistorie je Board.
