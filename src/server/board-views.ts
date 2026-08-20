@@ -18,8 +18,10 @@
  */
 
 import type {
+  BoardAccessOriginView,
   BoardSceneResponse,
   BoardView,
+  DashboardBoardView,
   GuestBoardSceneResponse,
   GuestBoardView,
   SceneResponse,
@@ -69,6 +71,41 @@ export function toBoardView(requester: Requester, access: BoardAccess): BoardVie
     sceneVersion: board.sceneVersion,
     createdAt: board.createdAt.toISOString(),
     updatedAt: board.updatedAt.toISOString(),
+  }
+}
+
+/**
+ * Zeile des Dashboards: die volle Boardsicht plus das, was erst die uebergreifende Liste braucht.
+ *
+ * Die **Herkunft des Zugriffs** wird hier aus demselben geladenen Zugriff abgeleitet, aus dem auch die
+ * Rolle kommt, und nicht in der Route nachgebaut: Ownerschaft am Board, sonst die eigene Freigabezeile,
+ * sonst allein die Mitgliedschaft im Arbeitsbereich. Sie ist eine **Auskunft ueber den eigenen Zugang** und
+ * keine Berechtigung - entschieden wird weiterhin in der Policy.
+ *
+ * Von einem Gastlink steht hier ausschliesslich, **dass** es einen gibt. Weder Token noch Adresse noch die
+ * Zahl der Gaeste gehen in eine Dashboardzeile ein.
+ */
+export function toDashboardBoardView(
+  requester: Requester,
+  access: BoardAccess,
+  extras: {
+    readonly workspaceName: string
+    readonly sharedInternally: boolean
+    readonly sharedExternally: boolean
+  },
+): DashboardBoardView {
+  const board = toBoardView(requester, access)
+  // `access.boardRole` ist die bereits aufgeloeste eigene Boardrolle: `owner` steht ausschliesslich fuer die
+  // Ownerschaft am Board selbst, `null` fuer keinen eigenen Boardbezug. Die Stufe, die ein Workspace-Owner
+  // zusaetzlich traegt, steht in `viewerRole` und faelscht die Herkunft deshalb nicht.
+  const origin: BoardAccessOriginView =
+    access.boardRole === 'owner' ? 'owner' : access.boardRole === null ? 'workspace' : 'grant'
+  return {
+    ...board,
+    workspaceName: extras.workspaceName,
+    accessOrigin: origin,
+    sharedInternally: extras.sharedInternally,
+    sharedExternally: extras.sharedExternally,
   }
 }
 

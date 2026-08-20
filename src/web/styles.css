@@ -280,3 +280,15 @@ h6 {
   margin-bottom: 0.25rem;
   margin-top: 1.5rem;
 }
+
+/* Dashboard: die vier Sichten stehen als Links nebeneinander - jede traegt ihre eigene Adresse. */
+.dashboard__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin: 1.5rem 0 0.5rem;
+}
+
+.dashboard__filters [aria-current='page'] {
+  font-weight: 700;
+}

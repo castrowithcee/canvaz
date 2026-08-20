@@ -32,6 +32,8 @@ import type {
   BoardsResponse,
   CreateBoardShareLinkRequest,
   CreateBoardShareLinkResponse,
+  DashboardFilterView,
+  DashboardResponse,
   GuestSessionResponse,
   SaveSceneResponse,
   SceneResponse,
@@ -64,6 +66,7 @@ import {
   AUTH_LOGOUT_PATH,
   AUTH_METHODS_PATH,
   BOARD_ASSETS_PATH,
+  BOARD_DASHBOARD_PATH,
   BOARD_EXPORT_PATH,
   BOARD_GRANT_ADD_PATH,
   BOARD_GRANT_REMOVE_PATH,
@@ -88,6 +91,7 @@ import {
   BOARD_VERSIONS_PATH,
   BOARDS_PATH,
   CSRF_HEADER,
+  DASHBOARD_FILTER_PARAM,
   ME_PATH,
   WORKSPACE_ID_PARAM,
   WORKSPACE_MEMBER_ADD_PATH,
@@ -276,6 +280,27 @@ export async function fetchBoards(
     params.set(BOARD_QUERY_PARAM, options.query)
   }
   return request<BoardsResponse>(`${BOARDS_PATH}?${params.toString()}`)
+}
+
+/**
+ * Arbeitsbereichsuebergreifende Boardliste des Dashboards.
+ *
+ * Filter und Suche gehen beide an den Server; im Browser wird nichts nachgefiltert. Ein Filter waehlt
+ * serverseitig aus den ohnehin zugaenglichen Boards aus.
+ */
+export async function fetchDashboard(options: {
+  readonly filter: DashboardFilterView | null
+  readonly query: string
+}): Promise<DashboardResponse> {
+  const params = new URLSearchParams()
+  if (options.filter !== null) {
+    params.set(DASHBOARD_FILTER_PARAM, options.filter)
+  }
+  if (options.query !== '') {
+    params.set(BOARD_QUERY_PARAM, options.query)
+  }
+  const suffix = params.size === 0 ? '' : `?${params.toString()}`
+  return request<DashboardResponse>(`${BOARD_DASHBOARD_PATH}${suffix}`)
 }
 
 export async function createBoard(csrfToken: string, workspaceId: string, title: string): Promise<BoardView> {

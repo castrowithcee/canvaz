@@ -14,9 +14,16 @@
 import { useMemo, useSyncExternalStore } from 'react'
 import type { MouseEvent, ReactNode } from 'react'
 
+import type { DashboardFilterView } from '../contracts/api.js'
+import { DASHBOARD_FILTER_PARAM } from '../contracts/api.js'
+import { parseDashboardFilter } from '../domain/board/model.js'
+
 export type AppRoute =
-  /** Einstieg nach der Anmeldung. */
-  | { readonly kind: 'einstieg' }
+  /**
+   * Einstieg nach der Anmeldung: das Dashboard. `filter` ist die aktive Sicht auf seine Liste und steht
+   * damit in der Adresse - sie ist teilbar und uebersteht ein Neuladen. `null` heisst: ungefiltert.
+   */
+  | { readonly kind: 'einstieg'; readonly filter: DashboardFilterView | null }
   /** Arbeitsbereichsverwaltung: eigene Arbeitsbereiche und das Anlegen eines neuen. */
   | { readonly kind: 'arbeitsbereiche' }
   /** Boards eines Arbeitsbereichs. */
@@ -46,6 +53,14 @@ const ADMIN_SEGMENT = 'verwaltung'
 const ADMIN_ACCOUNTS_SEGMENT = 'konten'
 const VERSION_PARAM = 'version'
 
+/**
+ * Aktiver Dashboardfilter aus der Adresse - gelesen mit **derselben** Funktion, mit der auch der Endpunkt
+ * ihn liest. Ein unbekannter Wert ist kein Fehler, sondern kein Filter.
+ */
+function parseFilter(search: string): DashboardFilterView | null {
+  return parseDashboardFilter(new URLSearchParams(search).get(DASHBOARD_FILTER_PARAM))
+}
+
 /** Nummer einer aufbewahrten Version; alles andere ist keine. */
 function parseVersion(search: string): number | null {
   const raw = new URLSearchParams(search).get(VERSION_PARAM)
@@ -66,7 +81,7 @@ export function parseRoute(href: string): AppRoute {
   const [first, second, third, fourth] = segments.map((segment) => decodeURIComponent(segment))
 
   if (first === undefined) {
-    return { kind: 'einstieg' }
+    return { kind: 'einstieg', filter: parseFilter(search) }
   }
   if (first === ACCOUNT_SEGMENT && second === undefined) {
     return { kind: 'konto' }
@@ -99,6 +114,7 @@ export function routeHref(route: AppRoute): string {
   const workspace = (id: string): string => `/${WORKSPACES_SEGMENT}/${encodeURIComponent(id)}`
   switch (route.kind) {
     case 'einstieg':
+      return route.filter === null ? '/' : `/?${DASHBOARD_FILTER_PARAM}=${route.filter}`
     case 'unbekannt':
       return '/'
     case 'arbeitsbereiche':

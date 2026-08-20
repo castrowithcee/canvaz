@@ -394,6 +394,86 @@ export type CreateBoardRequest = {
   readonly title: string
 }
 
+/* ---------------------------------------------------------------------------------------------------- */
+/* Dashboard                                                                                             */
+/* ---------------------------------------------------------------------------------------------------- */
+
+/**
+ * Arbeitsbereichsuebergreifende Boardliste (GET), sortiert nach letzter Aenderung.
+ *
+ * Verlangt eine **interne** Sitzung: ein Gast kennt genau ein Board und hat kein Dashboard. Die Liste ist
+ * serverseitig autorisiert und enthaelt ausschliesslich Boards, auf die der Anfragende tatsaechlich Zugriff
+ * hat; archivierte Boards stehen nicht darin.
+ */
+export const BOARD_DASHBOARD_PATH = `${API_BASE_PATH}/boards/dashboard`
+
+/**
+ * Aktiver Filter der Dashboardliste. Fehlt der Parameter oder ist er unbekannt, gilt die ungefilterte
+ * Liste. Der Titelfilter ist derselbe `BOARD_QUERY_PARAM` wie in der Boardliste; beide sind kombinierbar.
+ */
+export const DASHBOARD_FILTER_PARAM = 'filter'
+
+/**
+ * Hoechstzahl der Eintraege. Das Dashboard ist der Einstieg in die juengste Arbeit und kein Verzeichnis;
+ * wer alles eines Arbeitsbereichs sucht, findet es in dessen Boardliste.
+ */
+export const DASHBOARD_LIMIT = 50
+
+/**
+ * Die vier Sichten auf dieselbe Liste. Ein Filter **erweitert den Zugriff nie** - er waehlt aus, was ohnehin
+ * schon zugaenglich ist.
+ */
+export type DashboardFilterView =
+  /** Der Anfragende ist Owner des Boards. */
+  | 'owned'
+  /** Eigenes Board mit interner Freigabe an eine andere Person oder mit gueltigem Gastlink. */
+  | 'shared-by-me'
+  /** Der Zugriff entsteht aus einer Boardfreigabe an ihn, nicht aus seiner Ownerschaft. */
+  | 'shared-with-me'
+  /** Mindestens ein gueltiger, nicht widerrufener Gastlink. */
+  | 'shared-externally'
+
+/** Reihenfolge der Filter in der Oberflaeche; zugleich die zulaessigen Werte des Parameters. */
+export const DASHBOARD_FILTERS: readonly DashboardFilterView[] = [
+  'owned',
+  'shared-by-me',
+  'shared-with-me',
+  'shared-externally',
+]
+
+/**
+ * Woher der Zugriff auf genau diesen Eintrag stammt. Steht in **jeder** Zeile, auch in der ungefilterten
+ * Liste - die Zuordnung soll ohne Filter lesbar bleiben.
+ */
+export type BoardAccessOriginView =
+  /** Ownerschaft am Board selbst (`boards.owner_user_id`). */
+  | 'owner'
+  /** Eine interne Boardfreigabe an den Anfragenden. */
+  | 'grant'
+  /** Kein eigener Boardbezug: der Zugriff kommt allein aus der Mitgliedschaft im Arbeitsbereich. */
+  | 'workspace'
+
+/**
+ * Eine Zeile des Dashboards.
+ *
+ * Zusaetzlich zur Boardsicht der Name des Arbeitsbereichs (die Liste ist uebergreifend) und der
+ * Freigabezustand. **Weder Token noch Adresse eines Gastlinks stehen hier** - nur, dass eine externe
+ * Freigabe besteht.
+ */
+export type DashboardBoardView = BoardView & {
+  readonly workspaceName: string
+  readonly accessOrigin: BoardAccessOriginView
+  /** Wahr, wenn dieses Board an mindestens eine andere Person intern freigegeben ist. */
+  readonly sharedInternally: boolean
+  /** Wahr, wenn mindestens ein gueltiger, nicht widerrufener Gastlink besteht. */
+  readonly sharedExternally: boolean
+}
+
+export type DashboardResponse = {
+  /** Absteigend nach letzter Aenderung, auf `DASHBOARD_LIMIT` begrenzt. */
+  readonly boards: readonly DashboardBoardView[]
+}
+
 export type RenameBoardRequest = {
   readonly boardId: string
   readonly title: string

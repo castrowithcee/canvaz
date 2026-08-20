@@ -32,6 +32,7 @@ import type {
   BoardGrantsResponse,
   BoardView,
   BoardsResponse,
+  DashboardResponse,
   SceneResponse,
   SaveSceneResponse,
   SceneConflictResponse,
@@ -54,6 +55,9 @@ import {
   BOARD_STATUS_PARAM,
   BOARD_STATUS_PATH,
   BOARDS_PATH,
+  BOARD_DASHBOARD_PATH,
+  DASHBOARD_FILTER_PARAM,
+  DASHBOARD_LIMIT,
   MAX_ASSET_FILE_ID_LENGTH,
   MAX_ASSET_FILE_NAME_LENGTH,
   WORKSPACE_ID_PARAM,
@@ -72,6 +76,7 @@ import {
   parseBaseVersion,
   parseBoardGrantRole,
   parseBoardStatus,
+  parseDashboardFilter,
 } from '../domain/board/model.js'
 import type { BoardAction } from '../domain/board/policy.js'
 import type { BoardAccess, BoardAsset, BoardGrantEntry, BoardStore } from '../domain/board/repositories.js'
@@ -82,7 +87,7 @@ import { ALLOWED_IMAGE_TYPES, isAllowedImageType, sniffImageType } from '../doma
 import type { Workspace, WorkspaceRole } from '../domain/workspace/model.js'
 import type { MembershipTarget } from '../domain/workspace/repositories.js'
 import { NOT_FOUND, createBoardGate, withoutBoard } from './board-access.js'
-import { sceneResponseFor, toBoardView } from './board-views.js'
+import { sceneResponseFor, toBoardView, toDashboardBoardView } from './board-views.js'
 import type { AppContext } from './context.js'
 import { requireCsrfToken, requireRequester, requireSession } from './guard.js'
 import type { Route } from './http.js'
@@ -288,6 +293,56 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
               guestRole: null,
               ownerDisplayName: entry.ownerDisplayName,
             }),
+          ),
+        }
+        send(response, ok(200, body))
+      },
+    },
+
+    /**
+     * Arbeitsbereichsuebergreifende Boardliste des Dashboards.
+     *
+     * Die Berechtigung steht doppelt und an beiden richtigen Stellen: die Abfrage liefert ausschliesslich
+     * Boards aus Arbeitsbereichen mit eigener Mitgliedschaft, und jede Zeile geht danach durch dieselbe
+     * Policy wie ein einzeln geoeffnetes Board (`toBoardView` verlangt `board:read`). Ein Filter waehlt aus
+     * dieser Menge aus und kann sie nicht erweitern.
+     *
+     * `requireSession` statt `requireRequester`: ein Gast kennt genau ein Board und hat kein Dashboard.
+     */
+    {
+      method: 'GET',
+      path: BOARD_DASHBOARD_PATH,
+      handle: async ({ request, response, url }) => {
+        const auth = await requireSession(context, request, response)
+        if (auth === null) {
+          return
+        }
+        const kind = parseDashboardFilter(url.searchParams.get(DASHBOARD_FILTER_PARAM))
+        const title = (url.searchParams.get(BOARD_QUERY_PARAM) ?? '').trim().slice(0, MAX_FILTER_LENGTH)
+        const entries = await store.boards.listForDashboard(
+          auth.user.id,
+          { kind, title, limit: DASHBOARD_LIMIT },
+          context.now(),
+        )
+        const requester = asRequester(auth)
+        const body: DashboardResponse = {
+          boards: entries.map((entry) =>
+            toDashboardBoardView(
+              requester,
+              {
+                board: entry.board,
+                workspace: entry.workspace,
+                role: entry.role,
+                boardRole: entry.boardRole,
+                guestRole: null,
+                ownerDisplayName: entry.ownerDisplayName,
+              },
+              {
+                workspaceName: entry.workspace.name,
+                sharedInternally: entry.sharedInternally,
+                sharedExternally: entry.sharedExternally,
+              },
+            ),
           ),
         }
         send(response, ok(200, body))

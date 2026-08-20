@@ -92,6 +92,26 @@ export function parseBoardStatus(raw: unknown): BoardStatus | null {
 }
 
 /**
+ * Sicht auf die arbeitsbereichsuebergreifende Boardliste des Dashboards.
+ *
+ * Ein Filter waehlt aus, was ohnehin zugaenglich ist, und **erweitert den Zugriff nie**: die Liste ist
+ * bereits auf die Boards des Anfragenden begrenzt, bevor ein Filter ueberhaupt zaehlt.
+ *
+ * - `owned`: der Anfragende ist Owner (`boards.owner_user_id`).
+ * - `shared-by-me`: eigenes Board mit interner Freigabe an eine andere Person oder mit gueltigem Gastlink.
+ * - `shared-with-me`: der Zugriff entsteht aus einer Boardfreigabe an ihn, nicht aus seiner Ownerschaft.
+ * - `shared-externally`: mindestens ein gueltiger, nicht widerrufener Gastlink.
+ */
+export type DashboardFilter = 'owned' | 'shared-by-me' | 'shared-with-me' | 'shared-externally'
+
+const DASHBOARD_FILTERS: readonly DashboardFilter[] = ['owned', 'shared-by-me', 'shared-with-me', 'shared-externally']
+
+/** `null` heisst: kein Filter. Ein unbekannter Wert ist kein Fehler, sondern die ungefilterte Liste. */
+export function parseDashboardFilter(raw: unknown): DashboardFilter | null {
+  return DASHBOARD_FILTERS.find((candidate) => candidate === raw) ?? null
+}
+
+/**
  * Aufsetzversion einer Speicherung. Der Client nennt die Version, auf der seine Aenderung beruht; alles
  * andere ist kein gueltiger Speichervorgang.
  */

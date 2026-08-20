@@ -23,6 +23,7 @@ import { AdminUsers } from './admin-users.js'
 import { ApiError, fetchBoards, fetchMe, fetchWorkspaces, logout } from './api.js'
 import { BoardEditor } from './board/lazy-editor.js'
 import { Boards } from './boards.js'
+import { Dashboard } from './dashboard.js'
 import { GuestApp } from './guest.js'
 import type { AppRoute } from './router.js'
 import { Link, navigate, navigateBack, useRoute } from './router.js'
@@ -69,8 +70,8 @@ function NotFound({ text }: { readonly text: string }) {
       <h2 id="nicht-gefunden">Diese Ansicht gibt es nicht</h2>
       <p>{text}</p>
       <p>
-        <Link className="button" route={{ kind: 'einstieg' }}>
-          Zum Einstieg
+        <Link className="button" route={{ kind: 'einstieg', filter: null }}>
+          Zum Dashboard
         </Link>
       </p>
     </section>
@@ -109,7 +110,7 @@ function Header({
   return (
     <header className="app__header">
       <h1 className="app__brand">
-        <Link route={{ kind: 'einstieg' }}>Canvaz</Link>
+        <Link route={{ kind: 'einstieg', filter: null }}>Canvaz</Link>
       </h1>
       <nav className="app__nav" aria-label="Konto und Verwaltung">
         <Link route={{ kind: 'konto' }} current={route.kind === 'konto'}>
@@ -251,39 +252,6 @@ function Sidebar({
   )
 }
 
-/**
- * Einstieg nach der Anmeldung.
- *
- * Bewusst schlicht: die Uebersicht ueber alle Arbeitsbereiche mit Filtern ist ein eigenes Arbeitspaket. Von
- * hier fuehrt genau ein Schritt in einen Arbeitsbereich und einer von dort - oder direkt aus der
- * Seitenleiste - in ein Board.
- */
-function Einstieg({ workspaces }: { readonly workspaces: readonly WorkspaceView[] }) {
-  return (
-    <section aria-labelledby="einstieg">
-      <h2 id="einstieg">Willkommen</h2>
-      {workspaces.length === 0 ? (
-        <p>
-          Du gehoerst noch keinem Arbeitsbereich an.{' '}
-          <Link route={{ kind: 'arbeitsbereiche' }}>Lege den ersten an.</Link>
-        </p>
-      ) : (
-        <>
-          <p>Waehle einen Arbeitsbereich; seine Boards stehen links in der Seitenleiste.</p>
-          <ul>
-            {workspaces.map((workspace) => (
-              <li key={workspace.id}>
-                <Link route={{ kind: 'arbeitsbereich', workspaceId: workspace.id }}>{workspace.name}</Link>
-                {workspace.status === 'active' ? '' : ' (archiviert)'}
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
-    </section>
-  )
-}
-
 const UNKNOWN_WORKSPACE = 'Dieser Arbeitsbereich ist nicht (mehr) fuer dich freigegeben oder existiert nicht.'
 
 /** Der Inhaltsbereich: genau eine Ansicht, ausgewaehlt von der Adresse. */
@@ -307,7 +275,9 @@ function Content({
 }) {
   switch (route.kind) {
     case 'einstieg':
-      return <Einstieg workspaces={workspaces} />
+      return (
+        <Dashboard me={me} workspaces={workspaces} filter={route.filter} onBoardsChanged={onBoardsChanged} />
+      )
     case 'arbeitsbereiche':
       return <WorkspaceOverview me={me} workspaces={workspaces} onChanged={onWorkspacesChanged} />
     case 'arbeitsbereich':

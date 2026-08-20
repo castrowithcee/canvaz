@@ -19,7 +19,7 @@ import type {
   GuestRole,
   GuestSession,
 } from '../domain/board/guest.js'
-import type { Board, BoardGrantRole, BoardId, BoardStatus } from '../domain/board/model.js'
+import type { Board, BoardGrantRole, BoardId, BoardStatus, DashboardFilter } from '../domain/board/model.js'
 import { resolveBoardRole } from '../domain/board/model.js'
 import type {
   BoardAccess,
@@ -31,6 +31,8 @@ import type {
   BoardShareLinkEntry,
   BoardStore,
   BoardViewer,
+  DashboardBoardEntry,
+  DashboardQuery,
   NewBoardAsset,
   NewBoardShareLink,
   SceneVersion,
@@ -190,6 +192,40 @@ function liveGuestCondition(session: string, link: string, now: string): string 
       and (${link}.expires_at is null or ${link}.expires_at > ${now})`
 }
 
+/**
+ * Bedingung eines noch gueltigen Gastlinks, einmal formuliert - dieselbe Aussage wie in
+ * `findLiveByTokenHash`: weder widerrufen noch abgelaufen. `$3` ist der Zeitpunkt.
+ *
+ * Sie traegt im Dashboard zwei Aufgaben zugleich: die Marke "extern geteilt" einer Zeile und die beiden
+ * Filter, die daran haengen. Stuende sie mehrfach da, waere die zweite Fassung genau die Stelle, an der ein
+ * widerrufener Link einmal noch als externe Freigabe erschiene.
+ */
+const LIVE_SHARE_LINK = `exists (select 1 from board_share_links l
+                                  where l.board_id = b.id
+                                    and l.revoked_at is null
+                                    and (l.expires_at is null or l.expires_at > $3))`
+
+/** Mindestens eine interne Freigabe an eine andere Person als den Owner des Boards. */
+const SHARED_INTERNALLY = `exists (select 1 from board_grants og
+                                    where og.board_id = b.id
+                                      and og.user_id <> b.owner_user_id)`
+
+/**
+ * Where-Bedingung je Filter des Dashboards.
+ *
+ * Feste Zeichenketten aus einer geschlossenen Aufzaehlung: der Wert kommt aus `parseDashboardFilter` und
+ * nie aus der Anfrage in die Abfrage. Die Grundmenge - Mitgliedschaft und aktiver Status - steht davor und
+ * gilt fuer jeden dieser Faelle; ein Filter kann sie nicht aufweichen.
+ */
+const DASHBOARD_CONDITIONS: Readonly<Record<DashboardFilter, string>> = {
+  owned: 'b.owner_user_id = $1',
+  'shared-by-me': `b.owner_user_id = $1 and (${SHARED_INTERNALLY} or ${LIVE_SHARE_LINK})`,
+  // Die Ownerschaft schlaegt jede Freigabezeile; "mit mir geteilt" meint deshalb ausdruecklich das fremde
+  // Board, auf dem eine Freigabe an den Anfragenden steht.
+  'shared-with-me': 'b.owner_user_id <> $1 and g.role is not null',
+  'shared-externally': LIVE_SHARE_LINK,
+}
+
 function requireRow<T>(row: T | undefined, message: string): T {
   if (row === undefined) {
     throw new Error(message)
@@ -317,6 +353,64 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
           ownerDisplayName: row.owner_display_name,
           // Dieselbe Aufloesung wie beim einzelnen Board: der Owner schlaegt jede Freigabezeile.
           boardRole: resolveBoardRole(row.owner_user_id, userId, (row.grant_role as BoardGrantRole | null) ?? null),
+        }))
+      },
+
+      async listForDashboard(
+        userId: UserId,
+        query: DashboardQuery,
+        now: Date,
+      ): Promise<readonly DashboardBoardEntry[]> {
+        // Der `join` auf die Mitgliedschaft ist die Berechtigungsgrenze dieser Abfrage: ohne Zeile in
+        // `workspace_memberships` gibt es das Board hier nicht - auch nicht seinen Titel, seinen
+        // Arbeitsbereich oder seinen Zeitpunkt. Der Filter kommt erst danach und kann sie nicht aufweichen.
+        const result = await db.query<
+          BoardRow & {
+            owner_display_name: string
+            workspace_name: string
+            workspace_status: string
+            workspace_created_at: Date
+            workspace_updated_at: Date
+            workspace_role: string
+            grant_role: string | null
+            shared_internally: boolean
+            shared_externally: boolean
+          }
+        >(
+          `select b.id, b.workspace_id, b.title, b.owner_user_id, b.status, b.current_scene_version,
+                  b.created_at, b.updated_at, u.display_name as owner_display_name,
+                  w.name as workspace_name, w.status as workspace_status,
+                  w.created_at as workspace_created_at, w.updated_at as workspace_updated_at,
+                  m.role as workspace_role, g.role as grant_role,
+                  ${SHARED_INTERNALLY} as shared_internally,
+                  ${LIVE_SHARE_LINK} as shared_externally
+             from boards b
+             join workspaces w on w.id = b.workspace_id
+             join workspace_memberships m on m.workspace_id = b.workspace_id and m.user_id = $1
+             join users u on u.id = b.owner_user_id
+             left join board_grants g on g.board_id = b.id and g.user_id = $1
+            where b.status = 'active'
+              and ($2 = '' or position(lower($2) in lower(b.title)) > 0)
+              and ${query.kind === null ? 'true' : DASHBOARD_CONDITIONS[query.kind]}
+            order by b.updated_at desc, b.id
+            limit $4`,
+          [userId, query.title, now, query.limit],
+        )
+        return result.rows.map((row) => ({
+          board: toBoard(row),
+          ownerDisplayName: row.owner_display_name,
+          workspace: {
+            id: row.workspace_id,
+            name: row.workspace_name,
+            status: row.workspace_status as WorkspaceStatus,
+            createdAt: row.workspace_created_at,
+            updatedAt: row.workspace_updated_at,
+          },
+          role: row.workspace_role as WorkspaceRole,
+          // Dieselbe Aufloesung wie beim einzelnen Board: der Owner schlaegt jede Freigabezeile.
+          boardRole: resolveBoardRole(row.owner_user_id, userId, (row.grant_role as BoardGrantRole | null) ?? null),
+          sharedInternally: row.shared_internally,
+          sharedExternally: row.shared_externally,
         }))
       },
 

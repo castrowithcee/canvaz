@@ -12,7 +12,8 @@ import type { AppRoute } from '../../src/web/router.js'
 import { parseRoute, routeHref } from '../../src/web/router.js'
 
 const ROUTES: readonly (readonly [string, AppRoute])[] = [
-  ['/', { kind: 'einstieg' }],
+  ['/', { kind: 'einstieg', filter: null }],
+  ['/?filter=shared-with-me', { kind: 'einstieg', filter: 'shared-with-me' }],
   ['/arbeitsbereiche', { kind: 'arbeitsbereiche' }],
   ['/arbeitsbereiche/w-1', { kind: 'arbeitsbereich', workspaceId: 'w-1' }],
   ['/arbeitsbereiche/w-1/mitglieder', { kind: 'mitglieder', workspaceId: 'w-1' }],
@@ -35,6 +36,10 @@ describe('Pfadschema', () => {
   it('endet bei einer unbekannten Adresse benannt', () => {
     expect(parseRoute('/gibtesnicht')).toEqual({ kind: 'unbekannt' })
     expect(parseRoute('/arbeitsbereiche/w-1/boards/b-2/mehr')).toEqual({ kind: 'unbekannt' })
+  })
+
+  it('nimmt einen unbekannten Dashboardfilter als ungefilterte Liste', () => {
+    expect(parseRoute('/?filter=alles')).toEqual({ kind: 'einstieg', filter: null })
   })
 
   it('nimmt eine unbrauchbare Versionsangabe als aktuellen Stand', () => {

@@ -19,7 +19,7 @@ import type {
   GuestSession,
   GuestSessionId,
 } from './guest.js'
-import type { Board, BoardGrantRole, BoardId, BoardRole, BoardStatus } from './model.js'
+import type { Board, BoardGrantRole, BoardId, BoardRole, BoardStatus, DashboardFilter } from './model.js'
 
 /**
  * Wer ein Board anfragt.
@@ -71,6 +71,37 @@ export type BoardFilter = {
   readonly title: string
 }
 
+/**
+ * Abfrage der arbeitsbereichsuebergreifenden Dashboardliste.
+ *
+ * Der Status steht bewusst **nicht** darin: das Dashboard zeigt immer die aktiven Boards. Die Archivansicht
+ * ist eine Sicht auf genau einen Arbeitsbereich und bleibt bei `listForWorkspace`.
+ */
+export type DashboardQuery = {
+  /** `null` heisst: alle zugaenglichen Boards. */
+  readonly kind: DashboardFilter | null
+  /** Teilstring im Titel, ohne Platzhalterdeutung. Leer heisst: kein Filter. Mit `kind` kombinierbar. */
+  readonly title: string
+  readonly limit: number
+}
+
+/**
+ * Eine Zeile des Dashboards: das Board mit allem, was seine Zeile braucht, aus **einer** Abfrage.
+ *
+ * Der Arbeitsbereich und die Mitgliedschaft stehen dabei, weil die Liste uebergreifend ist und jede Zeile
+ * aus einem anderen Arbeitsbereich stammen kann; die Freigabemarken sagen nur **ob** geteilt wurde - ein
+ * Token oder eine Adresse eines Gastlinks kommt hier nie vor.
+ */
+export type DashboardBoardEntry = BoardListEntry & {
+  readonly workspace: Workspace
+  /** Mitgliedschaft des Anfragenden im Arbeitsbereich dieser Zeile. Ohne sie gibt es die Zeile nicht. */
+  readonly role: WorkspaceRole
+  /** Wahr, wenn dieses Board an mindestens eine andere Person als seinen Owner intern freigegeben ist. */
+  readonly sharedInternally: boolean
+  /** Wahr, wenn mindestens ein weder widerrufener noch abgelaufener Gastlink darauf zeigt. */
+  readonly sharedExternally: boolean
+}
+
 export interface BoardRepository {
   /** Ausschliesslich Boards des angegebenen Workspace. Die Sichtbarkeit des Workspace prueft der Aufrufer. */
   /**
@@ -84,6 +115,15 @@ export interface BoardRepository {
     userId: UserId,
     filter: BoardFilter,
   ): Promise<readonly BoardListEntry[]>
+  /**
+   * Aktive Boards **aller** Arbeitsbereiche des Anfragenden, juengste Aenderung zuerst.
+   *
+   * Die Mitgliedschaft steht als Join in der Abfrage selbst und nicht als nachgelagerter Filter: ein Board
+   * ohne Mitgliedschaft im zugehoerigen Arbeitsbereich kommt gar nicht erst in das Ergebnis, gleich welcher
+   * Filter gewaehlt ist. `now` entscheidet ueber Ablauf und Widerruf der Gastlinks und wird bei jedem
+   * Aufruf frisch geprueft.
+   */
+  listForDashboard(userId: UserId, query: DashboardQuery, now: Date): Promise<readonly DashboardBoardEntry[]>
   /**
    * Board samt Workspace und eigener Rolle. `null` heisst: existiert nicht - oder, bei einem Gast, sein
    * Zugang gilt nicht (mehr) fuer dieses Board.
