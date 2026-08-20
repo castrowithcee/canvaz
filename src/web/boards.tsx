@@ -9,7 +9,7 @@
  * und keine eigene Escape-Behandlung braucht.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { BoardStatusView, BoardView, MeResponse, WorkspaceView } from '../contracts/api.js'
 import { MAX_BOARD_TITLE_LENGTH } from '../domain/board/model.js'
@@ -205,6 +205,7 @@ export function Boards({
   me,
   workspace,
   onOpenBoard,
+  onListChanged,
 }: {
   readonly me: MeResponse
   readonly workspace: WorkspaceView
@@ -214,6 +215,11 @@ export function Boards({
    * halber Editor daneben entsteht.
    */
   readonly onOpenBoard: (board: BoardView, previewVersion?: number) => void
+  /**
+   * Meldet, dass diese Liste (neu) geladen wurde. Die Huelle haelt daran ihre Seitenleiste aktuell, ohne
+   * dass diese Datei sie kennen muesste.
+   */
+  readonly onListChanged?: () => void
 }) {
   const [status, setStatus] = useState<BoardStatusView>('active')
   /** Der abgeschickte Suchbegriff. Gefiltert wird serverseitig, nicht im Browser. */
@@ -230,6 +236,10 @@ export function Boards({
   const [versionsBoard, setVersionsBoard] = useState<BoardView | null>(null)
 
   const workspaceId = workspace.id
+  // Ref statt Abhaengigkeit: der Rueckruf darf das Laden nicht neu ausloesen - das waere eine Schleife.
+  const onChangedRef = useRef(onListChanged)
+  onChangedRef.current = onListChanged
+
   const load = useCallback(() => {
     setError(null)
     fetchBoards(workspaceId, { status, query: term })
@@ -243,6 +253,12 @@ export function Boards({
   }, [workspaceId, status, term])
 
   useEffect(load, [load])
+
+  /** Nach einer Aenderung: neu laden und die Huelle benachrichtigen, damit ihre Seitenleiste mitzieht. */
+  const reload = useCallback(() => {
+    load()
+    onChangedRef.current?.()
+  }, [load])
 
   const archived = status === 'archived'
   /** Ein archivierter Arbeitsbereich ist vollstaendig unveraenderlich - unabhaengig von jeder Boardrolle. */
@@ -348,7 +364,7 @@ export function Boards({
                   setShareBoardId(entry.id)
                 }}
                 onVersions={setVersionsBoard}
-                onChanged={load}
+                onChanged={reload}
                 onError={setActionError}
               />
             ))}
@@ -368,7 +384,7 @@ export function Boards({
           onClose={() => {
             setVersionsBoard(null)
           }}
-          onChanged={load}
+          onChanged={reload}
         />
       )}
 
@@ -396,7 +412,7 @@ export function Boards({
             createBoard(me.csrfToken, workspace.id, newTitle)
               .then(() => {
                 setNewTitle('')
-                load()
+                reload()
               })
               .catch((cause: unknown) => {
                 setActionError(messageOf(cause, 'Das Board konnte nicht angelegt werden.'))

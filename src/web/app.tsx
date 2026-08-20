@@ -2,13 +2,16 @@
  * Anwendungshuelle der SPA.
  *
  * Drei Zustaende: laedt, nicht angemeldet, angemeldet. Die Oberflaeche blendet nichts als Sicherheitsgrenze
- * aus - jede geschuetzte Antwort kommt bereits serverseitig geprueft. Bewusst ohne UI-Framework: das Paket
- * braucht eine Anmeldeseite, eine Huelle und eine Nutzerliste.
+ * aus - jede geschuetzte Antwort kommt bereits serverseitig geprueft. Bewusst ohne UI-Framework.
  *
- * Daneben stehen **genau zwei** weitere Routen: die Gastansicht unter `GUEST_APP_PATH` und das Einloesen
- * einer Einladung unter `INVITE_APP_PATH`. Beide werden vor jedem Sitzungszustand entschieden, damit weder
- * ein Gast noch ein Eingeladener erst eine Anmeldung angeboten bekommt. Einen Router braucht es dafuer
- * nicht: es sind drei Adressen, und der Anwendungsserver liefert fuer alle dieselbe `index.html`.
+ * Die angemeldete Anwendung ist eine dauerhafte Huelle aus Kopfzeile, Seitenleiste und Inhaltsbereich; die
+ * gezeigte Ansicht entscheidet die Adresse (siehe `router.ts`). Daneben stehen **genau zwei** weitere
+ * Adressen: die Gastansicht unter `GUEST_APP_PATH` und das Einloesen einer Einladung unter
+ * `INVITE_APP_PATH`. Beide werden vor jedem Sitzungszustand entschieden, damit weder ein Gast noch ein
+ * Eingeladener erst eine Anmeldung oder gar eine Huelle mit Arbeitsbereichen bekommt.
+ *
+ * Der Anwendungsserver liefert fuer jeden unbekannten GET-Pfad dieselbe `index.html` (siehe
+ * `server/http.ts`); ein Neuladen tief im Baum landet deshalb wieder in derselben Ansicht.
  */
 
 import { Suspense, useCallback, useEffect, useState } from 'react'
@@ -17,10 +20,13 @@ import type { BoardView, LoginErrorCode, MeResponse, WorkspaceView } from '../co
 import { GUEST_APP_PATH, INVITE_APP_PATH, LOGIN_ERROR_PARAM } from '../contracts/api.js'
 import { InviteApp, LoginView, PasswordSettings } from './account.js'
 import { AdminUsers } from './admin-users.js'
-import { ApiError, fetchMe, logout } from './api.js'
+import { ApiError, fetchBoards, fetchMe, fetchWorkspaces, logout } from './api.js'
 import { BoardEditor } from './board/lazy-editor.js'
+import { Boards } from './boards.js'
 import { GuestApp } from './guest.js'
-import { Workspaces } from './workspaces.js'
+import type { AppRoute } from './router.js'
+import { Link, navigate, navigateBack, useRoute } from './router.js'
+import { WorkspaceMembers, WorkspaceOverview, WorkspaceSettings } from './workspaces.js'
 
 const LOGIN_ERROR_TEXTS: Readonly<Record<LoginErrorCode, string>> = {
   abgebrochen: 'Die Anmeldung wurde beim Identity Provider abgebrochen.',
@@ -45,66 +51,43 @@ function readLoginError(): string | null {
 function clearLoginError(): void {
   const url = new URL(window.location.href)
   url.searchParams.delete(LOGIN_ERROR_PARAM)
-  window.history.replaceState(null, '', url.pathname + url.search)
+  window.history.replaceState(window.history.state, '', url.pathname + url.search)
 }
 
-/** Geoeffnetes Board samt Zustand seines Arbeitsbereichs; letzterer entscheidet ueber die Schreibbarkeit. */
-type OpenBoard = {
-  readonly board: BoardView
-  readonly workspaceArchived: boolean
-  /**
-   * `null` heisst: der aktuelle Stand. Sonst die Read-only-Vorschau genau dieser Version - derselbe Editor,
-   * dieselbe Flaeche, aber ohne Boardraum und ohne jede Speicherung.
-   */
-  readonly previewVersion: number | null
+function Notice({ text }: { readonly text: string }) {
+  return (
+    <p className="notice notice--error" role="alert">
+      {text}
+    </p>
+  )
 }
 
-function Shell({
+/** Eine benannte Ansicht statt eines leeren Bildschirms - fuer unbekannte, fremde und fehlende Objekte. */
+function NotFound({ text }: { readonly text: string }) {
+  return (
+    <section aria-labelledby="nicht-gefunden">
+      <h2 id="nicht-gefunden">Diese Ansicht gibt es nicht</h2>
+      <p>{text}</p>
+      <p>
+        <Link className="button" route={{ kind: 'einstieg' }}>
+          Zum Einstieg
+        </Link>
+      </p>
+    </section>
+  )
+}
+
+function Header({
   me,
+  route,
   onSignedOut,
-  onReload,
 }: {
   readonly me: MeResponse
+  readonly route: AppRoute
   readonly onSignedOut: () => void
-  readonly onReload: () => void
 }) {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [openBoard, setOpenBoard] = useState<OpenBoard | null>(null)
-
-  function open(board: BoardView, workspace: WorkspaceView, previewVersion?: number): void {
-    setOpenBoard({
-      board,
-      workspaceArchived: workspace.status === 'archived',
-      previewVersion: previewVersion ?? null,
-    })
-  }
-
-  // Der Editor braucht die ganze Flaeche; die Verwaltungsansicht bleibt im Zustand der Anwendung erhalten.
-  if (openBoard !== null) {
-    return (
-      <Suspense
-        fallback={
-          <main className="shell" aria-live="polite">
-            <h1>Canvaz</h1>
-            <p>Editor wird geladen …</p>
-          </main>
-        }
-      >
-        <BoardEditor
-          key={`${openBoard.board.id}:${String(openBoard.previewVersion ?? 0)}`}
-          boardId={openBoard.board.id}
-          csrfToken={me.csrfToken}
-          workspaceArchived={openBoard.workspaceArchived}
-          previewVersion={openBoard.previewVersion}
-          guestName={null}
-          onClose={() => {
-            setOpenBoard(null)
-          }}
-        />
-      </Suspense>
-    )
-  }
 
   function signOut(): void {
     setBusy(true)
@@ -124,29 +107,373 @@ function Shell({
   }
 
   return (
-    <div className="shell">
-      <header className="shell__header">
-        <h1>Canvaz</h1>
-        <div className="shell__account">
-          <span>
-            Angemeldet als <strong>{me.user.displayName}</strong>
-            {me.user.email !== null && <> ({me.user.email})</>}
-            {me.user.isSystemAdmin && <> · Systemadmin</>}
-          </span>
-          <button type="button" onClick={signOut} disabled={busy}>
-            Abmelden
-          </button>
-        </div>
-      </header>
-      {error !== null && (
-        <p className="notice notice--error" role="alert">
-          {error}
-        </p>
+    <header className="app__header">
+      <h1 className="app__brand">
+        <Link route={{ kind: 'einstieg' }}>Canvaz</Link>
+      </h1>
+      <nav className="app__nav" aria-label="Konto und Verwaltung">
+        <Link route={{ kind: 'konto' }} current={route.kind === 'konto'}>
+          {me.user.displayName}
+          {me.user.email === null ? '' : ` (${me.user.email})`}
+        </Link>
+        {me.user.isSystemAdmin && (
+          <Link route={{ kind: 'konten' }} current={route.kind === 'konten'}>
+            Kontenverwaltung
+          </Link>
+        )}
+        <button type="button" onClick={signOut} disabled={busy}>
+          Abmelden
+        </button>
+      </nav>
+      {error !== null && <Notice text={error} />}
+    </header>
+  )
+}
+
+/**
+ * Seitenleiste: aktiver Arbeitsbereich, Wechsel und seine Boards.
+ *
+ * Die Boardliste wird hier eigens geladen. Sie ist damit dieselbe Abfrage wie in der Boardansicht, aber
+ * unabhaengig von deren Filtern - die Seitenleiste zeigt immer die aktiven Boards, auch waehrend die
+ * Ansicht das Archiv oder einen Suchtreffer zeigt.
+ */
+function Sidebar({
+  workspaces,
+  active,
+  route,
+  boardsToken,
+}: {
+  readonly workspaces: readonly WorkspaceView[]
+  readonly active: WorkspaceView | null
+  readonly route: AppRoute
+  /** Aendert sich, sobald die Boardansicht die Liste veraendert hat; dann laedt die Leiste neu. */
+  readonly boardsToken: number
+}) {
+  const [boards, setBoards] = useState<readonly BoardView[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const activeId = active?.id ?? null
+
+  const load = useCallback(() => {
+    if (activeId === null) {
+      setBoards([])
+      return
+    }
+    setError(null)
+    fetchBoards(activeId, { status: 'active', query: '' })
+      .then((response) => {
+        setBoards(response.boards)
+      })
+      .catch(() => {
+        setBoards([])
+        setError('Die Boards konnten nicht geladen werden.')
+      })
+  }, [activeId])
+
+  useEffect(() => {
+    setBoards(null)
+    load()
+  }, [load, boardsToken])
+
+  const openBoardId = route.kind === 'board' ? route.boardId : null
+
+  return (
+    <nav className="app__sidebar" aria-label="Arbeitsbereich und Boards">
+      <h2 className="sidebar__title">Arbeitsbereiche</h2>
+      {workspaces.length === 0 && <p className="hint">Noch kein Arbeitsbereich.</p>}
+      <ul className="sidebar__list">
+        {workspaces.map((workspace) => (
+          <li key={workspace.id}>
+            <Link
+              route={{ kind: 'arbeitsbereich', workspaceId: workspace.id }}
+              current={workspace.id === activeId}
+            >
+              {workspace.name}
+              {workspace.status === 'active' ? '' : ' (archiviert)'}
+            </Link>
+          </li>
+        ))}
+      </ul>
+      <p>
+        <Link route={{ kind: 'arbeitsbereiche' }} current={route.kind === 'arbeitsbereiche'}>
+          Arbeitsbereiche verwalten
+        </Link>
+      </p>
+
+      {active !== null && (
+        <>
+          <h2 className="sidebar__title">Boards in {active.name}</h2>
+          {boards === null && <p aria-live="polite">Boards werden geladen …</p>}
+          {error !== null && (
+            <p className="notice notice--error" role="alert">
+              {error}{' '}
+              <button type="button" onClick={load}>
+                Erneut laden
+              </button>
+            </p>
+          )}
+          {boards !== null && boards.length === 0 && error === null && (
+            <p className="hint">Noch kein aktives Board.</p>
+          )}
+          <ul className="sidebar__list">
+            {(boards ?? []).map((board) => (
+              <li key={board.id}>
+                <Link
+                  route={{ kind: 'board', workspaceId: active.id, boardId: board.id, version: null }}
+                  current={board.id === openBoardId}
+                >
+                  {board.title}
+                </Link>
+              </li>
+            ))}
+          </ul>
+          <p>
+            <Link
+              route={{ kind: 'arbeitsbereich', workspaceId: active.id }}
+              current={route.kind === 'arbeitsbereich'}
+            >
+              Alle Boards
+            </Link>
+            {' · '}
+            <Link route={{ kind: 'mitglieder', workspaceId: active.id }} current={route.kind === 'mitglieder'}>
+              Mitglieder
+            </Link>
+            {' · '}
+            <Link
+              route={{ kind: 'einstellungen', workspaceId: active.id }}
+              current={route.kind === 'einstellungen'}
+            >
+              Einstellungen
+            </Link>
+          </p>
+        </>
       )}
-      <main>
-        <Workspaces me={me} onOpenBoard={open} />
-        <PasswordSettings me={me} onChanged={onReload} />
-        {me.user.isSystemAdmin && <AdminUsers me={me} />}
+    </nav>
+  )
+}
+
+/**
+ * Einstieg nach der Anmeldung.
+ *
+ * Bewusst schlicht: die Uebersicht ueber alle Arbeitsbereiche mit Filtern ist ein eigenes Arbeitspaket. Von
+ * hier fuehrt genau ein Schritt in einen Arbeitsbereich und einer von dort - oder direkt aus der
+ * Seitenleiste - in ein Board.
+ */
+function Einstieg({ workspaces }: { readonly workspaces: readonly WorkspaceView[] }) {
+  return (
+    <section aria-labelledby="einstieg">
+      <h2 id="einstieg">Willkommen</h2>
+      {workspaces.length === 0 ? (
+        <p>
+          Du gehoerst noch keinem Arbeitsbereich an.{' '}
+          <Link route={{ kind: 'arbeitsbereiche' }}>Lege den ersten an.</Link>
+        </p>
+      ) : (
+        <>
+          <p>Waehle einen Arbeitsbereich; seine Boards stehen links in der Seitenleiste.</p>
+          <ul>
+            {workspaces.map((workspace) => (
+              <li key={workspace.id}>
+                <Link route={{ kind: 'arbeitsbereich', workspaceId: workspace.id }}>{workspace.name}</Link>
+                {workspace.status === 'active' ? '' : ' (archiviert)'}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
+  )
+}
+
+const UNKNOWN_WORKSPACE = 'Dieser Arbeitsbereich ist nicht (mehr) fuer dich freigegeben oder existiert nicht.'
+
+/** Der Inhaltsbereich: genau eine Ansicht, ausgewaehlt von der Adresse. */
+function Content({
+  me,
+  route,
+  workspaces,
+  workspace,
+  onWorkspacesChanged,
+  onProfileChanged,
+  onBoardsChanged,
+}: {
+  readonly me: MeResponse
+  readonly route: AppRoute
+  readonly workspaces: readonly WorkspaceView[]
+  /** Der Arbeitsbereich der Adresse; `null`, wenn die Adresse keinen nennt oder er nicht sichtbar ist. */
+  readonly workspace: WorkspaceView | null
+  readonly onWorkspacesChanged: () => void
+  readonly onProfileChanged: () => void
+  readonly onBoardsChanged: () => void
+}) {
+  switch (route.kind) {
+    case 'einstieg':
+      return <Einstieg workspaces={workspaces} />
+    case 'arbeitsbereiche':
+      return <WorkspaceOverview me={me} workspaces={workspaces} onChanged={onWorkspacesChanged} />
+    case 'arbeitsbereich':
+    case 'mitglieder':
+    case 'einstellungen':
+    case 'board': {
+      if (workspace === null) {
+        return <NotFound text={UNKNOWN_WORKSPACE} />
+      }
+      if (route.kind === 'mitglieder') {
+        return <WorkspaceMembers me={me} workspace={workspace} onChanged={onWorkspacesChanged} />
+      }
+      if (route.kind === 'einstellungen') {
+        return <WorkspaceSettings me={me} workspace={workspace} onChanged={onWorkspacesChanged} />
+      }
+      return (
+        <section aria-labelledby="arbeitsbereich">
+          <h2 id="arbeitsbereich">
+            {workspace.name}
+            {workspace.status === 'active' ? '' : ' (archiviert)'}
+          </h2>
+          <Boards
+            me={me}
+            workspace={workspace}
+            onListChanged={onBoardsChanged}
+            onOpenBoard={(board, previewVersion) => {
+              navigate({
+                kind: 'board',
+                workspaceId: workspace.id,
+                boardId: board.id,
+                version: previewVersion ?? null,
+              })
+            }}
+          />
+        </section>
+      )
+    }
+    case 'konto':
+      return (
+        <section aria-labelledby="konto">
+          <h2 id="konto">Konto</h2>
+          <p>
+            Angemeldet als <strong>{me.user.displayName}</strong>
+            {me.user.email === null ? '' : ` (${me.user.email})`}
+            {me.user.isSystemAdmin && ' · Systemadmin'}
+          </p>
+          <PasswordSettings me={me} onChanged={onProfileChanged} />
+        </section>
+      )
+    case 'konten':
+      return me.user.isSystemAdmin ? (
+        <AdminUsers me={me} />
+      ) : (
+        <NotFound text="Die Kontenverwaltung steht nur der Systemadministration offen." />
+      )
+    case 'unbekannt':
+      return <NotFound text="Diese Adresse gehoert zu keiner Ansicht dieser Anwendung." />
+  }
+}
+
+function Shell({
+  me,
+  onSignedOut,
+  onReload,
+}: {
+  readonly me: MeResponse
+  readonly onSignedOut: () => void
+  readonly onReload: () => void
+}) {
+  const route = useRoute()
+  const [workspaces, setWorkspaces] = useState<readonly WorkspaceView[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [boardsToken, setBoardsToken] = useState(0)
+  /** Zuletzt besuchter Arbeitsbereich; er haelt die Seitenleiste auch in Konto- und Verwaltungsansichten. */
+  const [lastWorkspaceId, setLastWorkspaceId] = useState<string | null>(null)
+
+  const load = useCallback(() => {
+    setError(null)
+    fetchWorkspaces()
+      .then((response) => {
+        setWorkspaces(response.workspaces)
+      })
+      .catch((cause: unknown) => {
+        setWorkspaces([])
+        setError(
+          cause instanceof ApiError ? cause.message : 'Die Arbeitsbereiche konnten nicht geladen werden.',
+        )
+      })
+  }, [])
+
+  useEffect(load, [load])
+
+  const routeWorkspaceId = 'workspaceId' in route ? route.workspaceId : null
+  useEffect(() => {
+    if (routeWorkspaceId !== null) {
+      setLastWorkspaceId(routeWorkspaceId)
+    }
+  }, [routeWorkspaceId])
+
+  const bumpBoards = useCallback(() => {
+    setBoardsToken((token) => token + 1)
+  }, [])
+
+  if (workspaces === null) {
+    return (
+      <main className="shell" aria-live="polite">
+        <h1>Canvaz</h1>
+        <p>Arbeitsbereiche werden geladen …</p>
+      </main>
+    )
+  }
+
+  const find = (id: string | null): WorkspaceView | null =>
+    id === null ? null : (workspaces.find((entry) => entry.id === id) ?? null)
+  const routeWorkspace = find(routeWorkspaceId)
+  const activeWorkspace = routeWorkspace ?? find(lastWorkspaceId) ?? workspaces[0] ?? null
+
+  // Der Editor braucht die ganze Flaeche; Kopfzeile und Seitenleiste treten dafuer ab.
+  if (route.kind === 'board' && routeWorkspace !== null) {
+    const back: AppRoute = { kind: 'arbeitsbereich', workspaceId: routeWorkspace.id }
+    return (
+      <Suspense
+        fallback={
+          <main className="shell" aria-live="polite">
+            <h1>Canvaz</h1>
+            <p>Editor wird geladen …</p>
+          </main>
+        }
+      >
+        <BoardEditor
+          key={`${route.boardId}:${String(route.version ?? 0)}`}
+          boardId={route.boardId}
+          csrfToken={me.csrfToken}
+          workspaceArchived={routeWorkspace.status === 'archived'}
+          previewVersion={route.version}
+          guestName={null}
+          onClose={() => {
+            navigateBack(back)
+          }}
+        />
+      </Suspense>
+    )
+  }
+
+  return (
+    <div className="app">
+      <Header me={me} route={route} onSignedOut={onSignedOut} />
+      <Sidebar workspaces={workspaces} active={activeWorkspace} route={route} boardsToken={boardsToken} />
+      <main className="app__main">
+        {error !== null && (
+          <p className="notice notice--error" role="alert">
+            {error}{' '}
+            <button type="button" onClick={load}>
+              Erneut laden
+            </button>
+          </p>
+        )}
+        <Content
+          me={me}
+          route={route}
+          workspaces={workspaces}
+          workspace={routeWorkspace}
+          onWorkspacesChanged={load}
+          onProfileChanged={onReload}
+          onBoardsChanged={bumpBoards}
+        />
       </main>
     </div>
   )
@@ -215,8 +542,8 @@ function MemberApp() {
 }
 
 export function App() {
-  // Die Adresse aendert sich waehrend einer Sitzung nicht; die Entscheidung faellt deshalb einmal und ohne
-  // eigenen Zustand.
+  // Gast und Einladung haben eine feste Adresse, die sich waehrend ihrer Sitzung nicht aendert; die
+  // Entscheidung faellt deshalb einmal und vor jedem Sitzungszustand.
   if (window.location.pathname === GUEST_APP_PATH) {
     return <GuestApp />
   }

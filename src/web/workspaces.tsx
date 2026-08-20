@@ -10,7 +10,6 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import type {
-  BoardView,
   MeResponse,
   WorkspaceMemberView,
   WorkspaceRoleView,
@@ -25,12 +24,11 @@ import {
   createWorkspace,
   fetchMemberCandidates,
   fetchWorkspaceMembers,
-  fetchWorkspaces,
   removeWorkspaceMember,
   renameWorkspace,
   setWorkspaceStatus,
 } from './api.js'
-import { Boards } from './boards.js'
+import { Link } from './router.js'
 
 const ROLE_LABELS: Readonly<Record<WorkspaceRoleView, string>> = {
   owner: 'Owner',
@@ -373,100 +371,50 @@ function MemberRow({
   )
 }
 
-function WorkspaceDetail({
+/**
+ * Einstellungen eines Arbeitsbereichs: Name und Archivzustand.
+ *
+ * Was angeboten wird, richtet sich nach der vom Server genannten Rolle - Bequemlichkeit, keine Grenze.
+ */
+export function WorkspaceSettings({
   me,
-  workspaceId,
-  onBack,
+  workspace,
   onChanged,
-  onOpenBoard,
 }: {
   readonly me: MeResponse
-  readonly workspaceId: string
-  readonly onBack: () => void
+  readonly workspace: WorkspaceView
   readonly onChanged: () => void
-  /** `previewVersion` oeffnet statt des aktuellen Standes die Read-only-Vorschau genau dieser Version. */
-  readonly onOpenBoard: (board: BoardView, workspace: WorkspaceView, previewVersion?: number) => void
 }) {
-  const [state, setState] = useState<
-    | { readonly kind: 'loading' }
-    | { readonly kind: 'ready'; readonly workspace: WorkspaceView; readonly members: readonly WorkspaceMemberView[] }
-    | { readonly kind: 'failed'; readonly message: string }
-  >({ kind: 'loading' })
-  const [actionError, setActionError] = useState<string | null>(null)
-  const [renameValue, setRenameValue] = useState<string | null>(null)
+  const [name, setName] = useState(workspace.name)
+  const [error, setError] = useState<string | null>(null)
 
-  const load = useCallback(() => {
-    setActionError(null)
-    fetchWorkspaceMembers(workspaceId)
-      .then((response) => {
-        setState({ kind: 'ready', workspace: response.workspace, members: response.members })
-        setRenameValue(response.workspace.name)
-      })
-      .catch((cause: unknown) => {
-        setState({ kind: 'failed', message: messageOf(cause, 'Der Arbeitsbereich konnte nicht geladen werden.') })
-      })
-  }, [workspaceId])
+  useEffect(() => {
+    setName(workspace.name)
+  }, [workspace.name])
 
-  useEffect(load, [load])
-
-  function reload(): void {
-    load()
-    onChanged()
-  }
-
-  if (state.kind === 'loading') {
-    return (
-      <section aria-labelledby="workspace-detail-heading">
-        <h3 id="workspace-detail-heading">Arbeitsbereich</h3>
-        <p aria-live="polite">Arbeitsbereich wird geladen …</p>
-      </section>
-    )
-  }
-  if (state.kind === 'failed') {
-    return (
-      <section aria-labelledby="workspace-detail-heading">
-        <h3 id="workspace-detail-heading">Arbeitsbereich</h3>
-        <Notice text={state.message} />
-        <p>
-          <button type="button" onClick={onBack}>
-            Zurueck zur Uebersicht
-          </button>
-        </p>
-      </section>
-    )
-  }
-
-  const { workspace, members } = state
-  const isOwner = workspace.role === 'owner'
-  const canManage = isOwner || workspace.role === 'admin' || me.user.isSystemAdmin
-  const canAssignOwner = isOwner || me.user.isSystemAdmin
-  const canArchive = isOwner || me.user.isSystemAdmin
+  const canManage = workspace.role === 'owner' || workspace.role === 'admin' || me.user.isSystemAdmin
+  const canArchive = workspace.role === 'owner' || me.user.isSystemAdmin
   const active = workspace.status === 'active'
 
   return (
-    <section aria-labelledby="workspace-detail-heading">
-      <h3 id="workspace-detail-heading">
-        {workspace.name}
+    <section aria-labelledby="workspace-settings-heading">
+      <h2 id="workspace-settings-heading">
+        Einstellungen: {workspace.name}
         {active ? '' : ' (archiviert)'}
-      </h3>
-      <p>
-        <button type="button" onClick={onBack}>
-          Zurueck zur Uebersicht
-        </button>
-      </p>
+      </h2>
       {!active && <p className="hint">Ein archivierter Arbeitsbereich ist lesbar, aber nicht mehr aenderbar.</p>}
-      {actionError !== null && <Notice text={actionError} />}
+      {error !== null && <Notice text={error} />}
 
-      {canManage && active && renameValue !== null && (
+      {canManage && active && (
         <form
           className="stack"
           onSubmit={(event) => {
             event.preventDefault()
-            setActionError(null)
-            renameWorkspace(me.csrfToken, { workspaceId: workspace.id, name: renameValue })
-              .then(reload)
+            setError(null)
+            renameWorkspace(me.csrfToken, { workspaceId: workspace.id, name })
+              .then(onChanged)
               .catch((cause: unknown) => {
-                setActionError(messageOf(cause, 'Der Arbeitsbereich konnte nicht umbenannt werden.'))
+                setError(messageOf(cause, 'Der Arbeitsbereich konnte nicht umbenannt werden.'))
               })
           }}
         >
@@ -474,16 +422,16 @@ function WorkspaceDetail({
             <label htmlFor="workspace-rename">Arbeitsbereich umbenennen</label>
             <input
               id="workspace-rename"
-              value={renameValue}
+              value={name}
               maxLength={80}
               required
               onChange={(event) => {
-                setRenameValue(event.target.value)
+                setName(event.target.value)
               }}
             />
           </div>
           <p>
-            <button type="submit" disabled={renameValue.trim().length === 0}>
+            <button type="submit" disabled={name.trim().length === 0}>
               Namen speichern
             </button>
           </p>
@@ -495,14 +443,14 @@ function WorkspaceDetail({
           <button
             type="button"
             onClick={() => {
-              setActionError(null)
+              setError(null)
               setWorkspaceStatus(me.csrfToken, {
                 workspaceId: workspace.id,
                 status: active ? 'archived' : 'active',
               })
-                .then(reload)
+                .then(onChanged)
                 .catch((cause: unknown) => {
-                  setActionError(messageOf(cause, 'Der Status konnte nicht geaendert werden.'))
+                  setError(messageOf(cause, 'Der Status konnte nicht geaendert werden.'))
                 })
             }}
           >
@@ -511,93 +459,129 @@ function WorkspaceDetail({
         </p>
       )}
 
-      <Boards
-        me={me}
-        workspace={workspace}
-        onOpenBoard={(board, previewVersion) => {
-          onOpenBoard(board, workspace, previewVersion)
-        }}
-      />
+      {!canManage && !canArchive && <p>Deine Rolle traegt keine Einstellungen dieses Arbeitsbereichs.</p>}
+    </section>
+  )
+}
 
-      <h4>Mitglieder</h4>
-      <table className="users">
-        <caption className="visually-hidden">Mitglieder von {workspace.name}</caption>
-        <thead>
-          <tr>
-            <th scope="col">Name</th>
-            <th scope="col">E-Mail</th>
-            <th scope="col">Rolle</th>
-            <th scope="col">Aktion</th>
-          </tr>
-        </thead>
-        <tbody>
-          {members.map((member) => (
-            <MemberRow
-              key={member.userId}
-              me={me}
-              workspace={workspace}
-              member={member}
-              canManage={canManage}
-              canAssignOwner={canAssignOwner}
-              onChanged={reload}
-              onError={setActionError}
-            />
-          ))}
-        </tbody>
-      </table>
+/** Mitglieder eines Arbeitsbereichs: Liste, Rollenwechsel, Entfernen und Aufnahme. */
+export function WorkspaceMembers({
+  me,
+  workspace,
+  onChanged,
+}: {
+  readonly me: MeResponse
+  readonly workspace: WorkspaceView
+  /** Ruft die Huelle: eine Rollenaenderung kann die eigene Sicht auf den Arbeitsbereich veraendern. */
+  readonly onChanged: () => void
+}) {
+  const [state, setState] = useState<
+    | { readonly kind: 'loading' }
+    | { readonly kind: 'ready'; readonly members: readonly WorkspaceMemberView[] }
+    | { readonly kind: 'failed'; readonly message: string }
+  >({ kind: 'loading' })
+  const [actionError, setActionError] = useState<string | null>(null)
 
-      {canManage && active && (
+  const workspaceId = workspace.id
+  const load = useCallback(() => {
+    setActionError(null)
+    fetchWorkspaceMembers(workspaceId)
+      .then((response) => {
+        setState({ kind: 'ready', members: response.members })
+      })
+      .catch((cause: unknown) => {
+        setState({ kind: 'failed', message: messageOf(cause, 'Die Mitglieder konnten nicht geladen werden.') })
+      })
+  }, [workspaceId])
+
+  useEffect(load, [load])
+
+  function reload(): void {
+    load()
+    onChanged()
+  }
+
+  const isOwner = workspace.role === 'owner'
+  const canManage = isOwner || workspace.role === 'admin' || me.user.isSystemAdmin
+  const canAssignOwner = isOwner || me.user.isSystemAdmin
+  const active = workspace.status === 'active'
+
+  return (
+    <section aria-labelledby="workspace-members-heading">
+      <h2 id="workspace-members-heading">Mitglieder: {workspace.name}</h2>
+      {state.kind === 'loading' && <p aria-live="polite">Mitglieder werden geladen …</p>}
+      {state.kind === 'failed' && (
         <>
-          <h4>Mitglied hinzufuegen</h4>
-          <AddMember me={me} workspace={workspace} canAssignOwner={canAssignOwner} onAdded={reload} />
+          <Notice text={state.message} />
+          <p>
+            <button type="button" onClick={load}>
+              Erneut laden
+            </button>
+          </p>
+        </>
+      )}
+      {actionError !== null && <Notice text={actionError} />}
+
+      {state.kind === 'ready' && (
+        <>
+          <table className="users">
+            <caption className="visually-hidden">Mitglieder von {workspace.name}</caption>
+            <thead>
+              <tr>
+                <th scope="col">Name</th>
+                <th scope="col">E-Mail</th>
+                <th scope="col">Rolle</th>
+                <th scope="col">Aktion</th>
+              </tr>
+            </thead>
+            <tbody>
+              {state.members.map((member) => (
+                <MemberRow
+                  key={member.userId}
+                  me={me}
+                  workspace={workspace}
+                  member={member}
+                  canManage={canManage}
+                  canAssignOwner={canAssignOwner}
+                  onChanged={reload}
+                  onError={setActionError}
+                />
+              ))}
+            </tbody>
+          </table>
+
+          {canManage && active && (
+            <>
+              <h3>Mitglied hinzufuegen</h3>
+              <AddMember me={me} workspace={workspace} canAssignOwner={canAssignOwner} onAdded={reload} />
+            </>
+          )}
         </>
       )}
     </section>
   )
 }
 
-export function Workspaces({
+/**
+ * Arbeitsbereichsverwaltung: die eigenen Arbeitsbereiche und das Anlegen eines neuen.
+ *
+ * Die Liste kommt aus der Huelle - dieselbe, aus der die Seitenleiste ihre Eintraege nimmt. Eine zweite
+ * Abfrage derselben Daten waere nur eine zweite Wahrheit.
+ */
+export function WorkspaceOverview({
   me,
-  onOpenBoard,
+  workspaces,
+  onChanged,
 }: {
   readonly me: MeResponse
-  /** `previewVersion` oeffnet statt des aktuellen Standes die Read-only-Vorschau genau dieser Version. */
-  readonly onOpenBoard: (board: BoardView, workspace: WorkspaceView, previewVersion?: number) => void
+  readonly workspaces: readonly WorkspaceView[]
+  readonly onChanged: () => void
 }) {
-  const [list, setList] = useState<readonly WorkspaceView[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-
-  const load = useCallback(() => {
-    setError(null)
-    fetchWorkspaces()
-      .then((response) => {
-        setList(response.workspaces)
-      })
-      .catch((cause: unknown) => {
-        setList([])
-        setError(messageOf(cause, 'Die Arbeitsbereiche konnten nicht geladen werden.'))
-      })
-  }, [])
-
-  useEffect(load, [load])
-
   return (
     <section aria-labelledby="workspaces-heading">
       <h2 id="workspaces-heading">Arbeitsbereiche</h2>
-      {error !== null && (
-        <p className="notice notice--error" role="alert">
-          {error}{' '}
-          <button type="button" onClick={load}>
-            Erneut laden
-          </button>
-        </p>
-      )}
-      {list === null && <p aria-live="polite">Arbeitsbereiche werden geladen …</p>}
-      {list !== null && list.length === 0 && error === null && (
-        <p>Du gehoerst noch keinem Arbeitsbereich an. Lege den ersten an.</p>
-      )}
-      {list !== null && list.length > 0 && (
+      {workspaces.length === 0 && <p>Du gehoerst noch keinem Arbeitsbereich an. Lege den ersten an.</p>}
+      {workspaces.length > 0 && (
         <table className="users">
           <caption className="visually-hidden">Arbeitsbereiche, denen du angehoerst</caption>
           <thead>
@@ -605,24 +589,21 @@ export function Workspaces({
               <th scope="col">Name</th>
               <th scope="col">Rolle</th>
               <th scope="col">Status</th>
-              <th scope="col">Aktion</th>
+              <th scope="col">Ansichten</th>
             </tr>
           </thead>
           <tbody>
-            {list.map((workspace) => (
+            {workspaces.map((workspace) => (
               <tr key={workspace.id}>
-                <td>{workspace.name}</td>
+                <td>
+                  <Link route={{ kind: 'arbeitsbereich', workspaceId: workspace.id }}>{workspace.name}</Link>
+                </td>
                 <td>{workspace.role === null ? '—' : ROLE_LABELS[workspace.role]}</td>
                 <td>{workspace.status === 'active' ? 'aktiv' : 'archiviert'}</td>
                 <td>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedId(workspace.id)
-                    }}
-                  >
-                    {workspace.name} verwalten
-                  </button>
+                  <Link route={{ kind: 'mitglieder', workspaceId: workspace.id }}>Mitglieder</Link>
+                  {' · '}
+                  <Link route={{ kind: 'einstellungen', workspaceId: workspace.id }}>Einstellungen</Link>
                 </td>
               </tr>
             ))}
@@ -631,21 +612,7 @@ export function Workspaces({
       )}
 
       <h3>Neuen Arbeitsbereich anlegen</h3>
-      <CreateWorkspace me={me} onCreated={load} />
-
-      {selectedId !== null && (
-        <WorkspaceDetail
-          key={selectedId}
-          me={me}
-          workspaceId={selectedId}
-          onBack={() => {
-            setSelectedId(null)
-            load()
-          }}
-          onChanged={load}
-          onOpenBoard={onOpenBoard}
-        />
-      )}
+      <CreateWorkspace me={me} onCreated={onChanged} />
     </section>
   )
 }
