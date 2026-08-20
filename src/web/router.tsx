@@ -35,7 +35,16 @@ export type AppRoute =
    */
   | { readonly kind: 'arbeitsbereich'; readonly workspaceId: string; readonly folder: string | null }
   | { readonly kind: 'mitglieder'; readonly workspaceId: string }
+  /** Papierkorb genau eines Arbeitsbereichs. Ein Gast hat ihn nicht; er kennt genau ein Board. */
+  | { readonly kind: 'papierkorb'; readonly workspaceId: string }
   | { readonly kind: 'einstellungen'; readonly workspaceId: string }
+  /**
+   * Detailansicht genau eines Boards: seine Angaben und alle seine Aktionen an einer Stelle.
+   *
+   * Eine eigene Adresse und kein Zustand der Boardliste - sie ist teilbar, uebersteht ein Neuladen und
+   * traegt kein Freigabetoken. Welche Aktion sie anbietet, entscheidet weiterhin der Server.
+   */
+  | { readonly kind: 'boarddetails'; readonly workspaceId: string; readonly boardId: string }
   /** Boardeditor im Vollbild. `version` gesetzt heisst: Read-only-Vorschau genau dieser Version. */
   | {
       readonly kind: 'board'
@@ -54,6 +63,8 @@ const WORKSPACES_SEGMENT = 'arbeitsbereiche'
 const BOARDS_SEGMENT = 'boards'
 const MEMBERS_SEGMENT = 'mitglieder'
 const SETTINGS_SEGMENT = 'einstellungen'
+const TRASH_SEGMENT = 'papierkorb'
+const DETAILS_SEGMENT = 'details'
 const ACCOUNT_SEGMENT = 'konto'
 const ADMIN_SEGMENT = 'verwaltung'
 const ADMIN_ACCOUNTS_SEGMENT = 'konten'
@@ -91,7 +102,7 @@ function parseVersion(search: string): number | null {
 export function parseRoute(href: string): AppRoute {
   const [pathname = '', search = ''] = href.split('?')
   const segments = pathname.split('/').filter((segment) => segment !== '')
-  const [first, second, third, fourth] = segments.map((segment) => decodeURIComponent(segment))
+  const [first, second, third, fourth, fifth] = segments.map((segment) => decodeURIComponent(segment))
 
   if (first === undefined) {
     return { kind: 'einstieg', filter: parseFilter(search) }
@@ -115,8 +126,14 @@ export function parseRoute(href: string): AppRoute {
     if (third === SETTINGS_SEGMENT && fourth === undefined) {
       return { kind: 'einstellungen', workspaceId: second }
     }
+    if (third === TRASH_SEGMENT && fourth === undefined) {
+      return { kind: 'papierkorb', workspaceId: second }
+    }
     if (third === BOARDS_SEGMENT && fourth !== undefined && segments.length === 4) {
       return { kind: 'board', workspaceId: second, boardId: fourth, version: parseVersion(search) }
+    }
+    if (third === BOARDS_SEGMENT && fourth !== undefined && fifth === DETAILS_SEGMENT && segments.length === 5) {
+      return { kind: 'boarddetails', workspaceId: second, boardId: fourth }
     }
   }
   return { kind: 'unbekannt' }
@@ -140,6 +157,10 @@ export function routeHref(route: AppRoute): string {
       return `${workspace(route.workspaceId)}/${MEMBERS_SEGMENT}`
     case 'einstellungen':
       return `${workspace(route.workspaceId)}/${SETTINGS_SEGMENT}`
+    case 'papierkorb':
+      return `${workspace(route.workspaceId)}/${TRASH_SEGMENT}`
+    case 'boarddetails':
+      return `${workspace(route.workspaceId)}/${BOARDS_SEGMENT}/${encodeURIComponent(route.boardId)}/${DETAILS_SEGMENT}`
     case 'board': {
       const path = `${workspace(route.workspaceId)}/${BOARDS_SEGMENT}/${encodeURIComponent(route.boardId)}`
       return route.version === null ? path : `${path}?${VERSION_PARAM}=${String(route.version)}`

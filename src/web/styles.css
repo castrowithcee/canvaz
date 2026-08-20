@@ -292,3 +292,19 @@ h6 {
 .dashboard__filters [aria-current='page'] {
   font-weight: 700;
 }
+
+/* Boarddetails: die Angaben stehen als Beschreibungsliste in zwei Spalten. */
+.details {
+  display: grid;
+  gap: 0.25rem 1rem;
+  grid-template-columns: max-content 1fr;
+  margin: 1rem 0 1.5rem;
+}
+
+.details dt {
+  color: color-mix(in srgb, currentColor 70%, transparent);
+}
+
+.details dd {
+  margin: 0;
+}

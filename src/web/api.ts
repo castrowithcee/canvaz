@@ -28,6 +28,8 @@ import type {
   ImportBoardSceneResponse,
   RestoreBoardVersionResponse,
   BoardStatusView,
+  BoardTrashEntryView,
+  BoardTrashResponse,
   BoardView,
   BoardsResponse,
   CreateFolderRequest,
@@ -43,6 +45,7 @@ import type {
   GuestSessionResponse,
   SaveSceneResponse,
   SceneResponse,
+  TrashSelectionResponse,
   UploadBoardAssetResponse,
   ChangeWorkspaceMemberRoleRequest,
   LogoutResponse,
@@ -93,10 +96,14 @@ import {
   BOARD_SHARE_LINKS_PATH,
   BOARD_STATUS_PARAM,
   BOARD_STATUS_PATH,
+  BOARD_TRASH_PATH,
+  BOARD_TRASH_PURGE_PATH,
+  BOARD_TRASH_RESTORE_PATH,
   BOARD_VERSION_PARAM,
   BOARD_VERSION_RESTORE_PATH,
   BOARD_VERSION_SCENE_PATH,
   BOARD_VERSIONS_PATH,
+  BOARD_WORKSPACE_PATH,
   BOARDS_PATH,
   CSRF_HEADER,
   DASHBOARD_FILTER_PARAM,
@@ -335,6 +342,58 @@ export async function moveBoardToFolder(
   folderId: string | null,
 ): Promise<BoardView> {
   return request<BoardView>(BOARD_FOLDER_PATH, mutation(csrfToken, { boardId, folderId }))
+}
+
+/**
+ * Verschiebt das Board in einen **anderen** Arbeitsbereich.
+ *
+ * Eine andere Aktion als die Ordnerablage und deshalb ein eigener Aufruf: interne Freigaben entfallen dabei
+ * und gueltige Gastlinks werden widerrufen. Ohne `folderId` liegt das Board im Ziel unmittelbar im
+ * Arbeitsbereich.
+ */
+export async function moveBoardToWorkspace(
+  csrfToken: string,
+  change: { readonly boardId: string; readonly workspaceId: string; readonly folderId?: string | null },
+): Promise<BoardView> {
+  return request<BoardView>(BOARD_WORKSPACE_PATH, mutation(csrfToken, change))
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+/* Papierkorb                                                                                            */
+/* ---------------------------------------------------------------------------------------------------- */
+
+/**
+ * Papierkorb eines Arbeitsbereichs. Die Liste ist serverseitig auf das gefiltert, was der Anfragende auch
+ * zuruecknehmen darf; im Browser wird nichts nachgesiebt.
+ */
+export async function fetchBoardTrash(workspaceId: string): Promise<BoardTrashResponse> {
+  return request<BoardTrashResponse>(withWorkspace(BOARD_TRASH_PATH, workspaceId))
+}
+
+/** Legt das Board in den Papierkorb. Es verschwindet damit sofort aus jeder Liste und jedem Zugriff. */
+export async function trashBoard(csrfToken: string, boardId: string): Promise<BoardTrashEntryView> {
+  return request<BoardTrashEntryView>(BOARD_TRASH_PATH, mutation(csrfToken, { boardId }))
+}
+
+/**
+ * Nimmt eine Auswahl aus dem Papierkorb zurueck. Ein Board ist die Auswahl mit einem.
+ *
+ * Die Antwort ist **immer** 200 und nennt je Kennung ein eigenes Ergebnis: eine Auswahl ist kein
+ * Alles-oder-nichts, und die Ansicht zeigt deshalb die Teilergebnisse.
+ */
+export async function restoreBoardsFromTrash(
+  csrfToken: string,
+  boardIds: readonly string[],
+): Promise<TrashSelectionResponse> {
+  return request<TrashSelectionResponse>(BOARD_TRASH_RESTORE_PATH, mutation(csrfToken, { boardIds }))
+}
+
+/** Entfernt eine Auswahl sofort endgueltig. Dieselbe Form der Antwort wie beim Zuruecknehmen. */
+export async function purgeBoardsFromTrash(
+  csrfToken: string,
+  boardIds: readonly string[],
+): Promise<TrashSelectionResponse> {
+  return request<TrashSelectionResponse>(BOARD_TRASH_PURGE_PATH, mutation(csrfToken, { boardIds }))
 }
 
 /**

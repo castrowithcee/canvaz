@@ -22,12 +22,14 @@ import { InviteApp, LoginView, PasswordSettings } from './account.js'
 import { AdminUsers } from './admin-users.js'
 import { ApiError, fetchBoards, fetchFolders, fetchMe, fetchWorkspaces, logout } from './api.js'
 import { BoardEditor } from './board/lazy-editor.js'
+import { BoardDetails } from './board-details.js'
+import { BoardTrash } from './board-trash.js'
 import { Boards } from './boards.js'
 import { Dashboard } from './dashboard.js'
 import { FolderTree } from './folders.js'
 import { GuestApp } from './guest.js'
 import type { AppRoute } from './router.js'
-import { Link, navigate, navigateBack, useRoute } from './router.js'
+import { Link, navigateBack, useRoute } from './router.js'
 import { WorkspaceMembers, WorkspaceOverview, WorkspaceSettings } from './workspaces.js'
 
 const LOGIN_ERROR_TEXTS: Readonly<Record<LoginErrorCode, string>> = {
@@ -258,6 +260,10 @@ function Sidebar({
             >
               Einstellungen
             </Link>
+            {' · '}
+            <Link route={{ kind: 'papierkorb', workspaceId: active.id }} current={route.kind === 'papierkorb'}>
+              Papierkorb
+            </Link>
           </p>
         </>
       )}
@@ -296,6 +302,8 @@ function Content({
     case 'arbeitsbereich':
     case 'mitglieder':
     case 'einstellungen':
+    case 'papierkorb':
+    case 'boarddetails':
     case 'board': {
       if (workspace === null) {
         return <NotFound text={UNKNOWN_WORKSPACE} />
@@ -305,6 +313,20 @@ function Content({
       }
       if (route.kind === 'einstellungen') {
         return <WorkspaceSettings me={me} workspace={workspace} onChanged={onWorkspacesChanged} />
+      }
+      if (route.kind === 'papierkorb') {
+        return <BoardTrash me={me} workspace={workspace} onChanged={onBoardsChanged} />
+      }
+      if (route.kind === 'boarddetails') {
+        return (
+          <BoardDetails
+            me={me}
+            workspace={workspace}
+            workspaces={workspaces}
+            boardId={route.boardId}
+            onChanged={onBoardsChanged}
+          />
+        )
       }
       return (
         <section aria-labelledby="arbeitsbereich">
@@ -317,14 +339,6 @@ function Content({
             workspace={workspace}
             folder={route.kind === 'arbeitsbereich' ? route.folder : null}
             onListChanged={onBoardsChanged}
-            onOpenBoard={(board, previewVersion) => {
-              navigate({
-                kind: 'board',
-                workspaceId: workspace.id,
-                boardId: board.id,
-                version: previewVersion ?? null,
-              })
-            }}
           />
         </section>
       )

@@ -20,6 +20,8 @@ const ROUTES: readonly (readonly [string, AppRoute])[] = [
   ['/arbeitsbereiche/w-1?ordner=f-3', { kind: 'arbeitsbereich', workspaceId: 'w-1', folder: 'f-3' }],
   ['/arbeitsbereiche/w-1/mitglieder', { kind: 'mitglieder', workspaceId: 'w-1' }],
   ['/arbeitsbereiche/w-1/einstellungen', { kind: 'einstellungen', workspaceId: 'w-1' }],
+  ['/arbeitsbereiche/w-1/papierkorb', { kind: 'papierkorb', workspaceId: 'w-1' }],
+  ['/arbeitsbereiche/w-1/boards/b-2/details', { kind: 'boarddetails', workspaceId: 'w-1', boardId: 'b-2' }],
   ['/arbeitsbereiche/w-1/boards/b-2', { kind: 'board', workspaceId: 'w-1', boardId: 'b-2', version: null }],
   ['/arbeitsbereiche/w-1/boards/b-2?version=7', { kind: 'board', workspaceId: 'w-1', boardId: 'b-2', version: 7 }],
   ['/konto', { kind: 'konto' }],
