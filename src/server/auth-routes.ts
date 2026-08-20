@@ -1,5 +1,10 @@
 /**
- * Anmeldung, Abmeldung und eigenes Profil.
+ * Externe Anmeldung, Abmeldung und eigenes Profil.
+ *
+ * Die OIDC-Strecke ist **zuschaltbar**: ohne konfigurierten Provider entstehen die beiden Routen gar nicht
+ * erst, und die Oberflaeche bekommt ueber `/api/auth/methods` gesagt, dass es diesen Weg hier nicht gibt.
+ * Abmeldung und Profil gelten unabhaengig davon fuer jede Sitzung - beide Anmeldewege fuehren auf dieselbe
+ * serverseitige, widerrufbare Sitzung.
  *
  * Der Callback ist die einzige Stelle, an der Providerantworten in lokale Zustaende uebersetzt werden. Er
  * beendet den transienten Flow-Zustand vor der Codeeinloesung (Einmalverwendung), verifiziert ueber den
@@ -7,18 +12,20 @@
  * Nutzer bekommt einen Code, den die Oberflaeche in einen Satz mit Wiederholungsweg uebersetzt.
  */
 
-import type { LoginErrorCode, LogoutResponse, MeResponse } from '../contracts/api.js'
-import { AUTH_LOGIN_PATH, AUTH_LOGOUT_PATH, LOGIN_ERROR_PARAM, ME_PATH } from '../contracts/api.js'
+import type { AuthMethodsResponse, LoginErrorCode, LogoutResponse, MeResponse } from '../contracts/api.js'
+import { AUTH_LOGIN_PATH, AUTH_LOGOUT_PATH, AUTH_METHODS_PATH, LOGIN_ERROR_PARAM, ME_PATH } from '../contracts/api.js'
 import type { UserId } from '../domain/identity/model.js'
-import type { IdentityClaims } from '../domain/identity/provisioning.js'
+import type { IdentityClaims, ProvisioningDecision } from '../domain/identity/provisioning.js'
 import { decideProvisioning } from '../domain/identity/provisioning.js'
 import { IdentityConflictError } from '../domain/identity/repositories.js'
+import type { OidcConfig } from './config.js'
 import type { AppContext } from './context.js'
 import { clearFlowCookie, openFlowState, readFlowCookie, sealFlowState, setFlowCookie } from './flow-state.js'
 import { requireCsrfToken, requireSession, toUserView } from './guard.js'
 import type { Route } from './http.js'
 import { sendJson, sendRedirect } from './http.js'
 import { describeError } from './log.js'
+import type { OidcClient } from './oidc.js'
 import { OidcError } from './oidc.js'
 import { asRequester } from './requester.js'
 import { clearSessionCookie, csrfTokenFor, setSessionCookie, startSession } from './session.js'
@@ -39,9 +46,17 @@ const FAILURE_CODES: Readonly<Record<OidcError['kind'], LoginErrorCode>> = {
   'invalid-code': 'code-ungueltig',
 }
 
+/** Die Ablehnungsgruende der Provisionierung; jeder hat genau einen Code fuer die Anzeige. */
+type ProvisioningDenial = Extract<ProvisioningDecision, { kind: 'deny' }>['reason']
+
+const DENIAL_CODES: Readonly<Record<ProvisioningDenial, LoginErrorCode>> = {
+  'user-deactivated': 'nutzer-deaktiviert',
+  'email-already-linked': 'konto-nicht-zuordenbar',
+}
+
 type LoginOutcome =
   | { readonly kind: 'ok'; readonly token: string; readonly userId: UserId }
-  | { readonly kind: 'denied' }
+  | { readonly kind: 'denied'; readonly reason: ProvisioningDenial }
 
 /**
  * Just-in-time-Provisionierung samt Session in einer Transaktion: Nutzer, Verknuepfung und Sitzung entstehen
@@ -52,18 +67,29 @@ async function runProvisioning(context: AppContext, claims: IdentityClaims): Pro
   return context.identity.transaction(async (store) => {
     const key = { issuer: claims.issuer, subject: claims.subject }
     const linked = await store.externalIdentities.findByKey(key)
-    // Nur der Weg in die Erstanlage fragt - und sperrt - die Bootstrap-Entscheidung; eine gewoehnliche
-    // Anmeldung laeuft unberuehrt daran vorbei.
-    const isFirstUser = linked === null && (await store.users.isFirstUser())
-    const decision = decideProvisioning(claims, linked, { isFirstUser })
+    // Nur eine unbekannte Identitaet fragt nach einem Profil mit derselben bestaetigten Adresse; eine
+    // gewoehnliche Anmeldung laeuft unberuehrt daran vorbei.
+    const existingByEmail =
+      linked === null && claims.email !== null ? await store.users.findByEmail(claims.email) : null
+    // Und nur ein solches Profil wird gefragt, ob seine Zuordnung noch offen ist.
+    const existingHasExternalIdentity =
+      existingByEmail !== null && (await store.externalIdentities.existsForUser(existingByEmail.id))
+    const decision = decideProvisioning(claims, linked, { existingByEmail, existingHasExternalIdentity })
     if (decision.kind === 'deny') {
-      return { kind: 'denied' }
+      return { kind: 'denied', reason: decision.reason }
     }
     let userId: UserId
     if (decision.kind === 'provision') {
-      const user = await store.users.create(decision.profile, { isSystemAdmin: decision.isSystemAdmin })
+      // Ausdruecklich ohne Rechte: ein Systemadmin entsteht ausschliesslich durch den einmaligen Bootstrap,
+      // nie durch eine Anmeldung.
+      const user = await store.users.create(decision.profile, { isSystemAdmin: false })
       await store.externalIdentities.link(user.id, decision.key)
       userId = user.id
+    } else if (decision.kind === 'link') {
+      // Dasselbe Profil, ein zweiter Weg darauf: Rechte, Status und Mitgliedschaften bleiben, wie sie sind.
+      await store.externalIdentities.link(decision.userId, decision.key)
+      await store.users.updateProfile(decision.userId, decision.profile)
+      userId = decision.userId
     } else {
       await store.users.updateProfile(decision.userId, decision.profile)
       await store.externalIdentities.markSeen(decision.identity.id, now)
@@ -91,11 +117,15 @@ async function provisionAndStartSession(context: AppContext, claims: IdentityCla
   }
 }
 
-export function createAuthRoutes(context: AppContext): readonly Route[] {
+/**
+ * Die beiden Routen der externen Anmeldung. Sie entstehen nur mit konfiguriertem Provider - ohne ihn gibt es
+ * den Weg nicht, und ein Aufruf laeuft in dieselbe 404 wie jeder unbekannte Pfad.
+ */
+function createOidcRoutes(context: AppContext, oidc: OidcConfig, client: OidcClient): readonly Route[] {
   const { config, logger } = context
   // Der Callback existiert ausschliesslich unter dem konfigurierten Pfad. Damit ist die Redirect-URI streng
   // validiert: eine Antwort an einen anderen Pfad findet keine Route.
-  const callbackPath = new URL(config.oidc.redirectUri).pathname
+  const callbackPath = new URL(oidc.redirectUri).pathname
 
   return [
     {
@@ -103,7 +133,7 @@ export function createAuthRoutes(context: AppContext): readonly Route[] {
       path: AUTH_LOGIN_PATH,
       handle: async ({ response }) => {
         try {
-          const request = await context.oidc.createAuthorizationRequest()
+          const request = await client.createAuthorizationRequest()
           setFlowCookie(response, config, await sealFlowState(request.flow, config.sessionSecret))
           logger('info', 'auth.login.started')
           sendRedirect(response, request.url)
@@ -129,12 +159,12 @@ export function createAuthRoutes(context: AppContext): readonly Route[] {
         }
 
         // Die Antwort wird gegen die konfigurierte Redirect-URI geprueft, nicht gegen den Anfrage-Host.
-        const callbackUrl = new URL(config.oidc.redirectUri)
+        const callbackUrl = new URL(oidc.redirectUri)
         callbackUrl.search = url.search
 
         let claims: IdentityClaims
         try {
-          claims = await context.oidc.completeAuthorization(callbackUrl, flow)
+          claims = await client.completeAuthorization(callbackUrl, flow)
         } catch (error) {
           const failure = error instanceof OidcError ? error : null
           const code: LoginErrorCode = failure === null ? 'unbekannt' : FAILURE_CODES[failure.kind]
@@ -152,14 +182,40 @@ export function createAuthRoutes(context: AppContext): readonly Route[] {
           return
         }
         if (outcome.kind === 'denied') {
-          logger('warn', 'auth.callback.denied', { reason: 'user-deactivated', subject: claims.subject })
-          sendRedirect(response, appUrl(config.baseUrl, 'nutzer-deaktiviert'))
+          logger('warn', 'auth.callback.denied', { reason: outcome.reason, subject: claims.subject })
+          sendRedirect(response, appUrl(config.baseUrl, DENIAL_CODES[outcome.reason]))
           return
         }
 
         setSessionCookie(response, config, outcome.token)
-        logger('info', 'auth.login.succeeded', { userId: outcome.userId })
+        logger('info', 'auth.login.succeeded', { userId: outcome.userId, method: 'oidc' })
         sendRedirect(response, appUrl(config.baseUrl))
+      },
+    },
+  ]
+}
+
+export function createAuthRoutes(context: AppContext): readonly Route[] {
+  const { config, logger } = context
+  const oidcClient = context.oidc
+  const oidcRoutes =
+    config.oidc === null || oidcClient === null ? [] : createOidcRoutes(context, config.oidc, oidcClient)
+
+  return [
+    ...oidcRoutes,
+
+    /**
+     * Welche Anmeldewege diese Instanz tatsaechlich hat.
+     *
+     * Oeffentlich und ohne jede Angabe zum Provider: die Anmeldeseite soll keinen Weg anbieten, den es hier
+     * nicht gibt, und ein Unangemeldeter erfaehrt trotzdem nichts ueber Issuer, Client oder Konten.
+     */
+    {
+      method: 'GET',
+      path: AUTH_METHODS_PATH,
+      handle: ({ response }) => {
+        const body: AuthMethodsResponse = { local: true, oidc: config.oidc !== null }
+        sendJson(response, 200, body)
       },
     },
 
@@ -179,11 +235,13 @@ export function createAuthRoutes(context: AppContext): readonly Route[] {
         context.realtime.closeSession(auth.session.id)
         clearSessionCookie(response, config)
         let endSessionUrl: string | null = null
-        try {
-          endSessionUrl = await context.oidc.endSessionUrl()
-        } catch (error) {
-          // Die lokale Abmeldung ist bereits vollzogen; ein stummer Provider aendert daran nichts.
-          logger('warn', 'auth.logout.end-session-unavailable', { reason: describeError(error) })
+        if (oidcClient !== null) {
+          try {
+            endSessionUrl = await oidcClient.endSessionUrl()
+          } catch (error) {
+            // Die lokale Abmeldung ist bereits vollzogen; ein stummer Provider aendert daran nichts.
+            logger('warn', 'auth.logout.end-session-unavailable', { reason: describeError(error) })
+          }
         }
         logger('info', 'auth.logout.succeeded', { userId: auth.user.id })
         const body: LogoutResponse = { endSessionUrl }

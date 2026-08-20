@@ -11,7 +11,7 @@ Planung, Architekturentscheidungen und Betriebswissen liegen im getrennten Repos
 | --- | --- |
 | `src/domain` | Reiner Fachkern: Modelle, Invarianten, Repository- und Storage-Ports. Kein IO. |
 | `src/contracts` | Zwischen Server und SPA geteilte Typen (HTTP-Vertraege, Szenenvertrag). |
-| `src/server` | Konfiguration, HTTP, Routentabelle, OIDC-Anmeldung, Guards, WebSocket-Einstieg, Boardraeume, Composition Root. |
+| `src/server` | Konfiguration, HTTP, Routentabelle, lokale und externe Anmeldung, Guards, WebSocket-Einstieg, Boardraeume, Composition Root. |
 | `src/persistence` | Adapter zur Aussenwelt: Pool, SQL-Migrationen, Repository- und Storage-Umsetzungen. |
 | `src/web` | React/Vite-SPA inklusive Editor-Port und Excalidraw-Adapter. |
 | `tests` | `unit` (ohne IO), `integration` (echte Datenbank), `support` (Testhilfen). |
@@ -27,6 +27,7 @@ npm install
 cp .env.example .env      # Platzhalter ersetzen; .env ist gitignoriert
 npm run db:up             # PostgreSQL im Container, Hostport 55432
 npm run db:migrate
+npm run admin:bootstrap -- --name "Vorname Nachname" --email adresse@example.com   # einmalig
 npm run start:server      # API und gebaute SPA auf Port 3000
 npm run dev               # alternativ: Vite auf Port 5173 mit Proxy auf /api
 ```
@@ -41,10 +42,75 @@ gesammelt gemeldet. Siehe `.env.example`.
 
 ## Anmeldung
 
-Die Anmeldung laeuft ausschliesslich ueber OpenID Connect (Authorization Code Flow mit PKCE, `state` und
-`nonce`). Der ID-Token wird vollstaendig geprueft - Signatur gegen das JWKS des Issuers sowie `iss`, `aud`,
+Es gibt **zwei Wege auf dasselbe Profil**: die lokale Anmeldung, die diese Instanz selbst verwaltet, und
+optional einen externen Identity Provider. Ohne konfigurierten Provider startet und arbeitet die Instanz
+vollstaendig; mit Provider steht der externe Weg zusaetzlich zur Verfuegung. Die Anmeldeseite zeigt genau
+die Wege, die es hier gibt (`/api/auth/methods`).
+
+Der Anmeldeweg entscheidet ausschliesslich die **Identitaet**, nie eine Berechtigung. Rolle, Status und
+Mitgliedschaften haengen unveraendert am Profil, und `authenticate()` bleibt die einzige Definition von
+"angemeldet".
+
+### Lokale Benutzerverwaltung
+
+Konten legt **ausschliesslich ein Systemadmin** an; eine Selbstregistrierung gibt es nicht, und die Instanz
+versendet keine Mail. Bei der Anlage waehlt er einen der beiden Wege der Uebergabe - beide werden ausserhalb
+der Anwendung uebermittelt:
+
+- **Initialpasswort**: der Systemadmin vergibt es. Es steht in keiner Antwort und in keinem Protokoll. Die
+  erste Anmeldung damit legt **keine Sitzung** an, sondern verlangt den Wechsel; erst der Wechsel meldet an.
+- **Einladungslink**: befristet (72 Stunden), genau einmal einloesbar, jederzeit widerrufbar. Der Wert ist
+  kryptografisch zufaellig, wird nur als SHA-256-Hash gespeichert und erscheint genau einmal - in der
+  Antwort der Anlage. Die Adresse traegt ihn im Fragment (`/einladung#<token>`), das der Browser nicht
+  mitsendet. Ein verlorener Link wird widerrufen und neu erzeugt.
+
+Dieselben beiden Wege dienen der **Ruecksetzung** durch den Systemadmin. Eine Ruecksetzung und ein Wechsel
+widerrufen jede bestehende Sitzung des Kontos und schliessen dessen offene Verbindungen.
+
+Passwoerter liegen ausschliesslich als **scrypt**-Hash (`N=2^15`, `r=8`, `p=1`, 16 Byte Salz, `node:crypto`)
+in `local_credentials`; das Format traegt seine Parameter selbst, damit ein gespeicherter Hash pruefbar
+bleibt, wenn sie spaeter steigen. Ein Passwort braucht mindestens zwoelf Zeichen und hat sonst keine
+Zusammensetzungsregeln.
+
+Anmeldung, Passwortwechsel und Einloesen liegen hinter einer **eigenen, engen Ratengrenze**
+(`CANVAZ_AUTH_RATE_LIMIT_PER_MINUTE`, Standard 10 Versuche je Minute und Client) und pruefen die Herkunft
+wie der WebSocket-Upgrade; ein CSRF-Token tragen sie nicht, weil es noch keine Sitzung gibt. Eine unbekannte
+Adresse und ein falsches Passwort ergeben dieselbe Antwort und kosten dieselbe Rechenzeit.
+
+### Erster Systemadmin
+
+Er entsteht **einmalig auf dem Host** und nicht durch eine Anmeldung:
+
+```sh
+npm run admin:bootstrap -- --name "Vorname Nachname" --email adresse@example.com
+# im Container: node dist/server/bootstrap-cli.js --name "..." --email "..."
+```
+
+Der Aufruf legt genau einen Systemadmin an und gibt seinen Einladungslink auf der Standardausgabe aus. Die
+Pruefung "gibt es schon einen Systemadmin?" laeuft unter einer Advisory-Sperre bis zum Commit; zwei
+gleichzeitige Aufrufe ergeben nie zwei Administratoren. Sobald einer existiert, verweigert der Vorgang seine
+Arbeit - weitere Konten entstehen in der Systemadministration. **Es gibt keine fest codierten Zugangsdaten**
+im Image und in keiner Konfigurationsvorlage; das Passwort setzt der Empfaenger selbst beim Einloesen.
+
+Die fruehere Regel "der erste angemeldete Nutzer wird Systemadmin" ist damit abgeloest: eine Anmeldung
+vergibt keine Rechte mehr.
+
+**Bekannte Grenze:** eine Instanz hat genau **einen** Systemadmin - den aus diesem Vorgang. Es gibt keine
+nachtraegliche Rollenvergabe; in der Systemadministration angelegte Konten sind gewoehnliche Nutzer. Geht
+der Zugang zum Bootstrap-Konto verloren, laesst er sich nur ueber einen direkten Datenbankzugriff wieder
+herstellen (Einladung fuer dieses Konto oder `is_system_admin` auf einem anderen setzen).
+
+### Externe Anmeldung (optional)
+
+Ist ein Provider konfiguriert, laeuft der externe Weg als Authorization Code Flow mit PKCE, `state` und
+`nonce`. Der ID-Token wird vollstaendig geprueft - Signatur gegen das JWKS des Issuers sowie `iss`, `aud`,
 `exp`, `iat`/`nbf` und `nonce`. Dafuer ist `openid-client` im Einsatz; Signaturpruefung und JWKS-Handling
-sind kein Eigenbau.
+sind kein Eigenbau. Ohne die vier `CANVAZ_OIDC_*`-Variablen entstehen die beiden Routen gar nicht erst; eine
+**halb** gesetzte Konfiguration ist dagegen ein Startfehler und kein stiller Verzicht.
+
+Eine unbekannte externe Identitaet mit einer **bestaetigten** Adresse, zu der es bereits ein Profil gibt,
+wird mit diesem Profil verknuepft, statt ein zweites anzulegen. So fuehren beide Wege auf dasselbe Konto -
+mit denselben Rechten. Ein neu provisioniertes Profil bekommt nie Systemadminrechte.
 
 **Tokens des Identity Providers werden nie gespeichert.** Aus dem geprueften Token entsteht nur das lokale
 Profil. Die Sitzung ist serverseitig und widerrufbar: im HttpOnly-Cookie `canvaz_session` steht ein
@@ -75,20 +141,24 @@ Der transiente Flow-Zustand (`state`, `nonce`, `code_verifier`) liegt in einem v
 kurzlebigen HttpOnly-Cookie (`canvaz_oidc_flow`, zehn Minuten). Der Callback verwirft es vor der
 Codeeinloesung, damit es genau einmal gilt.
 
-Der erste angemeldete Nutzer einer leeren Instanz wird Systemadmin. Die Entscheidung faellt serialisiert
-(Advisory Lock in der Provisionierungstransaktion), sodass auch zwei gleichzeitige Erstanmeldungen genau
-einen Systemadmin ergeben. Es gibt keine fest codierten Zugangsdaten.
-
 | Methode | Pfad | Zugang |
 | --- | --- | --- |
 | GET | `/api/health` | oeffentlich; Lebendigkeit samt Datenbankkontakt |
 | GET | `/api/ready` | oeffentlich; Bereitschaft, siehe [Betrieb auf einem VPS](#betrieb-auf-einem-vps) |
 | GET | `/api/metrics` | nur im internen Netz; der Reverse Proxy beantwortet ihn nach aussen mit 404 |
-| GET | `/api/auth/login` | oeffentlich, leitet zum Identity Provider |
-| GET | `/api/auth/callback` | oeffentlich, Pfad stammt aus `CANVAZ_OIDC_REDIRECT_URI` |
+| GET | `/api/auth/methods` | oeffentlich; welche Anmeldewege es hier gibt |
+| POST | `/api/auth/local/login` | oeffentlich, eigene Ratengrenze und Herkunftspruefung |
+| POST | `/api/auth/local/password` | oeffentlich, verlangt das bisherige Passwort |
+| POST | `/api/auth/invitation/redeem` | oeffentlich, verlangt einen gueltigen Einladungswert |
+| GET | `/api/auth/login` | oeffentlich, leitet zum Identity Provider; **nur mit OIDC-Konfiguration** |
+| GET | `/api/auth/callback` | oeffentlich, Pfad stammt aus `CANVAZ_OIDC_REDIRECT_URI`; **nur mit OIDC-Konfiguration** |
 | POST | `/api/auth/logout` | angemeldet + CSRF-Token |
 | GET | `/api/me` | angemeldet |
 | GET | `/api/admin/users` | angemeldet + Systemadmin |
+| POST | `/api/admin/users/create` | angemeldet + Systemadmin + CSRF-Token |
+| POST | `/api/admin/users/password` | angemeldet + Systemadmin + CSRF-Token |
+| POST | `/api/admin/users/invitation` | angemeldet + Systemadmin + CSRF-Token |
+| POST | `/api/admin/users/invitation/revoke` | angemeldet + Systemadmin + CSRF-Token |
 | POST | `/api/admin/users/status` | angemeldet + Systemadmin + CSRF-Token |
 | GET (Upgrade) | `/api/realtime` | angemeldet **oder** gueltige Gastsession; WebSocket-Einstieg der Realtime-Strecke |
 | POST | `/api/boards/guest/join` | oeffentlich, verlangt ein gueltiges Freigabetoken und die eigene Herkunft |
@@ -98,7 +168,8 @@ Die Endpunkte der Arbeitsbereiche stehen im Abschnitt [Arbeitsbereiche und Rolle
 die der Boards im Abschnitt [Boards und Szenen](#boards-und-szenen).
 
 Logout und Deaktivierung widerrufen Sitzungen serverseitig und schliessen offene WebSocket-Verbindungen
-sofort; ein Upgrade danach wird abgelehnt. Auch der Ablauf der Sitzung schliesst eine offene Verbindung.
+sofort; ein Upgrade danach wird abgelehnt. Eine Deaktivierung wirkt dabei auf **beide** Anmeldewege und
+entwertet zusaetzlich eine noch offene Einladung. Auch der Ablauf der Sitzung schliesst eine offene Verbindung.
 Fuer einen Gast gilt dasselbe, und zusaetzlich beendet der Widerruf seines Freigabelinks jede offene
 Verbindung, die daraus entstanden ist.
 Ein Upgrade mit fremdem `Origin` wird abgewiesen, weil der CSRF-Header beim Handshake nicht greift.
@@ -1085,6 +1156,9 @@ zurueck, und `'self'` deckt die gleichnamige WebSocket-Herkunft ab.
 
 ## Identity Provider einrichten (Beispiel Authentik)
 
+Der externe Weg ist **optional**: ohne die vier `CANVAZ_OIDC_*`-Variablen laeuft die Instanz allein mit der
+lokalen Benutzerverwaltung. Wer ihn zuschaltet, setzt alle vier - sonst startet der Server nicht.
+
 Die Konfiguration bleibt generisch: gesetzt wird nur der Issuer, den Rest holt die Anwendung ueber
 Discovery (`<issuer>/.well-known/openid-configuration`). Fuer Authentik:
 
@@ -1140,7 +1214,9 @@ nur dazu, wer den Adapter `s3` faehrt.
   Hostverschluesselung, kein LUKS, kein KMS und keinen verschluesselten Bootvorgang voraus; portabel wird
   ein Sicherungsarchiv dadurch, dass es verschluesselt geschrieben wird, nicht durch den Datentraeger.
 - Ein DNS-Eintrag auf den Host und die Ports 80/443 erreichbar - Caddy holt darueber das Zertifikat.
-- Ein registrierter OIDC-Client (siehe [Identity Provider einrichten](#identity-provider-einrichten-beispiel-authentik)).
+- Optional ein registrierter OIDC-Client (siehe
+  [Identity Provider einrichten](#identity-provider-einrichten-beispiel-authentik)). Ohne ihn laeuft die
+  Instanz allein mit der lokalen Benutzerverwaltung.
 - Kapazitaetsziel sind 30 angelegte Nutzer, fuenf gleichzeitige Bearbeiter auf einem Board und zehn
   gleichzeitige Verbindungen. Dafuer traegt **ein** Anwendungsprozess; die Messung dazu steht unter
   [Gemessen](#gemessen).
@@ -1155,10 +1231,12 @@ export COMPOSE_ENV_FILES=.env.production
 docker compose pull                                          # veroeffentlichtes Image aus CANVAZ_IMAGE
 docker compose up --detach
 docker compose run --rm app node dist/persistence/migrate-cli.js
+docker compose run --rm app node dist/server/bootstrap-cli.js --name "Vorname Nachname" --email adresse@example.com
 ```
 
-Danach antwortet `https://<CANVAZ_SITE_ADDRESS>/api/ready` mit `200`. Der erste angemeldete Nutzer wird
-Systemadmin; feste Zugangsdaten gibt es nicht.
+Danach antwortet `https://<CANVAZ_SITE_ADDRESS>/api/ready` mit `200`. Der letzte Aufruf legt den einzigen
+Systemadmin an und gibt dessen Einladungslink aus; er gilt genau einmal und befristet. Feste Zugangsdaten
+gibt es nicht.
 
 Nach aussen offen sind ausschliesslich die beiden Ports des Reverse Proxy. Anwendungsserver, Datenbank und
 ein etwaiges MinIO haben keinen veroeffentlichten Port und sind nur im Compose-Netz erreichbar. Kein

@@ -51,6 +51,7 @@ import {
 } from '../support/asset-storage-env.js'
 import { createJar } from '../support/browser-client.js'
 import type { Jar } from '../support/browser-client.js'
+import { signedInAsSystemAdmin } from '../support/local-accounts.js'
 import { login } from '../support/login-flow.js'
 import { startTestProvider } from '../support/oidc-provider.js'
 import type { TestProvider } from '../support/oidc-provider.js'
@@ -432,7 +433,7 @@ describe('Abruf', () => {
   })
 
   it('gibt einem Systemadmin ohne Mitgliedschaft keinen Bildzugriff', async () => {
-    const root = await signedInAs('root')
+    const root = await signedInAsSystemAdmin(app)
     const ada = await signedInAs('ada')
     const workspace = await createWorkspace(ada, 'Team Nord')
     const board = await createBoard(ada, workspace.id, 'Bildboard')
@@ -443,7 +444,7 @@ describe('Abruf', () => {
   })
 
   it('entzieht einem deaktivierten Nutzer den Bildzugriff', async () => {
-    const root = await signedInAs('root')
+    const root = await signedInAsSystemAdmin(app)
     const ada = await signedInAs('ada')
     const bob = await signedInAs('bob')
     const workspace = await createWorkspace(ada, 'Team Nord')

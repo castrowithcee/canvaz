@@ -9,11 +9,27 @@ import type { BinaryFileRef, SceneSnapshot } from './scene.js'
 
 export const API_BASE_PATH = '/api'
 
+/** Einstieg der externen Anmeldung. Existiert nur mit konfiguriertem Identity Provider. */
 export const AUTH_LOGIN_PATH = `${API_BASE_PATH}/auth/login`
 export const AUTH_LOGOUT_PATH = `${API_BASE_PATH}/auth/logout`
+/** Oeffentlich: welche Anmeldewege diese Instanz tatsaechlich hat. */
+export const AUTH_METHODS_PATH = `${API_BASE_PATH}/auth/methods`
+/** Lokale Anmeldung mit Adresse und Passwort. */
+export const AUTH_LOCAL_LOGIN_PATH = `${API_BASE_PATH}/auth/local/login`
+/** Passwortwechsel mit dem bisherigen Passwort - auch der erzwungene nach einem Initialpasswort. */
+export const AUTH_LOCAL_PASSWORD_PATH = `${API_BASE_PATH}/auth/local/password`
+/** Einloesen eines Einladungslinks: der Empfaenger setzt sein Passwort selbst. */
+export const AUTH_INVITATION_REDEEM_PATH = `${API_BASE_PATH}/auth/invitation/redeem`
 export const ME_PATH = `${API_BASE_PATH}/me`
 export const ADMIN_USERS_PATH = `${API_BASE_PATH}/admin/users`
 export const ADMIN_USER_STATUS_PATH = `${API_BASE_PATH}/admin/users/status`
+/** Kontoanlage durch den Systemadmin: Initialpasswort oder Einladungslink. */
+export const ADMIN_USER_CREATE_PATH = `${API_BASE_PATH}/admin/users/create`
+/** Administrative Ruecksetzung auf ein neues Initialpasswort. */
+export const ADMIN_USER_PASSWORD_PATH = `${API_BASE_PATH}/admin/users/password`
+/** Neue Einladung fuer ein vorhandenes Konto - zugleich der zweite Weg der Ruecksetzung. */
+export const ADMIN_USER_INVITATION_PATH = `${API_BASE_PATH}/admin/users/invitation`
+export const ADMIN_USER_INVITATION_REVOKE_PATH = `${API_BASE_PATH}/admin/users/invitation/revoke`
 export const REALTIME_PATH = `${API_BASE_PATH}/realtime`
 
 export const WORKSPACES_PATH = `${API_BASE_PATH}/workspaces`
@@ -90,7 +106,63 @@ export type LoginErrorCode =
   | 'code-ungueltig'
   /** Das Konto existiert, ist aber deaktiviert. */
   | 'nutzer-deaktiviert'
+  /**
+   * Die externe Anmeldung laesst sich keinem Konto zuordnen: die Adresse gehoert zu einem Profil, das
+   * bereits ueber eine andere externe Identitaet erreichbar ist. Bewusst vage - der Anfragende ist an
+   * dieser Stelle nicht der Inhaber des Kontos.
+   */
+  | 'konto-nicht-zuordenbar'
   | 'unbekannt'
+
+/**
+ * Pfad der Einloeseansicht in der SPA.
+ *
+ * Der Einladungswert steht wie beim Gastlink im **Fragment** (`/einladung#<token>`) und nie in der
+ * Abfragezeichenfolge: ein Fragment sendet der Browser nicht mit und es landet damit weder in einem
+ * Serverprotokoll noch in einem Referrer.
+ */
+export const INVITE_APP_PATH = '/einladung'
+
+/** Untergrenze eines Passworts. Sie steht im Vertrag, damit die Oberflaeche sie nennen kann, statt zu raten. */
+export const MIN_PASSWORD_LENGTH = 12
+export const MAX_PASSWORD_LENGTH = 200
+
+/** Welche Anmeldewege diese Instanz anbietet. Der lokale Weg gibt es immer, der externe ist zugeschaltet. */
+export type AuthMethodsResponse = {
+  readonly local: true
+  readonly oidc: boolean
+}
+
+export type LocalLoginRequest = {
+  readonly email: string
+  readonly password: string
+}
+
+/**
+ * Ergebnis einer lokalen Anmeldung.
+ *
+ * `password-change-required` heisst: das Passwort stimmt, aber es ist ein Initialpasswort oder eine
+ * Ruecksetzung. **Es entsteht dabei keine Sitzung** - der Wechsel geht ihr voraus, und ohne ihn ist nichts
+ * erreichbar. Das ist die Durchsetzung selbst und nicht ihre Anzeige.
+ */
+export type LocalLoginResponse = {
+  readonly status: 'ok' | 'password-change-required'
+}
+
+/**
+ * Passwortwechsel. Er verlangt immer das bisherige Passwort und braucht deshalb keine Sitzung: derselbe
+ * Endpunkt traegt den erzwungenen ersten Wechsel und den freiwilligen spaeteren.
+ */
+export type ChangePasswordRequest = {
+  readonly email: string
+  readonly currentPassword: string
+  readonly newPassword: string
+}
+
+export type RedeemInvitationRequest = {
+  readonly token: string
+  readonly password: string
+}
 
 export type UserStatusView = 'active' | 'deactivated'
 
@@ -111,8 +183,63 @@ export type MeResponse = {
   readonly csrfToken: string
 }
 
+/**
+ * Nutzerzeile der Systemadministration.
+ *
+ * Zusaetzlich zum Profil steht hier, **wie** das Konto erreichbar ist: ob es ein lokales Passwort hat und ob
+ * eine Einladung offen ist. Nie steht hier ein Passwort, ein Hash oder ein Einladungswert.
+ */
+export type AdminUserView = UserView & {
+  readonly hasPassword: boolean
+  /** ISO-8601 der offenen Einladung; `null` heisst: keine offene Einladung. */
+  readonly invitationExpiresAt: string | null
+}
+
 export type AdminUsersResponse = {
-  readonly users: readonly UserView[]
+  readonly users: readonly AdminUserView[]
+}
+
+/**
+ * Kontoanlage durch den Systemadmin.
+ *
+ * Genau einer der beiden Wege: mit `initialPassword` bekommt das Konto ein Initialpasswort, das beim ersten
+ * Anmelden gewechselt werden muss; ohne entsteht ein befristeter Einladungslink. Beides wird ausserhalb der
+ * Anwendung uebergeben - die Instanz versendet nichts.
+ */
+export type CreateUserRequest = {
+  readonly displayName: string
+  readonly email: string
+  readonly initialPassword?: string
+}
+
+/**
+ * Antwort der Anlage.
+ *
+ * `invitationUrl` traegt den Einladungswert und ist die **einzige** Stelle, an der er je erscheint; er wird
+ * nur als Hash gespeichert und ist danach nicht wieder abrufbar. Ein Initialpasswort steht hier nie: es kam
+ * vom Systemadmin und kommt nicht zurueck.
+ */
+export type CreateUserResponse = {
+  readonly user: UserView
+  readonly invitationUrl: string | null
+}
+
+export type ResetPasswordRequest = {
+  readonly userId: string
+  readonly password: string
+}
+
+export type CreateInvitationRequest = {
+  readonly userId: string
+}
+
+export type CreateInvitationResponse = {
+  readonly user: UserView
+  readonly invitationUrl: string
+}
+
+export type RevokeInvitationRequest = {
+  readonly userId: string
 }
 
 export type SetUserStatusRequest = {

@@ -1,8 +1,8 @@
 /**
  * Routentabelle.
  *
- * Setzt die Routen der Teilbereiche zusammen. Der Kontext liefert Konfiguration, Persistenz, OIDC-Client und
- * WebSocket-Einstieg; keine Route baut selbst eine Verbindung auf.
+ * Setzt die Routen der Teilbereiche zusammen. Der Kontext liefert Konfiguration, Persistenz, den optionalen
+ * OIDC-Client und den WebSocket-Einstieg; keine Route baut selbst eine Verbindung auf.
  */
 
 import { API_BASE_PATH } from '../contracts/api.js'
@@ -15,6 +15,7 @@ import { createBoardVersionRoutes } from './board-version-routes.js'
 import type { AppContext } from './context.js'
 import type { Route } from './http.js'
 import { sendBytes, sendJson } from './http.js'
+import { createLocalAuthRoutes } from './local-auth-routes.js'
 import { describeError } from './log.js'
 import { createWorkspaceRoutes } from './workspace-routes.js'
 
@@ -82,6 +83,7 @@ export function createRoutes(context: AppContext): readonly Route[] {
       },
     },
     ...createAuthRoutes(context),
+    ...createLocalAuthRoutes(context),
     ...createAdminRoutes(context),
     ...createWorkspaceRoutes(context),
     ...createBoardRoutes(context),

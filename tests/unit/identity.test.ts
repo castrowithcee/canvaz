@@ -90,29 +90,58 @@ describe('Just-in-time-Provisionierung', () => {
     expect(deriveUserProfile(base).displayName).toBe('sub-1')
   })
 
-  it('legt bei unbekannter Identitaet an und macht den ersten Nutzer zum Systemadmin', () => {
+  it('legt bei unbekannter Identitaet an - ohne jede Rolle', () => {
     const claims = { issuer: 'https://idp.example.com', subject: 'sub-1', email: null, name: 'Ada', preferredUsername: null }
 
-    expect(decideProvisioning(claims, null, { isFirstUser: true })).toEqual({
+    // Die Entscheidung kennt `isSystemAdmin` gar nicht mehr: eine Anmeldung vergibt keine Rechte.
+    expect(decideProvisioning(claims, null, { existingByEmail: null, existingHasExternalIdentity: false })).toEqual({
       kind: 'provision',
       key: { issuer: 'https://idp.example.com', subject: 'sub-1' },
       profile: { displayName: 'Ada', email: null },
-      isSystemAdmin: true,
     })
-    expect(decideProvisioning(claims, null, { isFirstUser: false })).toMatchObject({ isSystemAdmin: false })
+  })
+
+  it('verknuepft eine unbekannte Identitaet mit dem Profil derselben bestaetigten Adresse', () => {
+    const claims = {
+      issuer: 'https://idp.example.com',
+      subject: 'sub-1',
+      email: 'ada@example.com',
+      name: 'Ada',
+      preferredUsername: null,
+    }
+    const lokal = { ...user, email: 'ada@example.com' }
+
+    expect(decideProvisioning(claims, null, { existingByEmail: lokal, existingHasExternalIdentity: false })).toEqual({
+      kind: 'link',
+      userId: 'user-1',
+      key: { issuer: 'https://idp.example.com', subject: 'sub-1' },
+      profile: { displayName: 'Ada', email: 'ada@example.com' },
+    })
+    // Genau einmal je Profil: traegt es bereits eine externe Identitaet, waere ein fremdes `sub` mit
+    // derselben Adresse eine Uebernahme - und wird abgelehnt statt verknuepft.
+    expect(
+      decideProvisioning(claims, null, { existingByEmail: lokal, existingHasExternalIdentity: true }),
+    ).toEqual({ kind: 'deny', reason: 'email-already-linked' })
+    expect(
+      decideProvisioning(claims, null, {
+        existingByEmail: { ...lokal, status: 'deactivated' },
+        existingHasExternalIdentity: false,
+      }),
+    ).toEqual({ kind: 'deny', reason: 'user-deactivated' })
   })
 
   it('frischt bekannte Nutzer auf und lehnt deaktivierte ab', () => {
     const claims = { issuer: 'https://idp.example.com', subject: 'sub-1', email: null, name: 'Ada B.', preferredUsername: null }
 
-    expect(decideProvisioning(claims, { identity, user }, { isFirstUser: false })).toEqual({
+    expect(decideProvisioning(claims, { identity, user }, { existingByEmail: null, existingHasExternalIdentity: false })).toEqual({
       kind: 'refresh',
       userId: 'user-1',
       identity,
-      profile: { displayName: 'Ada B.', email: null },
+      // Der Name kommt frisch aus den Claims, die bekannte Adresse bleibt: sie ist der lokale Anmeldename.
+      profile: { displayName: 'Ada B.', email: 'ada@example.com' },
     })
     expect(
-      decideProvisioning(claims, { identity, user: { ...user, status: 'deactivated' } }, { isFirstUser: false }),
+      decideProvisioning(claims, { identity, user: { ...user, status: 'deactivated' } }, { existingByEmail: null, existingHasExternalIdentity: false }),
     ).toEqual({ kind: 'deny', reason: 'user-deactivated' })
   })
 })

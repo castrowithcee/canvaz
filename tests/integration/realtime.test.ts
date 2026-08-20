@@ -31,6 +31,7 @@ import {
   warteAufVersion,
 } from '../support/board-fixture.js'
 import type { Account } from '../support/board-fixture.js'
+import { signedInAsSystemAdmin } from '../support/local-accounts.js'
 import { change, element, ids, openRealtime, ruhe } from '../support/realtime-socket.js'
 import type { RealtimeTestClient } from '../support/realtime-socket.js'
 import { startTestProvider } from '../support/oidc-provider.js'
@@ -211,8 +212,8 @@ describe('Rechteaenderung wirkt auf die offene Verbindung', () => {
 
   it('beendet die Verbindung bei der Deaktivierung des Nutzers', async () => {
     const { bob, board } = await teamMitBoard(app)
-    // Der erste angemeldete Nutzer ist Systemadmin; hier legt ein eigener Admin Hand an.
-    const admin = await signedInAs(app, 'ada')
+    // Der Systemadmin entsteht ueber den Bootstrap des Betriebs, nicht durch eine Anmeldung.
+    const admin = await signedInAsSystemAdmin(app)
     const client = await connect(bob)
     await client.join(board.id)
 

@@ -26,7 +26,8 @@ export type AppContext = {
   readonly boards: BoardStore
   /** Bytes der Bildassets. Welcher Adapter dahintersteht, weiss nur die Composition Root. */
   readonly storage: AssetStoragePort
-  readonly oidc: OidcClient
+  /** `null` heisst: kein Identity Provider konfiguriert. Dann gibt es die OIDC-Routen gar nicht erst. */
+  readonly oidc: OidcClient | null
   readonly realtime: RealtimeGateway
   /**
    * Die offenen Boardraeume.

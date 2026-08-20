@@ -32,7 +32,7 @@ describe('Konfiguration', () => {
     expect(config.storage.adapter).toBe('filesystem')
     expect(config.sessionTtlSeconds).toBe(12 * 3600)
     expect(config.secureCookies).toBe(true)
-    expect(config.oidc.clientId).toBe('canvaz')
+    expect(config.oidc?.clientId).toBe('canvaz')
     expect(config.maxSceneBytes).toBe(5 * 1024 * 1024)
     expect(config.storage.maxAssetBytes).toBe(5 * 1024 * 1024)
     expect(config.storage.filesystem).toEqual({ root: '/srv/canvaz/assets' })
@@ -108,7 +108,39 @@ describe('Konfiguration', () => {
     const problems = (caught as ConfigError).problems
     expect(problems).toContain('DATABASE_URL fehlt')
     expect(problems).toContain('CANVAZ_SESSION_SECRET fehlt')
-    expect(problems).toContain('CANVAZ_OIDC_CLIENT_SECRET fehlt')
+    // OIDC ist nicht darunter: ohne jede seiner Variablen ist der Weg schlicht nicht zugeschaltet.
+    expect(problems).not.toContain('CANVAZ_OIDC_CLIENT_SECRET fehlt')
+  })
+
+  it('startet ohne jede OIDC-Variable und schaltet den externen Weg damit ab', () => {
+    const ohneOidc = {
+      CANVAZ_BASE_URL: validEnv.CANVAZ_BASE_URL,
+      DATABASE_URL: validEnv.DATABASE_URL,
+      CANVAZ_SESSION_SECRET: validEnv.CANVAZ_SESSION_SECRET,
+      CANVAZ_STORAGE_FILESYSTEM_ROOT: validEnv.CANVAZ_STORAGE_FILESYSTEM_ROOT,
+    }
+
+    expect(loadConfig(ohneOidc).oidc).toBeNull()
+  })
+
+  it('nimmt eine halbe OIDC-Konfiguration nicht als Verzicht hin', () => {
+    let caught: unknown
+    try {
+      loadConfig({ ...validEnv, CANVAZ_OIDC_CLIENT_SECRET: '', CANVAZ_OIDC_CLIENT_ID: '' })
+    } catch (error) {
+      caught = error
+    }
+
+    expect((caught as ConfigError).problems).toEqual([
+      'CANVAZ_OIDC_CLIENT_ID fehlt',
+      'CANVAZ_OIDC_CLIENT_SECRET fehlt',
+    ])
+  })
+
+  it('nimmt eine eigene Anmelde-Ratengrenze nur innerhalb der zulaessigen Spanne an', () => {
+    expect(loadConfig(validEnv).authRateLimitPerMinute).toBe(10)
+    expect(loadConfig({ ...validEnv, CANVAZ_AUTH_RATE_LIMIT_PER_MINUTE: '30' }).authRateLimitPerMinute).toBe(30)
+    expect(() => loadConfig({ ...validEnv, CANVAZ_AUTH_RATE_LIMIT_PER_MINUTE: '1' })).toThrow(ConfigError)
   })
 
   it('weist ein zu kurzes Session-Geheimnis und falsche Werte zurueck', () => {

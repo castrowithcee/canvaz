@@ -69,7 +69,8 @@ const context: AppContext = {
   workspaces,
   boards,
   storage,
-  oidc: createOidcClient(config),
+  // Ohne konfigurierten Provider gibt es keinen Client - und damit auch keine OIDC-Routen.
+  oidc: config.oidc === null ? null : createOidcClient(config.oidc, config.baseUrl),
   realtime,
   rooms,
   logger: consoleLogger,

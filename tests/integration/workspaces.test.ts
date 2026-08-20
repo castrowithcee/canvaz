@@ -38,6 +38,7 @@ import { migrate } from '../../src/persistence/migrate.js'
 import { createPool } from '../../src/persistence/pool.js'
 import { createJar } from '../support/browser-client.js'
 import type { Jar } from '../support/browser-client.js'
+import { signedInAsSystemAdmin } from '../support/local-accounts.js'
 import { login } from '../support/login-flow.js'
 import { startTestProvider } from '../support/oidc-provider.js'
 import type { TestProvider } from '../support/oidc-provider.js'
@@ -141,9 +142,9 @@ async function listWorkspaces(account: Account): Promise<readonly WorkspaceView[
   return ((await response.json()) as WorkspacesResponse).workspaces
 }
 
-/** Der erste angemeldete Nutzer einer leeren Instanz wird Systemadmin; danach folgen gewoehnliche Nutzer. */
+/** Der Systemadmin entsteht ueber den Bootstrap des Betriebs; jede Anmeldung danach ist ein gewoehnlicher Nutzer. */
 async function instanzMitAdmin(): Promise<Account> {
-  return signedInAs('root')
+  return signedInAsSystemAdmin(app)
 }
 
 describe('Workspaces anlegen und sehen', () => {

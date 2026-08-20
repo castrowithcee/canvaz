@@ -66,16 +66,60 @@ export function deriveUserProfile(claims: IdentityClaims): UserProfileDraft {
 }
 
 export type ProvisioningDecision =
-  /** Unbekannte externe Identitaet: Nutzer anlegen und Identitaet damit verknuepfen. */
-  | { readonly kind: 'provision'; readonly key: ExternalIdentityKey; readonly profile: UserProfileDraft; readonly isSystemAdmin: boolean }
+  /**
+   * Unbekannte externe Identitaet ohne passendes Profil: Nutzer anlegen und Identitaet damit verknuepfen.
+   *
+   * **Nie mit Systemadminrechten.** Die einzige Rolle dieses Pakets entsteht ausschliesslich beim einmaligen
+   * Bootstrap der Instanz; der Anmeldeweg entscheidet allein die Identitaet.
+   */
+  | { readonly kind: 'provision'; readonly key: ExternalIdentityKey; readonly profile: UserProfileDraft }
+  /**
+   * Unbekannte externe Identitaet, aber ein vorhandenes Profil mit derselben bestaetigten Adresse **und
+   * ohne bisherige externe Identitaet**: die Identitaet wird mit diesem Profil verknuepft, statt ein
+   * zweites anzulegen.
+   *
+   * Das ist die Stelle, an der beide Anmeldewege zusammenlaufen: ein administrativ angelegtes Konto und die
+   * externe Anmeldung derselben Person fuehren auf dasselbe Profil - mit denselben Rechten und ohne dass
+   * eine zweite Zeile entsteht. Bestaetigt heisst `email_verified`; eine unbestaetigte Adresse kommt aus
+   * `parseIdentityClaims` gar nicht erst heraus.
+   *
+   * Die Verknuepfung ist **einmalig je Profil**. Traegt das Profil bereits eine externe Identitaet, ist die
+   * Adresse als Zuordnung verbraucht: ein zweites, fremdes `sub` mit derselben Adresse wuerde sonst das
+   * Konto samt seiner Rolle uebernehmen, und beim Provider genuegt dafuer eine Adresse, die niemand hier
+   * kontrolliert.
+   */
+  | { readonly kind: 'link'; readonly userId: UserId; readonly key: ExternalIdentityKey; readonly profile: UserProfileDraft }
   /** Bekannte Identitaet eines aktiven Nutzers: Profil aus den Claims auffrischen. */
   | { readonly kind: 'refresh'; readonly userId: UserId; readonly identity: ExternalIdentity; readonly profile: UserProfileDraft }
-  /** Serverseitige Ablehnung. Die UI darf sie anzeigen, aber nicht umgehen. */
-  | { readonly kind: 'deny'; readonly reason: 'user-deactivated' }
+  /**
+   * Serverseitige Ablehnung. Die UI darf sie anzeigen, aber nicht umgehen.
+   *
+   * `email-already-linked`: die Adresse gehoert zu einem Profil, das bereits ueber eine andere externe
+   * Identitaet erreichbar ist. Weder Uebernahme noch zweites Profil - die Zuordnung ist eine Sache der
+   * Systemadministration und keine Folge dessen, welche Adresse ein Provider ausliefert.
+   */
+  | { readonly kind: 'deny'; readonly reason: 'user-deactivated' | 'email-already-linked' }
 
 export type ProvisioningContext = {
-  /** Wahr, solange die Instanz keinen Nutzer hat. Der erste angemeldete Nutzer bootstrappt den Systemadmin. */
-  readonly isFirstUser: boolean
+  /**
+   * Vorhandenes Profil mit derselben bestaetigten Adresse, sonst `null`. Es entscheidet zwischen Anlage und
+   * Verknuepfung.
+   */
+  readonly existingByEmail: User | null
+  /**
+   * Traegt dieses Profil bereits eine externe Identitaet? Dann ist die neue keine Verknuepfung, sondern eine
+   * Uebernahme - und wird abgelehnt. Ohne `existingByEmail` bedeutungslos.
+   */
+  readonly existingHasExternalIdentity: boolean
+}
+
+/**
+ * Ein vorhandenes Profil verliert seine Adresse nicht, nur weil ein Token diesmal keine bestaetigte
+ * mitbringt: die Adresse ist zugleich der lokale Anmeldename, und ein stiller Verlust waere ein
+ * ausgesperrtes Konto.
+ */
+function keepKnownEmail(profile: UserProfileDraft, user: User): UserProfileDraft {
+  return profile.email === null ? { ...profile, email: user.email } : profile
 }
 
 export function decideProvisioning(
@@ -84,16 +128,33 @@ export function decideProvisioning(
   context: ProvisioningContext,
 ): ProvisioningDecision {
   const profile = deriveUserProfile(claims)
-  if (linked === null) {
+  const key = { issuer: claims.issuer, subject: claims.subject }
+  if (linked !== null) {
+    if (!isUserActive(linked.user)) {
+      return { kind: 'deny', reason: 'user-deactivated' }
+    }
     return {
-      kind: 'provision',
-      key: { issuer: claims.issuer, subject: claims.subject },
-      profile,
-      isSystemAdmin: context.isFirstUser,
+      kind: 'refresh',
+      userId: linked.user.id,
+      identity: linked.identity,
+      profile: keepKnownEmail(profile, linked.user),
     }
   }
-  if (!isUserActive(linked.user)) {
-    return { kind: 'deny', reason: 'user-deactivated' }
+  if (context.existingByEmail !== null) {
+    // Zuerst die Uebernahme ausschliessen: der Anfragende ist hier nicht der Inhaber des Kontos, und die
+    // vagere Ablehnung verraet ihm auch dessen Status nicht.
+    if (context.existingHasExternalIdentity) {
+      return { kind: 'deny', reason: 'email-already-linked' }
+    }
+    if (!isUserActive(context.existingByEmail)) {
+      return { kind: 'deny', reason: 'user-deactivated' }
+    }
+    return {
+      kind: 'link',
+      userId: context.existingByEmail.id,
+      key,
+      profile: keepKnownEmail(profile, context.existingByEmail),
+    }
   }
-  return { kind: 'refresh', userId: linked.user.id, identity: linked.identity, profile }
+  return { kind: 'provision', key, profile }
 }

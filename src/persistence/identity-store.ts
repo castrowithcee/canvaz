@@ -7,6 +7,7 @@
 
 import type { Pool, PoolClient } from 'pg'
 
+import type { LocalCredential, UserInvitation, UserInvitationId } from '../domain/identity/local-auth.js'
 import type {
   AuthenticatedSession,
   ExternalIdentity,
@@ -20,7 +21,7 @@ import type {
 } from '../domain/identity/model.js'
 import { authenticate } from '../domain/identity/model.js'
 import type { UserProfileDraft } from '../domain/identity/provisioning.js'
-import type { IdentityStore, LinkedIdentity, NewSession } from '../domain/identity/repositories.js'
+import type { IdentityStore, LinkedIdentity, NewInvitation, NewSession } from '../domain/identity/repositories.js'
 import { IdentityConflictError } from '../domain/identity/repositories.js'
 
 type Queryable = Pick<PoolClient, 'query'>
@@ -30,7 +31,7 @@ const UNIQUE_VIOLATION = '23505'
 
 /**
  * Frei gewaehlte, projektweit feste Kennung der Bootstrap-Sperre. Sie serialisiert ausschliesslich die Frage
- * "ist diese Instanz noch leer?" und liegt bewusst neben der Kennung des Migrationslocks.
+ * "hat diese Instanz schon einen Systemadmin?" und liegt bewusst neben der Kennung des Migrationslocks.
  */
 const BOOTSTRAP_LOCK_ID = 4_711_020_602
 
@@ -73,9 +74,28 @@ type SessionRow = {
   revoked_at: Date | null
 }
 
+type CredentialRow = {
+  user_id: string
+  password_hash: string
+  must_change_password: boolean
+  updated_at: Date
+}
+
+type InvitationRow = {
+  id: string
+  user_id: string
+  created_by_user_id: string | null
+  created_at: Date
+  expires_at: Date
+  redeemed_at: Date | null
+  revoked_at: Date | null
+}
+
 const USER_COLUMNS = 'id, display_name, email, status, is_system_admin, created_at, updated_at'
 const IDENTITY_COLUMNS = 'id, user_id, issuer, subject, created_at, last_seen_at'
 const SESSION_COLUMNS = 'id, user_id, created_at, expires_at, revoked_at'
+const CREDENTIAL_COLUMNS = 'user_id, password_hash, must_change_password, updated_at'
+const INVITATION_COLUMNS = 'id, user_id, created_by_user_id, created_at, expires_at, redeemed_at, revoked_at'
 
 function toUser(row: UserRow): User {
   return {
@@ -98,6 +118,27 @@ function toExternalIdentity(row: ExternalIdentityRow): ExternalIdentity {
     subject: row.subject,
     createdAt: row.created_at,
     lastSeenAt: row.last_seen_at,
+  }
+}
+
+function toCredential(row: CredentialRow): LocalCredential {
+  return {
+    userId: row.user_id,
+    passwordHash: row.password_hash,
+    mustChangePassword: row.must_change_password,
+    updatedAt: row.updated_at,
+  }
+}
+
+function toInvitation(row: InvitationRow): UserInvitation {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    createdByUserId: row.created_by_user_id,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+    redeemedAt: row.redeemed_at,
+    revokedAt: row.revoked_at,
   }
 }
 
@@ -127,22 +168,30 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Identit
         return row === undefined ? null : toUser(row)
       },
 
+      async findByEmail(email: string): Promise<User | null> {
+        const result = await db.query<UserRow>(`select ${USER_COLUMNS} from users where email = $1`, [email])
+        const row = result.rows[0]
+        return row === undefined ? null : toUser(row)
+      },
+
       async count(): Promise<number> {
         const result = await db.query<{ count: number }>('select count(*)::int as count from users')
         return requireRow(result.rows[0], 'count lieferte keine Zeile').count
       },
 
-      async isFirstUser(): Promise<boolean> {
+      async hasSystemAdmin(): Promise<boolean> {
         if (!inTransaction) {
           // Ausserhalb einer Transaktion gaebe die Sperre die Serialisierung sofort wieder her und die
           // Antwort waere wertlos. Das ist ein Programmierfehler, kein Betriebszustand.
-          throw new Error('isFirstUser ist nur innerhalb einer Transaktion gueltig')
+          throw new Error('hasSystemAdmin ist nur innerhalb einer Transaktion gueltig')
         }
-        // Die Sperre haelt bis zum Commit: eine gleichzeitige Erstanmeldung wartet hier und sieht danach den
-        // bereits angelegten Nutzer. Ohne sie lesen unter READ COMMITTED beide eine leere Tabelle.
+        // Die Sperre haelt bis zum Commit: ein gleichzeitiger Bootstrap wartet hier und sieht danach den
+        // bereits angelegten Systemadmin. Ohne sie lesen unter READ COMMITTED beide eine leere Tabelle.
         await db.query('select pg_advisory_xact_lock($1)', [BOOTSTRAP_LOCK_ID])
-        const result = await db.query<{ count: number }>('select count(*)::int as count from users')
-        return requireRow(result.rows[0], 'count lieferte keine Zeile').count === 0
+        const result = await db.query<{ count: number }>(
+          'select count(*)::int as count from users where is_system_admin',
+        )
+        return requireRow(result.rows[0], 'count lieferte keine Zeile').count > 0
       },
 
       async list(): Promise<readonly User[]> {
@@ -212,6 +261,11 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Identit
         }
       },
 
+      async existsForUser(userId: UserId): Promise<boolean> {
+        const result = await db.query('select 1 from external_identities where user_id = $1 limit 1', [userId])
+        return (result.rowCount ?? 0) > 0
+      },
+
       async link(userId: UserId, key: ExternalIdentityKey): Promise<ExternalIdentity> {
         const result = await conflictAware(() =>
           db.query<ExternalIdentityRow>(
@@ -226,6 +280,91 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Identit
 
       async markSeen(id: ExternalIdentityId, seenAt: Date): Promise<void> {
         await db.query('update external_identities set last_seen_at = $2 where id = $1', [id, seenAt])
+      },
+    },
+
+    localCredentials: {
+      async findByUserId(userId: UserId): Promise<LocalCredential | null> {
+        const result = await db.query<CredentialRow>(
+          `select ${CREDENTIAL_COLUMNS} from local_credentials where user_id = $1`,
+          [userId],
+        )
+        const row = result.rows[0]
+        return row === undefined ? null : toCredential(row)
+      },
+
+      async set(
+        userId: UserId,
+        passwordHash: string,
+        options: { readonly mustChangePassword: boolean },
+      ): Promise<void> {
+        await db.query(
+          `insert into local_credentials (user_id, password_hash, must_change_password)
+           values ($1, $2, $3)
+           on conflict (user_id) do update
+             set password_hash = excluded.password_hash,
+                 must_change_password = excluded.must_change_password,
+                 updated_at = now()`,
+          [userId, passwordHash, options.mustChangePassword],
+        )
+      },
+
+      async listUserIds(): Promise<readonly UserId[]> {
+        const result = await db.query<{ user_id: string }>('select user_id from local_credentials')
+        return result.rows.map((row) => row.user_id)
+      },
+    },
+
+    invitations: {
+      async create(invitation: NewInvitation): Promise<UserInvitation> {
+        const result = await conflictAware(() =>
+          db.query<InvitationRow>(
+            `insert into user_invitations (user_id, token_hash, created_by_user_id, expires_at)
+             values ($1, $2, $3, $4)
+             returning ${INVITATION_COLUMNS}`,
+            [invitation.userId, invitation.tokenHash, invitation.createdByUserId, invitation.expiresAt],
+          ),
+        )
+        return toInvitation(requireRow(result.rows[0], 'Einladung konnte nicht angelegt werden'))
+      },
+
+      async findByTokenHash(tokenHash: string): Promise<UserInvitation | null> {
+        // `for update`: die Zeile bleibt bis zum Commit gesperrt. Zwei gleichzeitige Einloesungen desselben
+        // Werts laufen damit nacheinander, und die zweite findet die bereits eingeloeste Zeile vor.
+        const result = await db.query<InvitationRow>(
+          `select ${INVITATION_COLUMNS} from user_invitations where token_hash = $1 for update`,
+          [tokenHash],
+        )
+        const row = result.rows[0]
+        return row === undefined ? null : toInvitation(row)
+      },
+
+      async markRedeemed(id: UserInvitationId, redeemedAt: Date): Promise<boolean> {
+        const result = await db.query(
+          `update user_invitations set redeemed_at = $2
+           where id = $1 and redeemed_at is null and revoked_at is null`,
+          [id, redeemedAt],
+        )
+        return (result.rowCount ?? 0) === 1
+      },
+
+      async revokeOpenForUser(userId: UserId, revokedAt: Date): Promise<number> {
+        const result = await db.query(
+          `update user_invitations set revoked_at = $2
+           where user_id = $1 and redeemed_at is null and revoked_at is null`,
+          [userId, revokedAt],
+        )
+        return result.rowCount ?? 0
+      },
+
+      async listOpen(now: Date): Promise<readonly UserInvitation[]> {
+        const result = await db.query<InvitationRow>(
+          `select ${INVITATION_COLUMNS} from user_invitations
+           where redeemed_at is null and revoked_at is null and expires_at > $1
+           order by created_at desc`,
+          [now],
+        )
+        return result.rows.map(toInvitation)
       },
     },
 

@@ -42,6 +42,7 @@ import { createPool } from '../../src/persistence/pool.js'
 import { createJar } from '../support/browser-client.js'
 import type { Jar } from '../support/browser-client.js'
 import { login } from '../support/login-flow.js'
+import { signedInAsSystemAdmin } from '../support/local-accounts.js'
 import { startTestProvider } from '../support/oidc-provider.js'
 import type { TestProvider } from '../support/oidc-provider.js'
 import { startTestApp } from '../support/test-app.js'
@@ -392,7 +393,7 @@ describe('Geratene und fremde Kennungen', () => {
   })
 
   it('entzieht einem deaktivierten Nutzer jeden Boardzugriff', async () => {
-    const root = await signedInAs('root')
+    const root = await signedInAsSystemAdmin(app)
     const ada = await signedInAs('ada')
     const bob = await signedInAs('bob')
     const workspace = await createWorkspace(ada, 'Team Nord')

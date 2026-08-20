@@ -9,6 +9,15 @@
 import type {
   AddWorkspaceMemberRequest,
   AdminUsersResponse,
+  AuthMethodsResponse,
+  ChangePasswordRequest,
+  CreateInvitationResponse,
+  CreateUserRequest,
+  CreateUserResponse,
+  LocalLoginRequest,
+  LocalLoginResponse,
+  RedeemInvitationRequest,
+  ResetPasswordRequest,
   BoardGrantChangeResponse,
   BoardGrantRoleView,
   BoardGrantsResponse,
@@ -42,10 +51,18 @@ import type {
   WorkspacesResponse,
 } from '../contracts/api.js'
 import {
+  ADMIN_USER_CREATE_PATH,
+  ADMIN_USER_INVITATION_PATH,
+  ADMIN_USER_INVITATION_REVOKE_PATH,
+  ADMIN_USER_PASSWORD_PATH,
   ADMIN_USER_STATUS_PATH,
   ADMIN_USERS_PATH,
   ASSET_FILE_ID_PARAM,
+  AUTH_INVITATION_REDEEM_PATH,
+  AUTH_LOCAL_LOGIN_PATH,
+  AUTH_LOCAL_PASSWORD_PATH,
   AUTH_LOGOUT_PATH,
+  AUTH_METHODS_PATH,
   BOARD_ASSETS_PATH,
   BOARD_EXPORT_PATH,
   BOARD_GRANT_ADD_PATH,
@@ -133,8 +150,52 @@ export async function logout(csrfToken: string): Promise<LogoutResponse> {
   return request<LogoutResponse>(AUTH_LOGOUT_PATH, mutation(csrfToken))
 }
 
+/**
+ * Welche Anmeldewege diese Instanz hat. Oeffentlich und ohne Sitzung: die Anmeldeseite fragt sie, bevor sie
+ * irgendetwas anbietet.
+ */
+export async function fetchAuthMethods(): Promise<AuthMethodsResponse> {
+  return request<AuthMethodsResponse>(AUTH_METHODS_PATH)
+}
+
+/**
+ * Die drei unangemeldeten Anmeldestrecken tragen kein CSRF-Token: es gibt noch keine Sitzung, an die es
+ * gebunden waere. Der Server prueft stattdessen die Herkunft.
+ */
+function anonymousPost(body: unknown): RequestInit {
+  return { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }
+}
+
+export async function localLogin(credentials: LocalLoginRequest): Promise<LocalLoginResponse> {
+  return request<LocalLoginResponse>(AUTH_LOCAL_LOGIN_PATH, anonymousPost(credentials))
+}
+
+export async function changePassword(change: ChangePasswordRequest): Promise<LocalLoginResponse> {
+  return request<LocalLoginResponse>(AUTH_LOCAL_PASSWORD_PATH, anonymousPost(change))
+}
+
+export async function redeemInvitation(redemption: RedeemInvitationRequest): Promise<LocalLoginResponse> {
+  return request<LocalLoginResponse>(AUTH_INVITATION_REDEEM_PATH, anonymousPost(redemption))
+}
+
 export async function fetchAdminUsers(): Promise<AdminUsersResponse> {
   return request<AdminUsersResponse>(ADMIN_USERS_PATH)
+}
+
+export async function createUser(csrfToken: string, account: CreateUserRequest): Promise<CreateUserResponse> {
+  return request<CreateUserResponse>(ADMIN_USER_CREATE_PATH, mutation(csrfToken, account))
+}
+
+export async function resetUserPassword(csrfToken: string, reset: ResetPasswordRequest): Promise<UserView> {
+  return request<UserView>(ADMIN_USER_PASSWORD_PATH, mutation(csrfToken, reset))
+}
+
+export async function createUserInvitation(csrfToken: string, userId: string): Promise<CreateInvitationResponse> {
+  return request<CreateInvitationResponse>(ADMIN_USER_INVITATION_PATH, mutation(csrfToken, { userId }))
+}
+
+export async function revokeUserInvitation(csrfToken: string, userId: string): Promise<UserView> {
+  return request<UserView>(ADMIN_USER_INVITATION_REVOKE_PATH, mutation(csrfToken, { userId }))
 }
 
 export async function setUserStatus(csrfToken: string, change: SetUserStatusRequest): Promise<UserView> {

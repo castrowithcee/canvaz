@@ -235,19 +235,23 @@ describe('Transaktion', () => {
 })
 
 describe('Bootstrap-Entscheidung', () => {
-  it('meldet die leere Instanz und danach keine mehr', async () => {
-    expect(await store.transaction((tx) => tx.users.isFirstUser())).toBe(true)
+  it('meldet die unadministrierte Instanz und danach keine mehr', async () => {
+    expect(await store.transaction((tx) => tx.users.hasSystemAdmin())).toBe(false)
 
+    // Ein gewoehnlicher Nutzer aendert daran nichts - erst ein Systemadmin tut es.
     await createUser('Ada')
+    expect(await store.transaction((tx) => tx.users.hasSystemAdmin())).toBe(false)
 
-    expect(await store.transaction((tx) => tx.users.isFirstUser())).toBe(false)
+    await store.users.create({ displayName: 'Root', email: 'root@example.com' }, { isSystemAdmin: true })
+
+    expect(await store.transaction((tx) => tx.users.hasSystemAdmin())).toBe(true)
   })
 
   it('gilt nur innerhalb einer Transaktion', async () => {
-    await expect(store.users.isFirstUser()).rejects.toThrow()
+    await expect(store.users.hasSystemAdmin()).rejects.toThrow()
   })
 
-  it('serialisiert gleichzeitige Erstanmeldungen, sodass nur eine eine leere Instanz sieht', async () => {
+  it('serialisiert gleichzeitige Bootstraps, sodass nur einer eine unadministrierte Instanz sieht', async () => {
     let angelegt!: () => void
     let freigeben!: () => void
     const hatAngelegt = new Promise<void>((resolve) => {
@@ -258,22 +262,22 @@ describe('Bootstrap-Entscheidung', () => {
     })
 
     const erste = store.transaction(async (tx) => {
-      const first = await tx.users.isFirstUser()
-      await tx.users.create({ displayName: 'Ada', email: null }, { isSystemAdmin: first })
+      const vorhanden = await tx.users.hasSystemAdmin()
+      await tx.users.create({ displayName: 'Ada', email: null }, { isSystemAdmin: !vorhanden })
       angelegt()
       await darfCommitten
-      return first
+      return vorhanden
     })
     await hatAngelegt
 
     // Die zweite Transaktion beginnt, waehrend die erste noch offen ist. Ohne Sperre liest sie unter READ
-    // COMMITTED eine leere Tabelle und wuerde einen zweiten Systemadmin anlegen.
-    const zweite = store.transaction((tx) => tx.users.isFirstUser())
+    // COMMITTED eine Tabelle ohne Systemadmin und wuerde einen zweiten anlegen.
+    const zweite = store.transaction((tx) => tx.users.hasSystemAdmin())
     await new Promise((resolve) => setTimeout(resolve, 250))
     freigeben()
 
-    expect(await erste).toBe(true)
-    expect(await zweite).toBe(false)
+    expect(await erste).toBe(false)
+    expect(await zweite).toBe(true)
   })
 })
 

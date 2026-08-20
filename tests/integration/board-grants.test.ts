@@ -39,6 +39,7 @@ import { BOARD_ACCESS_REVOKED_CLOSE_CODE } from '../../src/contracts/realtime.js
 import { migrate } from '../../src/persistence/migrate.js'
 import { createPool } from '../../src/persistence/pool.js'
 import { addMember, createBoard, createWorkspace, post, signedInAs } from '../support/board-fixture.js'
+import { signedInAsSystemAdmin } from '../support/local-accounts.js'
 import type { Account } from '../support/board-fixture.js'
 import { startTestProvider } from '../support/oidc-provider.js'
 import type { TestProvider } from '../support/oidc-provider.js'
@@ -368,12 +369,12 @@ describe('Freigaben: Negativfaelle', () => {
   })
 
   it('gibt an einen unbekannten oder deaktivierten Nutzer nicht frei', async () => {
-    const { ada, bob, carl, board } = await team()
+    const { bob, carl, board } = await team()
 
     expect((await freigabe(bob, board.id, FREMDE_KENNUNG, 'viewer')).status).toBe(404)
-    // Ada ist als erster angemeldeter Nutzer Systemadmin.
+    const admin = await signedInAsSystemAdmin(app)
     expect(
-      (await post(app, ada, ADMIN_USER_STATUS_PATH, { userId: carl.profile.user.id, status: 'deactivated' })).status,
+      (await post(app, admin, ADMIN_USER_STATUS_PATH, { userId: carl.profile.user.id, status: 'deactivated' })).status,
     ).toBe(200)
     expect((await freigabe(bob, board.id, carl.profile.user.id, 'viewer')).status).toBe(400)
     expect(await gespeicherteRolle(board.id, carl.profile.user.id)).toBeNull()
@@ -467,15 +468,16 @@ describe('Ownerschaft uebertragen', () => {
   })
 
   it('uebertraegt nicht an einen Fremden, einen Unbekannten oder einen deaktivierten Nutzer', async () => {
-    const { ada, bob, carl, board } = await team()
+    const { bob, carl, board } = await team()
     const fremder = await signedInAs(app, 'dora')
 
     expect((await post(app, bob, BOARD_OWNER_PATH, { boardId: board.id, userId: fremder.profile.user.id })).status).toBe(
       400,
     )
     expect((await post(app, bob, BOARD_OWNER_PATH, { boardId: board.id, userId: FREMDE_KENNUNG })).status).toBe(404)
+    const admin = await signedInAsSystemAdmin(app)
     expect(
-      (await post(app, ada, ADMIN_USER_STATUS_PATH, { userId: carl.profile.user.id, status: 'deactivated' })).status,
+      (await post(app, admin, ADMIN_USER_STATUS_PATH, { userId: carl.profile.user.id, status: 'deactivated' })).status,
     ).toBe(200)
     expect((await post(app, bob, BOARD_OWNER_PATH, { boardId: board.id, userId: carl.profile.user.id })).status).toBe(
       400,

@@ -27,6 +27,7 @@ import { REALTIME_PROTOCOL_VERSION } from '../../src/contracts/realtime.js'
 import { SESSION_REVOKED_CLOSE_CODE } from '../../src/contracts/realtime.js'
 import { createJar } from '../support/browser-client.js'
 import type { Jar } from '../support/browser-client.js'
+import { profileOf, signedInAsSystemAdmin } from '../support/local-accounts.js'
 import { decideAtProvider, finishLogin, login, startLogin } from '../support/login-flow.js'
 import { startTestProvider } from '../support/oidc-provider.js'
 import type { TestProvider } from '../support/oidc-provider.js'
@@ -125,7 +126,7 @@ function connectRealtime(jar: Jar, headers: Readonly<Record<string, string>> = {
 }
 
 describe('Anmeldung', () => {
-  it('meldet den ersten Nutzer an, provisioniert ihn und macht ihn zum Systemadmin', async () => {
+  it('meldet den ersten Nutzer an, provisioniert ihn und gibt ihm keine Rechte', async () => {
     const jar = createJar()
 
     const result = await login(app, jar, { subject: 'ada', email: 'ada@example.com', name: 'Ada L.' })
@@ -135,7 +136,9 @@ describe('Anmeldung', () => {
     const profile = (await (await me(jar)).json()) as MeResponse
     expect(profile.user.displayName).toBe('Ada L.')
     expect(profile.user.email).toBe('ada@example.com')
-    expect(profile.user.isSystemAdmin).toBe(true)
+    // Der fruehere Bootstrap ueber die Erstanmeldung ist abgeloest: ein Systemadmin entsteht nur ueber den
+    // ausdruecklichen Bootstrap auf dem Host oder ueber administrative Vergabe.
+    expect(profile.user.isSystemAdmin).toBe(false)
     expect(profile.csrfToken).toBeTruthy()
     expect(await app.store.users.count()).toBe(1)
   })
@@ -163,16 +166,7 @@ describe('Anmeldung', () => {
     expect(zweite.profile.user.displayName).toBe('Ada Lovelace')
   })
 
-  it('macht nur den ersten Nutzer zum Systemadmin', async () => {
-    await signedInAs('ada')
-
-    const bob = await signedInAs('bob')
-
-    expect(bob.profile.user.isSystemAdmin).toBe(false)
-    expect(await app.store.users.count()).toBe(2)
-  })
-
-  it('macht bei gleichzeitigen Erstanmeldungen genau einen Systemadmin', async () => {
+  it('macht auch bei gleichzeitigen Erstanmeldungen niemanden zum Systemadmin', async () => {
     const subjekte = ['a', 'b', 'c', 'd', 'e']
 
     const ergebnisse = await Promise.all(subjekte.map((subject) => login(app, createJar(), { subject })))
@@ -182,7 +176,25 @@ describe('Anmeldung', () => {
     }
     const users = await app.store.users.list()
     expect(users).toHaveLength(subjekte.length)
-    expect(users.filter((user) => user.isSystemAdmin)).toHaveLength(1)
+    expect(users.filter((user) => user.isSystemAdmin)).toHaveLength(0)
+  })
+
+  it('fuehrt lokale und externe Anmeldung derselben Adresse auf dasselbe Profil', async () => {
+    const admin = await signedInAsSystemAdmin(app, { email: 'root@example.com', displayName: 'Root' })
+
+    // Derselbe Mensch kommt diesmal ueber den Provider - mit derselben bestaetigten Adresse.
+    const ueberProvider = await signedInAs('root-extern', { email: 'root@example.com' })
+
+    expect(ueberProvider.profile.user.id).toBe(admin.profile.user.id)
+    expect(ueberProvider.profile.user.isSystemAdmin).toBe(true)
+    expect(await app.store.users.count()).toBe(1)
+
+    // Und genau einmal: ein zweites, fremdes Subject mit derselben Adresse uebernimmt das Konto nicht -
+    // es bekommt keine Sitzung, und das Profil bleibt unveraendert.
+    const uebernahme = await login(app, createJar(), { subject: 'mallory', email: 'root@example.com', name: 'Mallory' })
+    expect(uebernahme.error).toBe('konto-nicht-zuordenbar')
+    expect(await app.store.users.count()).toBe(1)
+    expect((await profileOf(app, admin.jar)).user.displayName).toBe(ueberProvider.profile.user.displayName)
   })
 
   it('loest gleichzeitige Erstanmeldungen desselben Subjects als Konflikt auf, nicht als Fehler', async () => {
@@ -415,7 +427,7 @@ describe('Guard und Session', () => {
 
 describe('Systemadministration', () => {
   it('listet Nutzer nur fuer Systemadmins', async () => {
-    const admin = await signedInAs('ada')
+    const admin = await signedInAsSystemAdmin(app)
     const bob = await signedInAs('bob')
 
     const alsAdmin = await admin.jar.fetch(`${app.baseUrl}${ADMIN_USERS_PATH}`)
@@ -427,7 +439,7 @@ describe('Systemadministration', () => {
   })
 
   it('verweigert die Statusaenderung ohne Systemadminrolle', async () => {
-    const admin = await signedInAs('ada')
+    const admin = await signedInAsSystemAdmin(app)
     const bob = await signedInAs('bob')
 
     const response = await bob.jar.fetch(`${app.baseUrl}${ADMIN_USER_STATUS_PATH}`, {
@@ -441,7 +453,7 @@ describe('Systemadministration', () => {
   })
 
   it('verweigert die Statusaenderung ohne CSRF-Token', async () => {
-    const admin = await signedInAs('ada')
+    const admin = await signedInAsSystemAdmin(app)
     const bob = await signedInAs('bob')
 
     const response = await admin.jar.fetch(`${app.baseUrl}${ADMIN_USER_STATUS_PATH}`, {
@@ -454,7 +466,7 @@ describe('Systemadministration', () => {
   })
 
   it('laesst einen Systemadmin sich nicht selbst deaktivieren', async () => {
-    const admin = await signedInAs('ada')
+    const admin = await signedInAsSystemAdmin(app)
 
     const response = await admin.jar.fetch(`${app.baseUrl}${ADMIN_USER_STATUS_PATH}`, {
       method: 'POST',
@@ -467,7 +479,7 @@ describe('Systemadministration', () => {
   })
 
   it('beendet mit der Deaktivierung sofort alle Sitzungen und verhindert eine neue Anmeldung', async () => {
-    const admin = await signedInAs('ada')
+    const admin = await signedInAsSystemAdmin(app)
     const bob = await signedInAs('bob')
     const zweitesGeraet = await signedInAs('bob')
 
@@ -485,7 +497,7 @@ describe('Systemadministration', () => {
   })
 
   it('laesst einen deaktivierten Nutzer nach der Reaktivierung wieder anmelden', async () => {
-    const admin = await signedInAs('ada')
+    const admin = await signedInAsSystemAdmin(app)
     const bob = await signedInAs('bob')
     const change = (status: string) =>
       admin.jar.fetch(`${app.baseUrl}${ADMIN_USER_STATUS_PATH}`, {
@@ -584,7 +596,7 @@ describe('WebSocket-Einstieg', () => {
   })
 
   it('schliesst offene Verbindungen bei der Deaktivierung und laesst keine neue zu', async () => {
-    const admin = await signedInAs('ada')
+    const admin = await signedInAsSystemAdmin(app)
     const bob = await signedInAs('bob')
     const connection = await connectRealtime(bob.jar)
     await connection.next()

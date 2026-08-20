@@ -14,7 +14,7 @@ import * as client from 'openid-client'
 
 import type { IdentityClaims } from '../domain/identity/provisioning.js'
 import { parseIdentityClaims } from '../domain/identity/provisioning.js'
-import type { AppConfig } from './config.js'
+import type { OidcConfig } from './config.js'
 import type { FlowState } from './flow-state.js'
 
 const SCOPE = 'openid profile email'
@@ -72,8 +72,8 @@ function toOidcError(error: unknown): OidcError {
   return new OidcError('invalid-response', 'Antwort des Providers nicht verwertbar', { cause: error })
 }
 
-export function createOidcClient(config: AppConfig): OidcClient {
-  const issuer = new URL(config.oidc.issuer)
+export function createOidcClient(oidc: OidcConfig, baseUrl: string): OidcClient {
+  const issuer = new URL(oidc.issuer)
   let discovered: Promise<client.Configuration> | null = null
 
   /**
@@ -82,7 +82,7 @@ export function createOidcClient(config: AppConfig): OidcClient {
    */
   async function configuration(): Promise<client.Configuration> {
     discovered ??= client
-      .discovery(issuer, config.oidc.clientId, config.oidc.clientSecret, undefined, {
+      .discovery(issuer, oidc.clientId, oidc.clientSecret, undefined, {
         // Ein `http:`-Issuer ist eine bewusste Konfigurationsentscheidung (lokale Instanz); ohne diese
         // Freigabe verweigert die Bibliothek jede Verbindung.
         ...(issuer.protocol === 'http:' ? { execute: [client.allowInsecureRequests] } : {}),
@@ -109,7 +109,7 @@ export function createOidcClient(config: AppConfig): OidcClient {
         codeVerifier,
       }
       const url = client.buildAuthorizationUrl(configured, {
-        redirect_uri: config.oidc.redirectUri,
+        redirect_uri: oidc.redirectUri,
         scope: SCOPE,
         state: flow.state,
         nonce: flow.nonce,
@@ -144,7 +144,7 @@ export function createOidcClient(config: AppConfig): OidcClient {
         return null
       }
       // Ohne gespeichertes `id_token_hint` bleibt der Client-Hinweis; Provider fragen dann ggf. nach.
-      return client.buildEndSessionUrl(configured, { post_logout_redirect_uri: config.baseUrl }).href
+      return client.buildEndSessionUrl(configured, { post_logout_redirect_uri: baseUrl }).href
     },
   }
 }

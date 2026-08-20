@@ -3,13 +3,24 @@
  *
  * Alle Werte kommen ausschliesslich aus Umgebungsvariablen. Fehlt oder taugt ein Pflichtwert nicht, bricht
  * der Start mit einer Aufstellung aller Probleme ab. Es gibt bewusst keinen stillen Ersatzwert fuer
- * Datenbank, Session-Geheimnis oder OIDC: ein Server, der mit einem geratenen Geheimnis laeuft, ist
- * schlimmer als einer, der gar nicht startet.
+ * Datenbank oder Session-Geheimnis: ein Server, der mit einem geratenen Geheimnis laeuft, ist schlimmer als
+ * einer, der gar nicht startet.
+ *
+ * **OIDC ist optional.** Ohne jede der vier OIDC-Variablen startet die Instanz und arbeitet allein mit der
+ * lokalen Benutzerverwaltung. Wer den Weg zuschaltet, setzt alle vier - eine halbe Konfiguration ist ein
+ * Startfehler und kein stiller Verzicht auf den Provider.
  */
 
 import { SCENE_VERSION_RETENTION } from '../domain/board/model.js'
 import type { AssetStorageAdapter } from '../domain/storage/asset-storage-port.js'
 import type { S3StorageConfig } from '../persistence/asset-storage-s3.js'
+
+export type OidcConfig = {
+  readonly issuer: string
+  readonly clientId: string
+  readonly clientSecret: string
+  readonly redirectUri: string
+}
 
 export type AppConfig = {
   readonly port: number
@@ -19,12 +30,8 @@ export type AppConfig = {
   readonly databaseUrl: string
   readonly sessionSecret: string
   readonly sessionTtlSeconds: number
-  readonly oidc: {
-    readonly issuer: string
-    readonly clientId: string
-    readonly clientSecret: string
-    readonly redirectUri: string
-  }
+  /** `null` heisst: kein Identity Provider konfiguriert. Die Instanz zeigt und bedient dann nur den lokalen Weg. */
+  readonly oidc: OidcConfig | null
   readonly storage: {
     readonly adapter: AssetStorageAdapter
     /** Obergrenze einer einzelnen hochgeladenen Bilddatei in Bytes. Begrenzt zugleich den Anfragekoerper. */
@@ -58,6 +65,12 @@ export type AppConfig = {
   readonly webRoot: string
   /** Anfragen je Minute und Client auf die HTTP-API. */
   readonly rateLimitPerMinute: number
+  /**
+   * Versuche je Minute und Client auf die unangemeldeten Anmeldestrecken: lokale Anmeldung, Passwortwechsel
+   * und Einloesen einer Einladung. Sie liegt weit unter der allgemeinen Ratengrenze, weil hier ein Raten
+   * stattfindet und kein Gebrauch.
+   */
+  readonly authRateLimitPerMinute: number
   /**
    * Steht die Instanz hinter einem Reverse Proxy?
    *
@@ -223,6 +236,45 @@ const DEFAULT_RATE_LIMIT_PER_MINUTE = 600
 const MIN_RATE_LIMIT_PER_MINUTE = 60
 const MAX_RATE_LIMIT_PER_MINUTE = 600_000
 
+/**
+ * Anmeldeversuche je Minute und Client.
+ *
+ * Zehn sind mehr, als ein Mensch mit einem vergessenen Passwort in einer Minute schafft, und wenig genug,
+ * dass ein Durchprobieren an der Wand endet statt an der Passwortlaenge. Die Untergrenze liegt bei fuenf,
+ * weil darunter schon ein Vertipper samt Wiederholung ausgesperrt wuerde.
+ */
+const DEFAULT_AUTH_RATE_LIMIT_PER_MINUTE = 10
+const MIN_AUTH_RATE_LIMIT_PER_MINUTE = 5
+const MAX_AUTH_RATE_LIMIT_PER_MINUTE = 600_000
+
+const OIDC_VARIABLES = [
+  'CANVAZ_OIDC_ISSUER',
+  'CANVAZ_OIDC_CLIENT_ID',
+  'CANVAZ_OIDC_CLIENT_SECRET',
+  'CANVAZ_OIDC_REDIRECT_URI',
+] as const
+
+/**
+ * OIDC ist zuschaltbar, aber nicht halb.
+ *
+ * Ohne jede der vier Variablen gibt es den Weg nicht - das ist eine gueltige Instanz mit ausschliesslich
+ * lokaler Anmeldung. Sobald **eine** gesetzt ist, gelten alle vier als gewollt und fehlende werden beim
+ * Namen genannt: eine unvollstaendige Konfiguration ist ein Irrtum, und ein Server, der sie stillschweigend
+ * als "kein Provider" liest, verbirgt genau diesen Irrtum bis zur ersten Anmeldung.
+ */
+function readOidc(env: Env, problems: string[]): OidcConfig | null {
+  const configured = OIDC_VARIABLES.some((name) => (env[name]?.trim() ?? '') !== '')
+  if (!configured) {
+    return null
+  }
+  return {
+    issuer: readUrl(env, 'CANVAZ_OIDC_ISSUER', problems, ['http:', 'https:']),
+    clientId: readRequired(env, 'CANVAZ_OIDC_CLIENT_ID', problems),
+    clientSecret: readRequired(env, 'CANVAZ_OIDC_CLIENT_SECRET', problems),
+    redirectUri: readUrl(env, 'CANVAZ_OIDC_REDIRECT_URI', problems, ['http:', 'https:']),
+  }
+}
+
 export function loadConfig(env: Env = process.env): AppConfig {
   const problems: string[] = []
 
@@ -242,12 +294,7 @@ export function loadConfig(env: Env = process.env): AppConfig {
     databaseUrl,
     sessionSecret,
     sessionTtlSeconds: readInteger(env, 'CANVAZ_SESSION_TTL_HOURS', 12, 1, 720, problems) * SECONDS_PER_HOUR,
-    oidc: {
-      issuer: readUrl(env, 'CANVAZ_OIDC_ISSUER', problems, ['http:', 'https:']),
-      clientId: readRequired(env, 'CANVAZ_OIDC_CLIENT_ID', problems),
-      clientSecret: readRequired(env, 'CANVAZ_OIDC_CLIENT_SECRET', problems),
-      redirectUri: readUrl(env, 'CANVAZ_OIDC_REDIRECT_URI', problems, ['http:', 'https:']),
-    },
+    oidc: readOidc(env, problems),
     storage: {
       adapter: storageAdapter,
       maxAssetBytes: readInteger(
@@ -293,12 +340,20 @@ export function loadConfig(env: Env = process.env): AppConfig {
       MAX_RATE_LIMIT_PER_MINUTE,
       problems,
     ),
+    authRateLimitPerMinute: readInteger(
+      env,
+      'CANVAZ_AUTH_RATE_LIMIT_PER_MINUTE',
+      DEFAULT_AUTH_RATE_LIMIT_PER_MINUTE,
+      MIN_AUTH_RATE_LIMIT_PER_MINUTE,
+      MAX_AUTH_RATE_LIMIT_PER_MINUTE,
+      problems,
+    ),
     trustedProxy: readBoolean(env, 'CANVAZ_TRUSTED_PROXY', false, problems),
   }
 
   // Die Redirect-URI zeigt auf diese Instanz zurueck. Eine fremde Herkunft waere ein offener Umleitungspunkt
   // und wuerde ausserdem das Session-Cookie nie erreichen.
-  if (baseUrl !== '' && config.oidc.redirectUri !== '') {
+  if (baseUrl !== '' && config.oidc !== null && config.oidc.redirectUri !== '') {
     if (new URL(config.oidc.redirectUri).origin !== new URL(baseUrl).origin) {
       problems.push('CANVAZ_OIDC_REDIRECT_URI muss dieselbe Herkunft wie CANVAZ_BASE_URL haben')
     }

@@ -5,6 +5,7 @@
  * `src/persistence` und ist die einzige Stelle, die SQL kennt.
  */
 
+import type { LocalCredential, UserInvitation, UserInvitationId } from './local-auth.js'
 import type {
   AuthenticatedSession,
   ExternalIdentity,
@@ -44,13 +45,17 @@ export class IdentityConflictError extends Error {
 
 export interface UserRepository {
   findById(id: UserId): Promise<User | null>
+  /** Aufloesung des Anmeldenamens und der Zuordnung einer externen Identitaet. Die Adresse ist normalisiert. */
+  findByEmail(email: string): Promise<User | null>
   count(): Promise<number>
   /**
-   * Bootstrap-Entscheidung der Provisionierung: die erste Anmeldung einer leeren Instanz wird Systemadmin.
-   * Die Antwort gilt serialisiert bis zum Ende der Transaktion, damit zwei gleichzeitige Erstanmeldungen
-   * nicht beide eine leere Instanz sehen. Nur innerhalb einer Transaktion gueltig.
+   * Bootstrap-Frage der Erstinbetriebnahme: gibt es bereits einen Systemadmin?
+   *
+   * Die Antwort gilt serialisiert bis zum Ende der Transaktion, damit zwei gleichzeitige Bootstraps nicht
+   * beide eine unadministrierte Instanz sehen und zwei Administratoren anlegen. Nur innerhalb einer
+   * Transaktion gueltig.
    */
-  isFirstUser(): Promise<boolean>
+  hasSystemAdmin(): Promise<boolean>
   /** Nutzerliste der Systemadministration, aelteste zuerst. */
   list(): Promise<readonly User[]>
   create(profile: UserProfileDraft, options: { readonly isSystemAdmin: boolean }): Promise<User>
@@ -58,9 +63,57 @@ export interface UserRepository {
   setStatus(id: UserId, status: UserStatus): Promise<User>
 }
 
+/**
+ * Lokale Anmeldedaten.
+ *
+ * Das Repository kennt ausschliesslich Hashes. Es gibt bewusst keine Methode, die ein Passwort prueft: das
+ * Verfahren steht im Server (`src/server/password.ts`), die Regel in der Domain, und die Persistenz haelt
+ * nur, was beide brauchen.
+ */
+export interface LocalCredentialRepository {
+  findByUserId(userId: UserId): Promise<LocalCredential | null>
+  /** Legt die Anmeldedaten an oder ersetzt sie. Ein Nutzer hat hoechstens einen Passworthash. */
+  set(userId: UserId, passwordHash: string, options: { readonly mustChangePassword: boolean }): Promise<void>
+  /** Kennungen aller Nutzer mit lokalem Passwort. Die Systemadministration zeigt daran den Anmeldeweg. */
+  listUserIds(): Promise<readonly UserId[]>
+}
+
+export type NewInvitation = {
+  readonly userId: UserId
+  /** Hash des Einladungswerts. Der Wert selbst verlaesst den Server genau einmal, in der Anlageantwort. */
+  readonly tokenHash: string
+  readonly createdByUserId: UserId | null
+  readonly expiresAt: Date
+}
+
+export interface InvitationRepository {
+  create(invitation: NewInvitation): Promise<UserInvitation>
+  /**
+   * Loest einen Einladungswert auf und sperrt die Zeile bis zum Ende der Transaktion.
+   *
+   * Geliefert wird die Zeile unabhaengig von ihrem Zustand; ob sie noch eingeloest werden darf, entscheidet
+   * die Domain (`isInvitationRedeemable`). Nur innerhalb einer Transaktion sinnvoll: die Sperre ist es, die
+   * aus "genau einmal einloesbar" mehr macht als eine Absicht.
+   */
+  findByTokenHash(tokenHash: string): Promise<UserInvitation | null>
+  /** Einmalverwendung. `false` heisst: ein gleichzeitiger Vorgang war zuerst da. */
+  markRedeemed(id: UserInvitationId, redeemedAt: Date): Promise<boolean>
+  /** Widerruft alle offenen Einladungen eines Nutzers und liefert deren Zahl. */
+  revokeOpenForUser(userId: UserId, revokedAt: Date): Promise<number>
+  /** Offene, noch einloesbare Einladungen aller Nutzer. Grundlage der Anzeige in der Systemadministration. */
+  listOpen(now: Date): Promise<readonly UserInvitation[]>
+}
+
 export interface ExternalIdentityRepository {
   /** Laedt Identitaet und zugehoerigen Nutzer in einem Schritt; beides wird immer gemeinsam gebraucht. */
   findByKey(key: ExternalIdentityKey): Promise<LinkedIdentity | null>
+  /**
+   * Traegt dieser Nutzer bereits eine externe Identitaet?
+   *
+   * Bewusst nur die Existenz und nicht die Zeilen: die Provisionierung entscheidet daran, ob eine
+   * Verknuepfung ueber die Adresse noch offen ist - welche Identitaet dahintersteht, geht sie nichts an.
+   */
+  existsForUser(userId: UserId): Promise<boolean>
   link(userId: UserId, key: ExternalIdentityKey): Promise<ExternalIdentity>
   markSeen(id: ExternalIdentityId, seenAt: Date): Promise<void>
 }
@@ -87,6 +140,8 @@ export interface SessionRepository {
 export interface IdentityStore {
   readonly users: UserRepository
   readonly externalIdentities: ExternalIdentityRepository
+  readonly localCredentials: LocalCredentialRepository
+  readonly invitations: InvitationRepository
   readonly sessions: SessionRepository
   transaction<T>(run: (store: IdentityStore) => Promise<T>): Promise<T>
 }

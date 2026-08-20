@@ -55,7 +55,11 @@ export type TestApp = {
 export const TEST_SESSION_SECRET = 'test-session-secret-mit-mehr-als-32-zeichen'
 
 export async function startTestApp(options: {
-  readonly provider: TestProvider
+  /**
+   * Der Test-Provider. **Ohne ihn startet die Anwendung ohne jede OIDC-Konfiguration** - genau so, wie eine
+   * Instanz mit ausschliesslich lokaler Benutzerverwaltung laeuft.
+   */
+  readonly provider?: TestProvider
   readonly pool: Pool
   readonly databaseUrl: string
   readonly sessionTtlHours?: number
@@ -87,14 +91,20 @@ export async function startTestApp(options: {
     DATABASE_URL: options.databaseUrl,
     CANVAZ_SESSION_SECRET: TEST_SESSION_SECRET,
     CANVAZ_SESSION_TTL_HOURS: String(options.sessionTtlHours ?? 12),
-    CANVAZ_OIDC_ISSUER: options.provider.issuer,
-    CANVAZ_OIDC_CLIENT_ID: options.provider.clientId,
-    CANVAZ_OIDC_CLIENT_SECRET: options.provider.clientSecret,
-    CANVAZ_OIDC_REDIRECT_URI: `${baseUrl}/api/auth/callback`,
+    ...(options.provider === undefined
+      ? {}
+      : {
+          CANVAZ_OIDC_ISSUER: options.provider.issuer,
+          CANVAZ_OIDC_CLIENT_ID: options.provider.clientId,
+          CANVAZ_OIDC_CLIENT_SECRET: options.provider.clientSecret,
+          CANVAZ_OIDC_REDIRECT_URI: `${baseUrl}/api/auth/callback`,
+        }),
     CANVAZ_STORAGE_FILESYSTEM_ROOT: join(tmpdir(), 'canvaz-test-assets'),
     // Die Testfaelle fahren viele Anfragen in Sekunden; die Ratengrenze des Betriebs wuerde sie treffen.
     // Der Fall, der sie prueft, setzt sie ausdruecklich wieder herunter.
     CANVAZ_RATE_LIMIT_PER_MINUTE: '600000',
+    // Dasselbe fuer die enge Grenze der Anmeldestrecken; ihr eigener Testfall setzt sie ausdruecklich herunter.
+    CANVAZ_AUTH_RATE_LIMIT_PER_MINUTE: '600000',
     ...options.storage,
     ...options.env,
   })
@@ -137,7 +147,7 @@ export async function startTestApp(options: {
     workspaces,
     boards,
     storage: createAssetStorage(config.storage),
-    oidc: createOidcClient(config),
+    oidc: config.oidc === null ? null : createOidcClient(config.oidc, config.baseUrl),
     realtime,
     rooms,
     logger,
