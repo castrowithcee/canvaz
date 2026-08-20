@@ -11,13 +11,23 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import type { BoardStatusView, BoardView, MeResponse, WorkspaceView } from '../contracts/api.js'
+import type { BoardStatusView, BoardView, FolderView, MeResponse, WorkspaceView } from '../contracts/api.js'
+import { BOARD_FOLDER_ROOT } from '../contracts/api.js'
 import { MAX_BOARD_TITLE_LENGTH } from '../domain/board/model.js'
 import type { EffectiveBoardRole } from '../domain/board/policy.js'
 import { mayChangeBoard, mayManageBoard } from '../domain/board/policy.js'
-import { ApiError, createBoard, fetchBoards, renameBoard, setBoardStatus } from './api.js'
+import {
+  ApiError,
+  createBoard,
+  fetchBoards,
+  fetchFolders,
+  moveBoardToFolder,
+  renameBoard,
+  setBoardStatus,
+} from './api.js'
 import { BoardShare } from './board-share.js'
 import { BoardVersions } from './board-versions.js'
+import { FolderSelect, Folders } from './folders.js'
 
 /** Uebersetzt eine Serverantwort in einen Satz. 404 und 403 bekommen bewusst eigene Texte. */
 function messageOf(cause: unknown, fallback: string): string {
@@ -55,6 +65,7 @@ function Notice({ text }: { readonly text: string }) {
 function BoardRow({
   me,
   board,
+  folders,
   editable,
   manageable,
   onOpen,
@@ -65,6 +76,8 @@ function BoardRow({
 }: {
   readonly me: MeResponse
   readonly board: BoardView
+  /** Ordner des Arbeitsbereichs; sie sind die Ziele der Ablage dieser Zeile. */
+  readonly folders: readonly FolderView[]
   readonly editable: boolean
   /** Wahr, wenn die vom Server genannte Rolle die Freigabeverwaltung traegt - Bequemlichkeit, keine Grenze. */
   readonly manageable: boolean
@@ -139,6 +152,25 @@ function BoardRow({
           board.title
         )}
       </td>
+      <td>
+        {editable ? (
+          <FolderSelect
+            id={`board-folder-${board.id}`}
+            label={`Ordner von ${board.title}`}
+            folders={folders}
+            value={board.folderId}
+            disabled={busy}
+            onChange={(folderId) => {
+              run(
+                moveBoardToFolder(me.csrfToken, board.id, folderId),
+                'Das Board konnte nicht verschoben werden.',
+              )
+            }}
+          />
+        ) : (
+          (folders.find((entry) => entry.id === board.folderId)?.name ?? 'Arbeitsbereich')
+        )}
+      </td>
       <td>{board.ownerDisplayName}</td>
       <td>{board.sceneVersion === 0 ? 'noch leer' : `Version ${String(board.sceneVersion)}`}</td>
       <td>{new Date(board.updatedAt).toLocaleDateString('de-DE')}</td>
@@ -204,11 +236,17 @@ function BoardRow({
 export function Boards({
   me,
   workspace,
+  folder,
   onOpenBoard,
   onListChanged,
 }: {
   readonly me: MeResponse
   readonly workspace: WorkspaceView
+  /**
+   * Gewaehlter Ordner aus der Adresse: `null` alle Boards, `BOARD_FOLDER_ROOT` die ohne Ordner, sonst
+   * genau dieser. Gefiltert wird serverseitig - dieser Wert geht unveraendert an den Endpunkt.
+   */
+  readonly folder: string | null
   /**
    * Oeffnet ein Board. Mit `previewVersion` steht die Read-only-Vorschau genau dieser Version - derselbe
    * Weg wie das normale Oeffnen, damit die Vorschau die ganze Flaeche bekommt und nicht ein zweiter,
@@ -234,6 +272,8 @@ export function Boards({
   const [shareBoardId, setShareBoardId] = useState<string | null>(null)
   /** Board, dessen Versionen gerade gezeigt werden. Derselbe Fluss, derselbe Grund. */
   const [versionsBoard, setVersionsBoard] = useState<BoardView | null>(null)
+  /** Ordner des Arbeitsbereichs: Ziele der Ablage, Vorlage des Baumes und Beschriftung der Zeilen. */
+  const [folders, setFolders] = useState<readonly FolderView[]>([])
 
   const workspaceId = workspace.id
   // Ref statt Abhaengigkeit: der Rueckruf darf das Laden nicht neu ausloesen - das waere eine Schleife.
@@ -242,7 +282,7 @@ export function Boards({
 
   const load = useCallback(() => {
     setError(null)
-    fetchBoards(workspaceId, { status, query: term })
+    fetchBoards(workspaceId, { status, query: term, folder })
       .then((response) => {
         setList(response.boards)
       })
@@ -250,15 +290,34 @@ export function Boards({
         setList([])
         setError(messageOf(cause, 'Die Boards konnten nicht geladen werden.'))
       })
-  }, [workspaceId, status, term])
+  }, [workspaceId, status, term, folder])
 
   useEffect(load, [load])
+
+  // Eigener Ladevorgang: der Baum haengt nicht am Status- und nicht am Titelfilter der Liste, und die
+  // Ordner bleiben stehen, waehrend die Boardliste wechselt.
+  const loadFolders = useCallback(() => {
+    fetchFolders(workspaceId)
+      .then((response) => {
+        setFolders(response.folders)
+      })
+      .catch(() => {
+        setFolders([])
+      })
+  }, [workspaceId])
+
+  useEffect(loadFolders, [loadFolders])
 
   /** Nach einer Aenderung: neu laden und die Huelle benachrichtigen, damit ihre Seitenleiste mitzieht. */
   const reload = useCallback(() => {
     load()
+    loadFolders()
     onChangedRef.current?.()
-  }, [load])
+  }, [load, loadFolders])
+
+  /** Der Ordner, in den ein neues Board faellt: der gewaehlte, sonst der Arbeitsbereich selbst. */
+  const targetFolderId = folder === null || folder === BOARD_FOLDER_ROOT ? null : folder
+  const folderName = folders.find((entry) => entry.id === folder)?.name ?? null
 
   const archived = status === 'archived'
   /** Ein archivierter Arbeitsbereich ist vollstaendig unveraenderlich - unabhaengig von jeder Boardrolle. */
@@ -266,7 +325,15 @@ export function Boards({
 
   return (
     <section aria-labelledby="boards-heading">
-      <h4 id="boards-heading">Boards</h4>
+      <Folders me={me} workspace={workspace} folders={folders} active={folder} onChanged={reload} />
+
+      <h4 id="boards-heading">
+        {folder === null
+          ? 'Alle Boards'
+          : folder === BOARD_FOLDER_ROOT
+            ? 'Boards ohne Ordner'
+            : `Boards in ${folderName ?? 'diesem Ordner'}`}
+      </h4>
 
       <div className="board-filters">
         <form
@@ -330,9 +397,11 @@ export function Boards({
         <p>
           {archived
             ? 'Es gibt keine archivierten Boards.'
-            : term === ''
-              ? 'In diesem Arbeitsbereich gibt es noch kein Board. Lege das erste an.'
-              : `Kein Board mit "${term}" im Titel.`}
+            : term !== ''
+              ? `Kein Board mit "${term}" im Titel.`
+              : folder === null
+                ? 'In diesem Arbeitsbereich gibt es noch kein Board. Lege das erste an.'
+                : 'Hier liegt noch kein Board.'}
         </p>
       )}
       {list !== null && list.length > 0 && (
@@ -343,6 +412,7 @@ export function Boards({
           <thead>
             <tr>
               <th scope="col">Titel</th>
+              <th scope="col">Ordner</th>
               <th scope="col">Owner</th>
               <th scope="col">Stand</th>
               <th scope="col">Geaendert</th>
@@ -355,6 +425,7 @@ export function Boards({
                 key={board.id}
                 me={me}
                 board={board}
+                folders={folders}
                 // Angeboten wird, was die vom Server genannte Rolle traegt. Entschieden wird trotzdem am
                 // Endpunkt: die Anzeige ist Bequemlichkeit und keine Grenze.
                 editable={workspaceActive && mayChangeBoard(viewerRoleOf(board))}
@@ -409,7 +480,7 @@ export function Boards({
             event.preventDefault()
             setCreating(true)
             setActionError(null)
-            createBoard(me.csrfToken, workspace.id, newTitle)
+            createBoard(me.csrfToken, workspace.id, newTitle, targetFolderId)
               .then(() => {
                 setNewTitle('')
                 reload()

@@ -5,6 +5,7 @@
  * und hat genau einen fachlichen Owner; beide Bezuege sind Teil des Modells und nicht optional.
  */
 
+import type { FolderId } from '../folder/model.js'
 import type { UserId } from '../identity/model.js'
 import type { WorkspaceId } from '../workspace/model.js'
 
@@ -56,6 +57,13 @@ export type Board = {
   readonly workspaceId: WorkspaceId
   readonly title: string
   readonly ownerId: UserId
+  /**
+   * Ordner, in dem das Board liegt. `null` heisst: unmittelbar im Arbeitsbereich.
+   *
+   * Genau einer oder keiner - ein Board in mehreren Ordnern gibt es nicht. Die Zuordnung ist Gliederung
+   * und **keine Berechtigung**: wer das Board sehen darf, sieht es unabhaengig von seinem Ordner.
+   */
+  readonly folderId: FolderId | null
   readonly status: BoardStatus
   /** Nummer der zuletzt gespeicherten Szene. `0` heisst: das Board wurde noch nie gespeichert. */
   readonly sceneVersion: number

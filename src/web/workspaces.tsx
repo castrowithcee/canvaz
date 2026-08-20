@@ -596,7 +596,9 @@ export function WorkspaceOverview({
             {workspaces.map((workspace) => (
               <tr key={workspace.id}>
                 <td>
-                  <Link route={{ kind: 'arbeitsbereich', workspaceId: workspace.id }}>{workspace.name}</Link>
+                  <Link route={{ kind: 'arbeitsbereich', workspaceId: workspace.id, folder: null }}>
+                    {workspace.name}
+                  </Link>
                 </td>
                 <td>{workspace.role === null ? '—' : ROLE_LABELS[workspace.role]}</td>
                 <td>{workspace.status === 'active' ? 'aktiv' : 'archiviert'}</td>

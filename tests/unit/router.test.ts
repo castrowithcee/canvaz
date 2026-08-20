@@ -15,7 +15,9 @@ const ROUTES: readonly (readonly [string, AppRoute])[] = [
   ['/', { kind: 'einstieg', filter: null }],
   ['/?filter=shared-with-me', { kind: 'einstieg', filter: 'shared-with-me' }],
   ['/arbeitsbereiche', { kind: 'arbeitsbereiche' }],
-  ['/arbeitsbereiche/w-1', { kind: 'arbeitsbereich', workspaceId: 'w-1' }],
+  ['/arbeitsbereiche/w-1', { kind: 'arbeitsbereich', workspaceId: 'w-1', folder: null }],
+  ['/arbeitsbereiche/w-1?ordner=root', { kind: 'arbeitsbereich', workspaceId: 'w-1', folder: 'root' }],
+  ['/arbeitsbereiche/w-1?ordner=f-3', { kind: 'arbeitsbereich', workspaceId: 'w-1', folder: 'f-3' }],
   ['/arbeitsbereiche/w-1/mitglieder', { kind: 'mitglieder', workspaceId: 'w-1' }],
   ['/arbeitsbereiche/w-1/einstellungen', { kind: 'einstellungen', workspaceId: 'w-1' }],
   ['/arbeitsbereiche/w-1/boards/b-2', { kind: 'board', workspaceId: 'w-1', boardId: 'b-2', version: null }],
@@ -52,8 +54,8 @@ describe('Pfadschema', () => {
   })
 
   it('traegt Kennungen mit Sonderzeichen unveraendert durch', () => {
-    const href = routeHref({ kind: 'arbeitsbereich', workspaceId: 'a/b' })
+    const href = routeHref({ kind: 'arbeitsbereich', workspaceId: 'a/b', folder: null })
     expect(href).toBe('/arbeitsbereiche/a%2Fb')
-    expect(parseRoute(href)).toEqual({ kind: 'arbeitsbereich', workspaceId: 'a/b' })
+    expect(parseRoute(href)).toEqual({ kind: 'arbeitsbereich', workspaceId: 'a/b', folder: null })
   })
 })

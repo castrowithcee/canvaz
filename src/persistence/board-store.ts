@@ -11,6 +11,7 @@ import type { Pool } from 'pg'
 
 import type { SceneSnapshot } from '../contracts/scene.js'
 import { parseSceneSnapshot } from '../contracts/scene.js'
+import type { FolderId } from '../domain/folder/model.js'
 import type { UserId } from '../domain/identity/model.js'
 import type {
   AuthenticatedGuest,
@@ -50,6 +51,7 @@ type BoardRow = {
   workspace_id: string
   title: string
   owner_user_id: string
+  folder_id: string | null
   status: string
   current_scene_version: number
   created_at: Date
@@ -57,7 +59,7 @@ type BoardRow = {
 }
 
 const BOARD_COLUMNS =
-  'id, workspace_id, title, owner_user_id, status, current_scene_version, created_at, updated_at'
+  'id, workspace_id, title, owner_user_id, folder_id, status, current_scene_version, created_at, updated_at'
 
 function toBoard(row: BoardRow): Board {
   return {
@@ -65,6 +67,7 @@ function toBoard(row: BoardRow): Board {
     workspaceId: row.workspace_id,
     title: row.title,
     ownerId: row.owner_user_id,
+    folderId: row.folder_id,
     // Der Check-Constraint laesst nur diese Werte zu.
     status: row.status as BoardStatus,
     sceneVersion: row.current_scene_version,
@@ -295,7 +298,7 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
         workspace_updated_at: Date
       }
     >(
-      `select b.id, b.workspace_id, b.title, b.owner_user_id, b.status, b.current_scene_version,
+      `select b.id, b.workspace_id, b.title, b.owner_user_id, b.folder_id, b.status, b.current_scene_version,
               b.created_at, b.updated_at, u.display_name as owner_display_name,
               w.name as workspace_name, w.status as workspace_status,
               w.created_at as workspace_created_at, w.updated_at as workspace_updated_at
@@ -325,6 +328,7 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
 
   const store: BoardStore = {
     workspaces: base.workspaces,
+    folders: base.folders,
     audit: base.audit,
 
     boards: {
@@ -336,8 +340,20 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
         // `position(... in ...)` statt `like`: der Suchbegriff darf keine Platzhalter enthalten koennen.
         // Die eigene Freigabezeile kommt als `left join` mit: sie gehoert zu genau dieser Zeile und zu
         // diesem Zeitpunkt, und eine zweite Abfrage je Board waere beides nicht.
+        // Der Ordnerfilter ist eine feste Bedingung aus drei Faellen und nie eine zusammengesetzte
+        // Zeichenkette aus der Anfrage: die Kennung selbst kommt weiterhin als Parameter.
+        const params: unknown[] = [workspaceId, filter.status, filter.title, userId]
+        let folderCondition = 'true'
+        if (filter.folder !== null) {
+          if (filter.folder.folderId === null) {
+            folderCondition = 'b.folder_id is null'
+          } else {
+            params.push(filter.folder.folderId)
+            folderCondition = 'b.folder_id = $5'
+          }
+        }
         const result = await db.query<BoardRow & { owner_display_name: string; grant_role: string | null }>(
-          `select b.id, b.workspace_id, b.title, b.owner_user_id, b.status, b.current_scene_version,
+          `select b.id, b.workspace_id, b.title, b.owner_user_id, b.folder_id, b.status, b.current_scene_version,
                   b.created_at, b.updated_at, u.display_name as owner_display_name, g.role as grant_role
              from boards b
              join users u on u.id = b.owner_user_id
@@ -345,8 +361,9 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
             where b.workspace_id = $1
               and b.status = $2
               and ($3 = '' or position(lower($3) in lower(b.title)) > 0)
+              and ${folderCondition}
             order by lower(b.title), b.id`,
-          [workspaceId, filter.status, filter.title, userId],
+          params,
         )
         return result.rows.map((row) => ({
           board: toBoard(row),
@@ -377,7 +394,7 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
             shared_externally: boolean
           }
         >(
-          `select b.id, b.workspace_id, b.title, b.owner_user_id, b.status, b.current_scene_version,
+          `select b.id, b.workspace_id, b.title, b.owner_user_id, b.folder_id, b.status, b.current_scene_version,
                   b.created_at, b.updated_at, u.display_name as owner_display_name,
                   w.name as workspace_name, w.status as workspace_status,
                   w.created_at as workspace_created_at, w.updated_at as workspace_updated_at,
@@ -427,12 +444,17 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
         return loadAccess(id, viewer, now, true)
       },
 
-      async create(workspaceId: WorkspaceId, title: string, ownerId: UserId): Promise<Board> {
+      async create(
+        workspaceId: WorkspaceId,
+        title: string,
+        ownerId: UserId,
+        folderId: FolderId | null,
+      ): Promise<Board> {
         const created = await db.query<BoardRow>(
-          `insert into boards (workspace_id, title, owner_user_id)
-           values ($1, $2, $3)
+          `insert into boards (workspace_id, title, owner_user_id, folder_id)
+           values ($1, $2, $3, $4)
            returning ${BOARD_COLUMNS}`,
-          [workspaceId, title, ownerId],
+          [workspaceId, title, ownerId, folderId],
         )
         return toBoard(requireRow(created.rows[0], 'Board konnte nicht angelegt werden'))
       },
@@ -457,6 +479,14 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
         const result = await db.query<BoardRow>(
           `update boards set owner_user_id = $2, updated_at = now() where id = $1 returning ${BOARD_COLUMNS}`,
           [id, ownerId],
+        )
+        return toBoard(requireRow(result.rows[0], `Unbekanntes Board ${id}`))
+      },
+
+      async setFolder(id: BoardId, folderId: FolderId | null): Promise<Board> {
+        const result = await db.query<BoardRow>(
+          `update boards set folder_id = $2, updated_at = now() where id = $1 returning ${BOARD_COLUMNS}`,
+          [id, folderId],
         )
         return toBoard(requireRow(result.rows[0], `Unbekanntes Board ${id}`))
       },

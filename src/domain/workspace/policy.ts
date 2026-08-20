@@ -50,6 +50,15 @@ export type WorkspaceAction =
   | { readonly kind: 'workspace:rename' }
   | { readonly kind: 'workspace:archive' }
   | { readonly kind: 'workspace:unarchive' }
+  /**
+   * Ordner anlegen, umbenennen, verschieben und entfernen.
+   *
+   * Ordner sind **Struktur des Arbeitsbereichs** und folgen deshalb der Workspacerolle und nie einer
+   * Boardrolle: sie ordnen, sie berechtigen nicht. Gelesen wird der Baum mit `workspace:read` - wer den
+   * Arbeitsbereich sieht, sieht auch seine Gliederung -, geformt wird er von seiner Verwaltung. Ein
+   * einzelnes Board legt weiterhin jedes Mitglied an; wo die Gliederung liegt, entscheidet die Leitung.
+   */
+  | { readonly kind: 'folder:manage' }
   | { readonly kind: 'member:add'; readonly role: WorkspaceRole }
   | { readonly kind: 'member:change-role'; readonly currentRole: WorkspaceRole; readonly nextRole: WorkspaceRole }
   | { readonly kind: 'member:remove'; readonly currentRole: WorkspaceRole }
@@ -111,6 +120,7 @@ export function decideWorkspaceAccess(
 
   switch (action.kind) {
     case 'workspace:rename':
+    case 'folder:manage':
       return level === 'owner' || level === 'admin' ? ALLOWED : denied('insufficient-role')
     case 'workspace:archive':
     case 'workspace:unarchive':

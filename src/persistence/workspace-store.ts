@@ -8,6 +8,8 @@
 
 import type { Pool, PoolClient } from 'pg'
 
+import type { Folder, FolderId } from '../domain/folder/model.js'
+import type { DissolvedFolder } from '../domain/folder/repositories.js'
 import type { UserId, UserStatus } from '../domain/identity/model.js'
 import type {
   Workspace,
@@ -48,6 +50,15 @@ type MembershipRow = {
   updated_at: Date
 }
 
+type FolderRow = {
+  id: string
+  workspace_id: string
+  parent_id: string | null
+  name: string
+  created_at: Date
+  updated_at: Date
+}
+
 type AuditRow = {
   id: string
   occurred_at: Date
@@ -61,6 +72,18 @@ type AuditRow = {
 
 const WORKSPACE_COLUMNS = 'id, name, status, created_at, updated_at'
 const MEMBERSHIP_COLUMNS = 'workspace_id, user_id, role, created_at, updated_at'
+const FOLDER_COLUMNS = 'id, workspace_id, parent_id, name, created_at, updated_at'
+
+function toFolder(row: FolderRow): Folder {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    parentId: row.parent_id,
+    name: row.name,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
 
 function toWorkspace(row: WorkspaceRow): Workspace {
   return {
@@ -292,6 +315,68 @@ export function createWorkspaceStoreOn(pool: Pool, db: Queryable, inTransaction:
           workspaceId,
           userId,
         ])
+      },
+    },
+
+    folders: {
+      async listForWorkspace(workspaceId: WorkspaceId): Promise<readonly Folder[]> {
+        // Immer der ganze Arbeitsbereich: die Invarianten des Fachkerns entscheiden ueber den vollstaendigen
+        // Baum, und ein Arbeitsbereich fuehrt eine Handvoll Ordner. Sortiert wird nach Name und dann nach
+        // Kennung - dieselbe Reihenfolge wie in der Boardliste, und bei gleichem Namen stabil.
+        const result = await db.query<FolderRow>(
+          `select ${FOLDER_COLUMNS} from board_folders where workspace_id = $1 order by lower(name), id`,
+          [workspaceId],
+        )
+        return result.rows.map(toFolder)
+      },
+
+      async find(id: FolderId): Promise<Folder | null> {
+        // Der Workspacebezug steht im Ergebnis: die Route entscheidet danach gegen genau diesen
+        // Arbeitsbereich und nie gegen einen mitgeschickten.
+        const result = await db.query<FolderRow>(`select ${FOLDER_COLUMNS} from board_folders where id = $1`, [id])
+        const row = result.rows[0]
+        return row === undefined ? null : toFolder(row)
+      },
+
+      async create(workspaceId: WorkspaceId, parentId: FolderId | null, name: string): Promise<Folder> {
+        const result = await db.query<FolderRow>(
+          `insert into board_folders (workspace_id, parent_id, name)
+           values ($1, $2, $3)
+           returning ${FOLDER_COLUMNS}`,
+          [workspaceId, parentId, name],
+        )
+        return toFolder(requireRow(result.rows[0], 'Ordner konnte nicht angelegt werden'))
+      },
+
+      async rename(id: FolderId, name: string): Promise<Folder> {
+        const result = await db.query<FolderRow>(
+          `update board_folders set name = $2, updated_at = now() where id = $1 returning ${FOLDER_COLUMNS}`,
+          [id, name],
+        )
+        return toFolder(requireRow(result.rows[0], `Unbekannter Ordner ${id}`))
+      },
+
+      async setParent(id: FolderId, parentId: FolderId | null): Promise<Folder> {
+        const result = await db.query<FolderRow>(
+          `update board_folders set parent_id = $2, updated_at = now() where id = $1 returning ${FOLDER_COLUMNS}`,
+          [id, parentId],
+        )
+        return toFolder(requireRow(result.rows[0], `Unbekannter Ordner ${id}`))
+      },
+
+      async dissolve(id: FolderId, parentId: FolderId | null): Promise<DissolvedFolder> {
+        // Erst umhaengen, dann entfernen - und beides in derselben Transaktion. Ein Board darf zu keinem
+        // Zeitpunkt auf einen Ordner zeigen, den es nicht mehr gibt, und keines darf verschwinden.
+        const folders = await db.query(
+          'update board_folders set parent_id = $2, updated_at = now() where parent_id = $1',
+          [id, parentId],
+        )
+        const boards = await db.query('update boards set folder_id = $2, updated_at = now() where folder_id = $1', [
+          id,
+          parentId,
+        ])
+        await db.query('delete from board_folders where id = $1', [id])
+        return { folders: folders.rowCount ?? 0, boards: boards.rowCount ?? 0 }
       },
     },
 

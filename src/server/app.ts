@@ -13,6 +13,7 @@ import { createBoardRoutes } from './board-routes.js'
 import { createBoardShareRoutes } from './board-share-routes.js'
 import { createBoardVersionRoutes } from './board-version-routes.js'
 import type { AppContext } from './context.js'
+import { createFolderRoutes } from './folder-routes.js'
 import type { Route } from './http.js'
 import { sendBytes, sendJson } from './http.js'
 import { createLocalAuthRoutes } from './local-auth-routes.js'
@@ -86,6 +87,7 @@ export function createRoutes(context: AppContext): readonly Route[] {
     ...createLocalAuthRoutes(context),
     ...createAdminRoutes(context),
     ...createWorkspaceRoutes(context),
+    ...createFolderRoutes(context),
     ...createBoardRoutes(context),
     ...createBoardShareRoutes(context),
     ...createBoardVersionRoutes(context),

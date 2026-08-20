@@ -16,14 +16,15 @@
 
 import { Suspense, useCallback, useEffect, useState } from 'react'
 
-import type { BoardView, LoginErrorCode, MeResponse, WorkspaceView } from '../contracts/api.js'
+import type { BoardView, FolderView, LoginErrorCode, MeResponse, WorkspaceView } from '../contracts/api.js'
 import { GUEST_APP_PATH, INVITE_APP_PATH, LOGIN_ERROR_PARAM } from '../contracts/api.js'
 import { InviteApp, LoginView, PasswordSettings } from './account.js'
 import { AdminUsers } from './admin-users.js'
-import { ApiError, fetchBoards, fetchMe, fetchWorkspaces, logout } from './api.js'
+import { ApiError, fetchBoards, fetchFolders, fetchMe, fetchWorkspaces, logout } from './api.js'
 import { BoardEditor } from './board/lazy-editor.js'
 import { Boards } from './boards.js'
 import { Dashboard } from './dashboard.js'
+import { FolderTree } from './folders.js'
 import { GuestApp } from './guest.js'
 import type { AppRoute } from './router.js'
 import { Link, navigate, navigateBack, useRoute } from './router.js'
@@ -132,11 +133,14 @@ function Header({
 }
 
 /**
- * Seitenleiste: aktiver Arbeitsbereich, Wechsel und seine Boards.
+ * Seitenleiste: aktiver Arbeitsbereich, Wechsel, sein Ordnerbaum und seine Boards.
  *
- * Die Boardliste wird hier eigens geladen. Sie ist damit dieselbe Abfrage wie in der Boardansicht, aber
- * unabhaengig von deren Filtern - die Seitenleiste zeigt immer die aktiven Boards, auch waehrend die
- * Ansicht das Archiv oder einen Suchtreffer zeigt.
+ * Baum und Boardliste werden hier eigens geladen. Es sind damit dieselben Abfragen wie in der Boardansicht,
+ * aber unabhaengig von deren Filtern - die Seitenleiste zeigt immer den ganzen Baum und alle aktiven
+ * Boards, auch waehrend die Ansicht einen Ordner, das Archiv oder einen Suchtreffer zeigt.
+ *
+ * Der Baum nennt ausschliesslich Ordner. Er ist Navigation und keine Berechtigung: welche Boards ein
+ * gewaehlter Ordner zeigt, entscheidet weiterhin der Server.
  */
 function Sidebar({
   workspaces,
@@ -151,12 +155,14 @@ function Sidebar({
   readonly boardsToken: number
 }) {
   const [boards, setBoards] = useState<readonly BoardView[] | null>(null)
+  const [folders, setFolders] = useState<readonly FolderView[]>([])
   const [error, setError] = useState<string | null>(null)
   const activeId = active?.id ?? null
 
   const load = useCallback(() => {
     if (activeId === null) {
       setBoards([])
+      setFolders([])
       return
     }
     setError(null)
@@ -167,6 +173,13 @@ function Sidebar({
       .catch(() => {
         setBoards([])
         setError('Die Boards konnten nicht geladen werden.')
+      })
+    fetchFolders(activeId)
+      .then((response) => {
+        setFolders(response.folders)
+      })
+      .catch(() => {
+        setFolders([])
       })
   }, [activeId])
 
@@ -185,7 +198,7 @@ function Sidebar({
         {workspaces.map((workspace) => (
           <li key={workspace.id}>
             <Link
-              route={{ kind: 'arbeitsbereich', workspaceId: workspace.id }}
+              route={{ kind: 'arbeitsbereich', workspaceId: workspace.id, folder: null }}
               current={workspace.id === activeId}
             >
               {workspace.name}
@@ -202,6 +215,13 @@ function Sidebar({
 
       {active !== null && (
         <>
+          <h2 className="sidebar__title">Ordner in {active.name}</h2>
+          <FolderTree
+            workspaceId={active.id}
+            folders={folders}
+            active={route.kind === 'arbeitsbereich' ? route.folder : null}
+          />
+
           <h2 className="sidebar__title">Boards in {active.name}</h2>
           {boards === null && <p aria-live="polite">Boards werden geladen …</p>}
           {error !== null && (
@@ -228,13 +248,6 @@ function Sidebar({
             ))}
           </ul>
           <p>
-            <Link
-              route={{ kind: 'arbeitsbereich', workspaceId: active.id }}
-              current={route.kind === 'arbeitsbereich'}
-            >
-              Alle Boards
-            </Link>
-            {' · '}
             <Link route={{ kind: 'mitglieder', workspaceId: active.id }} current={route.kind === 'mitglieder'}>
               Mitglieder
             </Link>
@@ -302,6 +315,7 @@ function Content({
           <Boards
             me={me}
             workspace={workspace}
+            folder={route.kind === 'arbeitsbereich' ? route.folder : null}
             onListChanged={onBoardsChanged}
             onOpenBoard={(board, previewVersion) => {
               navigate({
@@ -397,7 +411,7 @@ function Shell({
 
   // Der Editor braucht die ganze Flaeche; Kopfzeile und Seitenleiste treten dafuer ab.
   if (route.kind === 'board' && routeWorkspace !== null) {
-    const back: AppRoute = { kind: 'arbeitsbereich', workspaceId: routeWorkspace.id }
+    const back: AppRoute = { kind: 'arbeitsbereich', workspaceId: routeWorkspace.id, folder: null }
     return (
       <Suspense
         fallback={

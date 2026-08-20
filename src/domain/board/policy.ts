@@ -107,6 +107,14 @@ export type BoardAction =
   | 'board:read'
   | 'board:create'
   | 'board:rename'
+  /**
+   * Das Board einem Ordner zuordnen oder aus ihm loesen.
+   *
+   * Dieselbe Stufe wie `board:rename`: die Ablage ist eine Stammdatenangabe des Boards, keine Berechtigung
+   * und kein Inhalt. Der **Ordner selbst** wird davon nicht beruehrt - er ist Struktur des Arbeitsbereichs
+   * und folgt der Workspacerolle (`folder:manage`).
+   */
+  | 'board:move'
   | 'board:archive'
   | 'board:unarchive'
   /** Eine neue Szenenversion anlegen. */
@@ -296,6 +304,7 @@ export function decideBoardAccess(
       return mayManageBoard(level) ? ALLOWED : denied('insufficient-role')
     case 'board:create':
     case 'board:rename':
+    case 'board:move':
     case 'board:archive':
     case 'board:unarchive':
     case 'scene:write':

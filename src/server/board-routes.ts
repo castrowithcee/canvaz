@@ -43,6 +43,9 @@ import {
   ASSET_FILE_ID_PARAM,
   ASSET_FILE_NAME_PARAM,
   BOARD_ASSETS_PATH,
+  BOARD_FOLDER_PARAM,
+  BOARD_FOLDER_PATH,
+  BOARD_FOLDER_ROOT,
   BOARD_GRANT_ADD_PATH,
   BOARD_GRANT_REMOVE_PATH,
   BOARD_GRANT_ROLE_PATH,
@@ -79,12 +82,13 @@ import {
   parseDashboardFilter,
 } from '../domain/board/model.js'
 import type { BoardAction } from '../domain/board/policy.js'
-import type { BoardAccess, BoardAsset, BoardGrantEntry, BoardStore } from '../domain/board/repositories.js'
+import type { BoardAccess, BoardAsset, BoardFilter, BoardGrantEntry, BoardStore } from '../domain/board/repositories.js'
 import { BoardGrantConflictError, CorruptSceneError, SceneConflictError } from '../domain/board/repositories.js'
+import type { FolderId } from '../domain/folder/model.js'
 import type { AuthenticatedSession, UserId } from '../domain/identity/model.js'
 import { buildAssetStorageKey } from '../domain/storage/asset-storage-port.js'
 import { ALLOWED_IMAGE_TYPES, isAllowedImageType, sniffImageType } from '../domain/storage/image-type.js'
-import type { Workspace, WorkspaceRole } from '../domain/workspace/model.js'
+import type { Workspace, WorkspaceId, WorkspaceRole } from '../domain/workspace/model.js'
 import type { MembershipTarget } from '../domain/workspace/repositories.js'
 import { NOT_FOUND, createBoardGate, withoutBoard } from './board-access.js'
 import { sceneResponseFor, toBoardView, toDashboardBoardView } from './board-views.js'
@@ -161,6 +165,37 @@ function toFileRef(asset: BoardAsset): BinaryFileRef {
   }
 }
 
+const FOLDER_NOT_FOUND = 'Ordner nicht gefunden'
+
+/**
+ * Ordnerfilter der Boardliste aus der Adresse.
+ *
+ * Drei Faelle und einer davon ungueltig: kein Parameter heisst **alle** Boards des Arbeitsbereichs,
+ * `BOARD_FOLDER_ROOT` die Boards unmittelbar darin, eine Kennung genau diesen Ordner. `undefined` heisst:
+ * kein gueltiger Wert - und wird wie ein unbekannter Ordner beantwortet.
+ */
+function readFolderFilter(raw: string | null): BoardFilter['folder'] | undefined {
+  if (raw === null || raw === '') {
+    return null
+  }
+  if (raw === BOARD_FOLDER_ROOT) {
+    return { folderId: null }
+  }
+  const folderId = readUuid(raw)
+  return folderId === null ? undefined : { folderId }
+}
+
+/**
+ * Ordnerkennung aus dem Anfragekoerper. Ein fehlendes Feld und `null` bedeuten dasselbe - unmittelbar im
+ * Arbeitsbereich -, alles andere muss eine gueltig geformte Kennung sein. `undefined` heisst: ungueltig.
+ */
+function readBoardFolderId(raw: unknown): FolderId | null | undefined {
+  if (raw === null || raw === undefined) {
+    return null
+  }
+  return readUuid(raw) ?? undefined
+}
+
 function toGrantView(grant: BoardGrantEntry): BoardGrantView {
   return {
     userId: grant.userId,
@@ -214,6 +249,25 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
       return fail(400, 'Nur Mitglieder des Arbeitsbereichs koennen eine Boardrolle erhalten')
     }
     return { target }
+  }
+
+  /**
+   * Gehoert der Zielordner zu diesem Arbeitsbereich? `null` heisst: ja - oder es ist gar keiner.
+   *
+   * Der zusammengesetzte Fremdschluessel wuerde eine Zuordnung ueber die Arbeitsbereichsgrenze ohnehin
+   * verweigern; geprueft wird sie trotzdem hier, damit die Antwort eine benannte 404 ist und kein
+   * Datenbankfehler - und damit ein fremder Ordner sich nicht von einem erfundenen unterscheiden laesst.
+   */
+  async function denyUnknownFolder(
+    tx: BoardStore,
+    workspaceId: WorkspaceId,
+    folderId: FolderId | null,
+  ): Promise<Reply | null> {
+    if (folderId === null) {
+      return null
+    }
+    const folder = await tx.folders.find(folderId)
+    return folder !== null && folder.workspaceId === workspaceId ? null : fail(404, FOLDER_NOT_FOUND)
   }
 
   /** Nachweis einer Freigabeaenderung. Traegt Rollen und Bezuege, nie Boardinhalt. */
@@ -278,7 +332,14 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
         }
         const status: BoardStatus = parseBoardStatus(url.searchParams.get(BOARD_STATUS_PARAM)) ?? 'active'
         const title = (url.searchParams.get(BOARD_QUERY_PARAM) ?? '').trim().slice(0, MAX_FILTER_LENGTH)
-        const found = await store.boards.listForWorkspace(workspaceId, auth.user.id, { status, title })
+        const folder = readFolderFilter(url.searchParams.get(BOARD_FOLDER_PARAM))
+        if (folder === undefined) {
+          // Eine erfundene Ordnerkennung ist kein leerer Ordner, sondern keiner: dieselbe 404 wie fuer
+          // einen fremden. Ein Ordnername verraet damit auch hier nichts.
+          sendError(response, 404, FOLDER_NOT_FOUND)
+          return
+        }
+        const found = await store.boards.listForWorkspace(workspaceId, auth.user.id, { status, title, folder })
         const requester = asRequester(auth)
         const body: BoardsResponse = {
           workspace: toWorkspaceView(access.workspace, access.role),
@@ -359,12 +420,17 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
         }
         const workspaceId = readUuid(guarded.body['workspaceId'])
         const title = normalizeBoardTitle(guarded.body['title'])
+        const folderId = readBoardFolderId(guarded.body['folderId'])
         if (workspaceId === null) {
           sendError(response, 404, NOT_FOUND.message)
           return
         }
         if (title === null) {
           sendError(response, 400, `Ein Titel mit 1 bis ${String(MAX_BOARD_TITLE_LENGTH)} Zeichen wird erwartet`)
+          return
+        }
+        if (folderId === undefined) {
+          sendError(response, 404, FOLDER_NOT_FOUND)
           return
         }
         const reply = await store.transaction(async (tx) => {
@@ -378,15 +444,19 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
           if (denial !== null) {
             return denial
           }
+          const unbekannt = await denyUnknownFolder(tx, workspaceId, folderId)
+          if (unbekannt !== null) {
+            return unbekannt
+          }
           // Der Ersteller wird Board-Owner.
-          const board = await tx.boards.create(workspaceId, title, guarded.auth.user.id)
+          const board = await tx.boards.create(workspaceId, title, guarded.auth.user.id, folderId)
           await tx.audit.record({
             actorId: guarded.auth.user.id,
             action: 'board.created',
             targetType: 'board',
             targetId: board.id,
             workspaceId,
-            details: { title: board.title },
+            details: { title: board.title, folderId },
           })
           // Frisch geladen statt aus der Anlage zusammengesetzt: die Rolle des Erstellers auf seinem neuen
           // Board entsteht damit auf demselben Weg wie jede andere.
@@ -419,6 +489,44 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
             details: { previousTitle: access.board.title, title: renamed.title },
           })
           return ok(200, toBoardView(asRequester(auth), { ...access, board: renamed }))
+        })
+      },
+    },
+
+    /**
+     * Ordnerablage des Boards.
+     *
+     * Sie folgt der **Boardrolle** (`board:move`) und nicht der Workspacerolle: wer den Titel aendern darf,
+     * darf das Board auch ablegen. Der Ordner selbst wird dabei nicht angefasst - seine Verwaltung ist eine
+     * eigene Strecke mit eigener Berechtigung.
+     */
+    {
+      method: 'POST',
+      path: BOARD_FOLDER_PATH,
+      handle: async ({ request, response }) => {
+        await withLockedBoard(request, response, async (tx, auth, access, body) => {
+          const folderId = readBoardFolderId(body['folderId'])
+          if (folderId === undefined) {
+            return fail(404, FOLDER_NOT_FOUND)
+          }
+          const denial = deny(asRequester(auth), access.workspace, access, 'board:move')
+          if (denial !== null) {
+            return denial
+          }
+          const unbekannt = await denyUnknownFolder(tx, access.workspace.id, folderId)
+          if (unbekannt !== null) {
+            return unbekannt
+          }
+          const moved = await tx.boards.setFolder(access.board.id, folderId)
+          await tx.audit.record({
+            actorId: auth.user.id,
+            action: 'board.moved',
+            targetType: 'board',
+            targetId: moved.id,
+            workspaceId: moved.workspaceId,
+            details: { previousFolderId: access.board.folderId, folderId },
+          })
+          return ok(200, toBoardView(asRequester(auth), { ...access, board: moved }))
         })
       },
     },

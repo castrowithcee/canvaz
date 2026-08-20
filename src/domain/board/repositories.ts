@@ -8,6 +8,8 @@
  */
 
 import type { SceneSnapshot } from '../../contracts/scene.js'
+import type { FolderId } from '../folder/model.js'
+import type { FolderRepository } from '../folder/repositories.js'
 import type { UserId } from '../identity/model.js'
 import type { Workspace, WorkspaceId, WorkspaceRole } from '../workspace/model.js'
 import type { AuditRepository, WorkspaceRepository } from '../workspace/repositories.js'
@@ -69,6 +71,14 @@ export type BoardFilter = {
   readonly status: BoardStatus
   /** Teilstring im Titel, ohne Platzhalterdeutung. Leer heisst: kein Filter. */
   readonly title: string
+  /**
+   * Gewaehlter Ordner. `null` heisst: kein Ordnerfilter - die ganze Liste des Arbeitsbereichs.
+   * `{ folderId: null }` heisst: ausschliesslich die Boards unmittelbar im Arbeitsbereich.
+   *
+   * Der Filter waehlt aus, was ohnehin zugaenglich ist, und **erweitert den Zugriff nie**: die Liste ist
+   * bereits auf den Arbeitsbereich des Anfragenden begrenzt, bevor ein Ordner ueberhaupt zaehlt.
+   */
+  readonly folder: { readonly folderId: FolderId | null } | null
 }
 
 /**
@@ -139,7 +149,8 @@ export interface BoardRepository {
    * Versionspruefung nie auf einem veralteten Stand entscheidet. Nur in einer Transaktion gueltig.
    */
   findForUpdate(id: BoardId, viewer: BoardViewer, now: Date): Promise<BoardAccess | null>
-  create(workspaceId: WorkspaceId, title: string, ownerId: UserId): Promise<Board>
+  /** `folderId` legt das neue Board unmittelbar in einen Ordner; `null` in den Arbeitsbereich selbst. */
+  create(workspaceId: WorkspaceId, title: string, ownerId: UserId, folderId: FolderId | null): Promise<Board>
   rename(id: BoardId, title: string): Promise<Board>
   setStatus(id: BoardId, status: BoardStatus): Promise<Board>
   /**
@@ -148,6 +159,12 @@ export interface BoardRepository {
    * `findForUpdate`, damit zwei gleichzeitige Uebertragungen serialisiert sind.
    */
   setOwner(id: BoardId, ownerId: UserId): Promise<Board>
+  /**
+   * Ordnet das Board einem Ordner zu; `null` legt es unmittelbar in den Arbeitsbereich. Dass der Ordner
+   * zum selben Arbeitsbereich gehoert, erzwingt der zusammengesetzte Fremdschluessel - die Zuordnung ueber
+   * eine Arbeitsbereichsgrenze hinweg ist gar nicht erst schreibbar.
+   */
+  setFolder(id: BoardId, folderId: FolderId | null): Promise<Board>
   /** Setzt die aktuelle Szenenversion. Laeuft immer in derselben Transaktion wie `SceneRepository.append`. */
   setSceneVersion(id: BoardId, version: number): Promise<Board>
 }
@@ -370,6 +387,8 @@ export interface BoardStore {
   readonly scenes: SceneRepository
   readonly assets: BoardAssetRepository
   readonly workspaces: WorkspaceRepository
+  /** Die Ordner des Arbeitsbereichs: eine Zuordnung wird gegen denselben Bestand geprueft, der sie fuehrt. */
+  readonly folders: FolderRepository
   readonly audit: AuditRepository
   transaction<T>(run: (store: BoardStore) => Promise<T>): Promise<T>
 }

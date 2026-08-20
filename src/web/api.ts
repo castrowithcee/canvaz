@@ -30,6 +30,12 @@ import type {
   BoardStatusView,
   BoardView,
   BoardsResponse,
+  CreateFolderRequest,
+  FolderView,
+  FoldersResponse,
+  MoveFolderRequest,
+  RemoveFolderResponse,
+  RenameFolderRequest,
   CreateBoardShareLinkRequest,
   CreateBoardShareLinkResponse,
   DashboardFilterView,
@@ -67,6 +73,8 @@ import {
   AUTH_METHODS_PATH,
   BOARD_ASSETS_PATH,
   BOARD_DASHBOARD_PATH,
+  BOARD_FOLDER_PARAM,
+  BOARD_FOLDER_PATH,
   BOARD_EXPORT_PATH,
   BOARD_GRANT_ADD_PATH,
   BOARD_GRANT_REMOVE_PATH,
@@ -92,6 +100,10 @@ import {
   BOARDS_PATH,
   CSRF_HEADER,
   DASHBOARD_FILTER_PARAM,
+  FOLDER_MOVE_PATH,
+  FOLDER_REMOVE_PATH,
+  FOLDER_RENAME_PATH,
+  FOLDERS_PATH,
   ME_PATH,
   WORKSPACE_ID_PARAM,
   WORKSPACE_MEMBER_ADD_PATH,
@@ -267,10 +279,15 @@ export async function removeWorkspaceMember(
 /* Boards und Szenen                                                                                     */
 /* ---------------------------------------------------------------------------------------------------- */
 
-/** Boards eines Arbeitsbereichs. `status` trennt die aktive Liste von der Archivansicht. */
+/**
+ * Boards eines Arbeitsbereichs. `status` trennt die aktive Liste von der Archivansicht.
+ *
+ * `folder` waehlt den Ordner: `null` heisst alle Boards des Arbeitsbereichs, `BOARD_FOLDER_ROOT` die ohne
+ * Ordner, eine Kennung genau diesen einen. Gefiltert wird serverseitig; im Browser wird nichts nachgesiebt.
+ */
 export async function fetchBoards(
   workspaceId: string,
-  options: { readonly status: BoardStatusView; readonly query: string },
+  options: { readonly status: BoardStatusView; readonly query: string; readonly folder?: string | null },
 ): Promise<BoardsResponse> {
   const params = new URLSearchParams({
     [WORKSPACE_ID_PARAM]: workspaceId,
@@ -279,7 +296,45 @@ export async function fetchBoards(
   if (options.query !== '') {
     params.set(BOARD_QUERY_PARAM, options.query)
   }
+  if (options.folder !== undefined && options.folder !== null) {
+    params.set(BOARD_FOLDER_PARAM, options.folder)
+  }
   return request<BoardsResponse>(`${BOARDS_PATH}?${params.toString()}`)
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+/* Ordner                                                                                                */
+/* ---------------------------------------------------------------------------------------------------- */
+
+/** Der vollstaendige Ordnerbaum eines Arbeitsbereichs als flache Liste mit Elternbezug. */
+export async function fetchFolders(workspaceId: string): Promise<FoldersResponse> {
+  return request<FoldersResponse>(withWorkspace(FOLDERS_PATH, workspaceId))
+}
+
+export async function createFolder(csrfToken: string, folder: CreateFolderRequest): Promise<FolderView> {
+  return request<FolderView>(FOLDERS_PATH, mutation(csrfToken, folder))
+}
+
+export async function renameFolder(csrfToken: string, change: RenameFolderRequest): Promise<FolderView> {
+  return request<FolderView>(FOLDER_RENAME_PATH, mutation(csrfToken, change))
+}
+
+export async function moveFolder(csrfToken: string, change: MoveFolderRequest): Promise<FolderView> {
+  return request<FolderView>(FOLDER_MOVE_PATH, mutation(csrfToken, change))
+}
+
+/** Entfernt den Ordner. Sein Inhalt rueckt an seinen Platz; die Antwort nennt, wie viel umgehaengt wurde. */
+export async function removeFolder(csrfToken: string, folderId: string): Promise<RemoveFolderResponse> {
+  return request<RemoveFolderResponse>(FOLDER_REMOVE_PATH, mutation(csrfToken, { folderId }))
+}
+
+/** Legt das Board in einen Ordner; `null` legt es unmittelbar in den Arbeitsbereich. */
+export async function moveBoardToFolder(
+  csrfToken: string,
+  boardId: string,
+  folderId: string | null,
+): Promise<BoardView> {
+  return request<BoardView>(BOARD_FOLDER_PATH, mutation(csrfToken, { boardId, folderId }))
 }
 
 /**
@@ -303,8 +358,13 @@ export async function fetchDashboard(options: {
   return request<DashboardResponse>(`${BOARD_DASHBOARD_PATH}${suffix}`)
 }
 
-export async function createBoard(csrfToken: string, workspaceId: string, title: string): Promise<BoardView> {
-  return request<BoardView>(BOARDS_PATH, mutation(csrfToken, { workspaceId, title }))
+export async function createBoard(
+  csrfToken: string,
+  workspaceId: string,
+  title: string,
+  folderId: string | null,
+): Promise<BoardView> {
+  return request<BoardView>(BOARDS_PATH, mutation(csrfToken, { workspaceId, title, folderId }))
 }
 
 export async function renameBoard(csrfToken: string, boardId: string, title: string): Promise<BoardView> {

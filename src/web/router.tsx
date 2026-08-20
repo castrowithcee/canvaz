@@ -26,8 +26,14 @@ export type AppRoute =
   | { readonly kind: 'einstieg'; readonly filter: DashboardFilterView | null }
   /** Arbeitsbereichsverwaltung: eigene Arbeitsbereiche und das Anlegen eines neuen. */
   | { readonly kind: 'arbeitsbereiche' }
-  /** Boards eines Arbeitsbereichs. */
-  | { readonly kind: 'arbeitsbereich'; readonly workspaceId: string }
+  /**
+   * Boards eines Arbeitsbereichs.
+   *
+   * `folder` ist der gewaehlte Ordner und steht damit in der Adresse - sie ist teilbar und uebersteht ein
+   * Neuladen. `null` heisst: alle Boards des Arbeitsbereichs, `root` die ohne Ordner, sonst
+   * genau dieser Ordner. Es sind dieselben drei Werte wie im Endpunkt; die Adresse deutet nichts um.
+   */
+  | { readonly kind: 'arbeitsbereich'; readonly workspaceId: string; readonly folder: string | null }
   | { readonly kind: 'mitglieder'; readonly workspaceId: string }
   | { readonly kind: 'einstellungen'; readonly workspaceId: string }
   /** Boardeditor im Vollbild. `version` gesetzt heisst: Read-only-Vorschau genau dieser Version. */
@@ -52,6 +58,13 @@ const ACCOUNT_SEGMENT = 'konto'
 const ADMIN_SEGMENT = 'verwaltung'
 const ADMIN_ACCOUNTS_SEGMENT = 'konten'
 const VERSION_PARAM = 'version'
+const FOLDER_PARAM = 'ordner'
+
+/** Gewaehlter Ordner aus der Adresse. Ein leerer Wert ist keine Wahl, sondern die ganze Liste. */
+function parseFolder(search: string): string | null {
+  const raw = new URLSearchParams(search).get(FOLDER_PARAM)
+  return raw === null || raw === '' ? null : raw
+}
 
 /**
  * Aktiver Dashboardfilter aus der Adresse - gelesen mit **derselben** Funktion, mit der auch der Endpunkt
@@ -94,7 +107,7 @@ export function parseRoute(href: string): AppRoute {
       return { kind: 'arbeitsbereiche' }
     }
     if (third === undefined) {
-      return { kind: 'arbeitsbereich', workspaceId: second }
+      return { kind: 'arbeitsbereich', workspaceId: second, folder: parseFolder(search) }
     }
     if (third === MEMBERS_SEGMENT && fourth === undefined) {
       return { kind: 'mitglieder', workspaceId: second }
@@ -120,7 +133,9 @@ export function routeHref(route: AppRoute): string {
     case 'arbeitsbereiche':
       return `/${WORKSPACES_SEGMENT}`
     case 'arbeitsbereich':
-      return workspace(route.workspaceId)
+      return route.folder === null
+        ? workspace(route.workspaceId)
+        : `${workspace(route.workspaceId)}?${FOLDER_PARAM}=${encodeURIComponent(route.folder)}`
     case 'mitglieder':
       return `${workspace(route.workspaceId)}/${MEMBERS_SEGMENT}`
     case 'einstellungen':

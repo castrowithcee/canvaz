@@ -334,6 +334,80 @@ export type WorkspaceMemberChangeResponse = {
 }
 
 /* ---------------------------------------------------------------------------------------------------- */
+/* Ordner                                                                                                */
+/* ---------------------------------------------------------------------------------------------------- */
+
+/**
+ * Ordnerbaum eines Arbeitsbereichs (GET) und Anlegen eines Ordners (POST).
+ *
+ * Ordner sind **Struktur des Arbeitsbereichs**: lesen darf sie jedes Mitglied, formen darf sie seine
+ * Verwaltung. Sie tragen keine Rechte - welches Board jemand sieht, entscheiden weiterhin Mitgliedschaft
+ * und Boardrolle. Ein Gast hat keinen Baum: er kennt genau ein Board.
+ */
+export const FOLDERS_PATH = `${API_BASE_PATH}/folders`
+export const FOLDER_RENAME_PATH = `${API_BASE_PATH}/folders/rename`
+export const FOLDER_MOVE_PATH = `${API_BASE_PATH}/folders/move`
+export const FOLDER_REMOVE_PATH = `${API_BASE_PATH}/folders/remove`
+
+/**
+ * Ein Ordner des Baumes. Der Baum kommt als **flache Liste** mit Elternbezug, nach Name sortiert; die
+ * Oberflaeche setzt ihn daraus zusammen. Eine verschachtelte Antwort waere dieselbe Information in einer
+ * Form, die sich schlechter filtern und schlechter vergleichen laesst.
+ */
+export type FolderView = {
+  readonly id: string
+  readonly workspaceId: string
+  /** `null` heisst: unmittelbar im Arbeitsbereich. */
+  readonly parentId: string | null
+  readonly name: string
+  /** ISO-8601. */
+  readonly createdAt: string
+  readonly updatedAt: string
+}
+
+export type FoldersResponse = {
+  readonly workspace: WorkspaceView
+  /** Vollstaendiger Baum des Arbeitsbereichs, sortiert nach Name und dann nach Kennung. */
+  readonly folders: readonly FolderView[]
+}
+
+export type CreateFolderRequest = {
+  readonly workspaceId: string
+  readonly name: string
+  /** `null` legt den Ordner unmittelbar in den Arbeitsbereich. */
+  readonly parentId: string | null
+}
+
+export type RenameFolderRequest = {
+  readonly folderId: string
+  readonly name: string
+}
+
+export type MoveFolderRequest = {
+  readonly folderId: string
+  readonly parentId: string | null
+}
+
+export type RemoveFolderRequest = {
+  readonly folderId: string
+}
+
+/**
+ * Ergebnis des Entfernens.
+ *
+ * Ein Ordner wird **aufgeloest, nicht ausgeraeumt**: seine Unterordner und Boards ruecken an seinen Platz.
+ * Die beiden Zahlen sagen, wie viel dabei umgehaengt wurde - kein Board geht verloren, und keines wird
+ * unsichtbar.
+ */
+export type RemoveFolderResponse = {
+  readonly folderId: string
+  /** Neuer Platz des Inhalts: der Elternordner des entfernten Ordners, `null` der Arbeitsbereich selbst. */
+  readonly parentId: string | null
+  readonly movedFolders: number
+  readonly movedBoards: number
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
 /* Boards und Szenen                                                                                     */
 /* ---------------------------------------------------------------------------------------------------- */
 
@@ -358,6 +432,25 @@ export const BOARD_QUERY_PARAM = 'q'
 /** Aktive Liste oder Archivansicht. Fehlt der Parameter, gilt `active`. */
 export const BOARD_STATUS_PARAM = 'status'
 
+/**
+ * Ordnerfilter der Boardliste. Fehlt der Parameter, zeigt die Liste **alle** Boards des Arbeitsbereichs -
+ * das ist der Stand vor den Ordnern und bleibt es. `BOARD_FOLDER_ROOT` waehlt die Boards unmittelbar im
+ * Arbeitsbereich, jede andere Kennung genau diesen einen Ordner (ohne seine Unterordner).
+ */
+export const BOARD_FOLDER_PARAM = 'folderId'
+
+/** Der Arbeitsbereich selbst als Ordnerwahl. Keine Kennung, deshalb ein Wort statt einer UUID. */
+export const BOARD_FOLDER_ROOT = 'root'
+
+/** Board in einen Ordner legen oder aus ihm loesen. */
+export const BOARD_FOLDER_PATH = `${API_BASE_PATH}/boards/folder`
+
+export type MoveBoardRequest = {
+  readonly boardId: string
+  /** `null` legt das Board unmittelbar in den Arbeitsbereich. */
+  readonly folderId: string | null
+}
+
 export type BoardStatusView = 'active' | 'archived'
 
 export type BoardView = {
@@ -367,6 +460,13 @@ export type BoardView = {
   readonly status: BoardStatusView
   readonly ownerUserId: string
   readonly ownerDisplayName: string
+  /**
+   * Ordner, in dem das Board liegt; `null` heisst: unmittelbar im Arbeitsbereich.
+   *
+   * Reine Ablage. Sie sagt **nichts** ueber die Berechtigung: wer das Board sehen darf, sieht es in jedem
+   * Ordner, und wer es nicht darf, erfaehrt auch ueber den Ordner nichts von ihm.
+   */
+  readonly folderId: string | null
   /**
    * Effektive Rolle des Anfragenden auf genau diesem Board.
    *
@@ -392,6 +492,8 @@ export type BoardsResponse = {
 export type CreateBoardRequest = {
   readonly workspaceId: string
   readonly title: string
+  /** Ordner des neuen Boards; fehlt er oder ist er `null`, liegt es unmittelbar im Arbeitsbereich. */
+  readonly folderId?: string | null
 }
 
 /* ---------------------------------------------------------------------------------------------------- */

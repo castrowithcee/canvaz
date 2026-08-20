@@ -67,6 +67,9 @@ export function toBoardView(requester: Requester, access: BoardAccess): BoardVie
     status: board.status,
     ownerUserId: board.ownerId,
     ownerDisplayName: access.ownerDisplayName,
+    // Reine Ablage: sie steht in der Mitgliedssicht und **nicht** in der Gastsicht - ein Gast kennt genau
+    // ein Board und erfaehrt ueber die Gliederung des Arbeitsbereichs nichts.
+    folderId: board.folderId,
     viewerRole: memberRoleOf(requester, access).role,
     sceneVersion: board.sceneVersion,
     createdAt: board.createdAt.toISOString(),

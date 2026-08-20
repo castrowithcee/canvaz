@@ -10,6 +10,7 @@
  * Damit ist es gar nicht erst moeglich, einen geratenen Datensatz ohne Berechtigungsfilter zu erreichen.
  */
 
+import type { FolderRepository } from '../folder/repositories.js'
 import type { UserId, UserStatus } from '../identity/model.js'
 import type { Workspace, WorkspaceAccess, WorkspaceId, WorkspaceMembership, WorkspaceRole } from './model.js'
 
@@ -83,7 +84,13 @@ export interface WorkspaceRepository {
 export type NewAuditEvent = {
   readonly actorId: UserId | null
   readonly action: string
-  readonly targetType: 'workspace' | 'membership' | 'board' | 'board-grant' | 'board-share-link'
+  readonly targetType:
+    | 'workspace'
+    | 'membership'
+    | 'board'
+    | 'board-grant'
+    | 'board-share-link'
+    | 'board-folder'
   readonly targetId: string
   readonly workspaceId: WorkspaceId
   readonly details: Readonly<Record<string, string | number | boolean | null>>
@@ -114,6 +121,8 @@ export class MembershipConflictError extends Error {
  */
 export interface WorkspaceStore {
   readonly workspaces: WorkspaceRepository
+  /** Ordner sind Struktur des Arbeitsbereichs und liegen deshalb in diesem Store, nicht beim Board. */
+  readonly folders: FolderRepository
   readonly audit: AuditRepository
   transaction<T>(run: (store: WorkspaceStore) => Promise<T>): Promise<T>
 }

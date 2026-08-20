@@ -238,7 +238,9 @@ export function Dashboard({
             event.preventDefault()
             setCreating(true)
             setCreateError(null)
-            createBoard(me.csrfToken, target.id, title)
+            // Das Dashboard legt flach an: es kennt keinen gewaehlten Ordner. Das Board landet unmittelbar
+            // im Arbeitsbereich und laesst sich dort einsortieren.
+            createBoard(me.csrfToken, target.id, title, null)
               .then((board) => {
                 setTitle('')
                 onBoardsChanged()
