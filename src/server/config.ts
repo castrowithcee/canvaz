@@ -12,6 +12,7 @@
  */
 
 import { SCENE_VERSION_RETENTION, TRASH_RETENTION_DAYS } from '../domain/board/model.js'
+import { normalizeEmail } from '../domain/identity/local-auth.js'
 import type { AssetStorageAdapter } from '../domain/storage/asset-storage-port.js'
 import type { S3StorageConfig } from '../persistence/asset-storage-s3.js'
 
@@ -20,6 +21,23 @@ export type OidcConfig = {
   readonly clientId: string
   readonly clientSecret: string
   readonly redirectUri: string
+}
+
+/**
+ * Zugang zum Postausgang.
+ *
+ * `null` heisst: kein Versand. Die Instanz laeuft dann vollstaendig - ein Einladungslink steht wie bisher
+ * genau einmal in der Antwort der Anlage, und wer ihn zustellt, entscheidet der Betrieb.
+ */
+export type MailConfig = {
+  readonly host: string
+  readonly port: number
+  /** Implizites TLS ab der ersten Verbindung (Port 465). Sonst wird STARTTLS genutzt, wenn der Server es anbietet. */
+  readonly secure: boolean
+  /** `null` heisst: ohne Anmeldung. Ein Auffangserver im eigenen Netz verlangt keine. */
+  readonly auth: { readonly user: string; readonly password: string } | null
+  /** Absenderadresse jeder Nachricht dieser Instanz. */
+  readonly from: string
 }
 
 export type AppConfig = {
@@ -32,6 +50,11 @@ export type AppConfig = {
   readonly sessionTtlSeconds: number
   /** `null` heisst: kein Identity Provider konfiguriert. Die Instanz zeigt und bedient dann nur den lokalen Weg. */
   readonly oidc: OidcConfig | null
+  /**
+   * `null` heisst: kein Postausgang konfiguriert. Dann verschickt die Instanz nichts und niemand wartet auf
+   * eine Mail, die nie kommt.
+   */
+  readonly mail: MailConfig | null
   readonly storage: {
     readonly adapter: AssetStorageAdapter
     /** Obergrenze einer einzelnen hochgeladenen Bilddatei in Bytes. Begrenzt zugleich den Anfragekoerper. */
@@ -293,6 +316,55 @@ function readOidc(env: Env, problems: string[]): OidcConfig | null {
   }
 }
 
+const MAIL_VARIABLES = [
+  'CANVAZ_SMTP_HOST',
+  'CANVAZ_SMTP_PORT',
+  'CANVAZ_SMTP_USER',
+  'CANVAZ_SMTP_PASSWORD',
+  'CANVAZ_MAIL_FROM',
+] as const
+
+/** Impliziertes TLS gehoert zu Port 465; jeder andere Port spricht zuerst Klartext und hebt per STARTTLS ab. */
+const SMTP_IMPLICIT_TLS_PORT = 465
+
+/** Der Auffangserver einer Entwicklungsumgebung; der Standard eines echten Anbieters ist 587. */
+const DEFAULT_SMTP_PORT = 587
+
+/**
+ * Der Postausgang ist zuschaltbar, aber nicht halb - dieselbe Regel wie bei OIDC.
+ *
+ * Ohne jede Variable gibt es keinen Versand: die Instanz laeuft, und der Einladungslink bleibt der Weg, den
+ * ein Administrator selbst zustellt. Sobald **eine** gesetzt ist, gelten Server und Absender als gewollt und
+ * fehlende werden beim Namen genannt.
+ *
+ * Benutzer und Passwort gehoeren zusammen. Ein Auffangserver im eigenen Netz verlangt keine Anmeldung,
+ * deshalb ist das Paar optional - aber halb angemeldet gibt es nicht.
+ */
+function readMail(env: Env, problems: string[]): MailConfig | null {
+  const configured = MAIL_VARIABLES.some((name) => (env[name]?.trim() ?? '') !== '')
+  if (!configured) {
+    return null
+  }
+  const port = readInteger(env, 'CANVAZ_SMTP_PORT', DEFAULT_SMTP_PORT, 1, 65_535, problems)
+  const user = env['CANVAZ_SMTP_USER']?.trim() ?? ''
+  const password = env['CANVAZ_SMTP_PASSWORD']?.trim() ?? ''
+  if ((user === '') !== (password === '')) {
+    problems.push('CANVAZ_SMTP_USER und CANVAZ_SMTP_PASSWORD gehoeren zusammen: entweder beide oder keines')
+  }
+  const rawFrom = readRequired(env, 'CANVAZ_MAIL_FROM', problems)
+  const from = rawFrom === '' ? null : normalizeEmail(rawFrom)
+  if (rawFrom !== '' && from === null) {
+    problems.push('CANVAZ_MAIL_FROM ist keine gueltige E-Mail-Adresse')
+  }
+  return {
+    host: readRequired(env, 'CANVAZ_SMTP_HOST', problems),
+    port,
+    secure: readBoolean(env, 'CANVAZ_SMTP_SECURE', port === SMTP_IMPLICIT_TLS_PORT, problems),
+    auth: user === '' || password === '' ? null : { user, password },
+    from: from ?? '',
+  }
+}
+
 export function loadConfig(env: Env = process.env): AppConfig {
   const problems: string[] = []
 
@@ -313,6 +385,7 @@ export function loadConfig(env: Env = process.env): AppConfig {
     sessionSecret,
     sessionTtlSeconds: readInteger(env, 'CANVAZ_SESSION_TTL_HOURS', 12, 1, 720, problems) * SECONDS_PER_HOUR,
     oidc: readOidc(env, problems),
+    mail: readMail(env, problems),
     storage: {
       adapter: storageAdapter,
       maxAssetBytes: readInteger(

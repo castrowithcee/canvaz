@@ -48,6 +48,7 @@ import { requireCsrfToken, requireSession, requireSystemAdmin, toUserView } from
 import type { Route } from './http.js'
 import { readJsonBody, sendError, sendJson } from './http.js'
 import { createInvitationToken, hashInvitationToken, invitationUrl } from './invitations.js'
+import { deliver, invitationMail, passwordResetMail } from './mailer.js'
 import { hashPassword } from './password.js'
 import { asRequester } from './requester.js'
 
@@ -198,6 +199,16 @@ export function createAdminRoutes(context: AppContext): readonly Route[] {
           user: toUserView(created.user),
           invitationUrl: created.token === null ? null : invitationUrl(config.baseUrl, created.token),
         }
+        // Erst nach der Anlage und ohne Rueckweg in diese Antwort: der Link steht hier ohnehin, und ein
+        // stummer Postausgang darf ein angelegtes Konto nicht zu einem Fehlschlag machen.
+        if (result.invitationUrl !== null) {
+          await deliver(
+            context.mailer,
+            logger,
+            'invitation',
+            invitationMail(email, displayName, result.invitationUrl),
+          )
+        }
         sendJson(response, 201, result)
       },
     },
@@ -245,6 +256,16 @@ export function createAdminRoutes(context: AppContext): readonly Route[] {
         })
         context.realtime.closeUser(userId)
         logger('info', 'admin.user.password-reset', { actorId: auth.user.id, userId })
+        // Die Mitteilung nennt das neue Passwort ausdruecklich nicht; sie sagt nur, dass es eines gibt.
+        // Ein Konto ohne Adresse gibt es nur ueber den externen Weg; dorthin fuehrt keine Nachricht.
+        if (target.email !== null) {
+          await deliver(
+            context.mailer,
+            logger,
+            'password-reset',
+            passwordResetMail(target.email, target.displayName, config.baseUrl),
+          )
+        }
         sendJson(response, 200, toUserView(target))
       },
     },
@@ -279,6 +300,14 @@ export function createAdminRoutes(context: AppContext): readonly Route[] {
         const result: CreateInvitationResponse = {
           user: toUserView(target),
           invitationUrl: invitationUrl(config.baseUrl, token),
+        }
+        if (target.email !== null) {
+          await deliver(
+            context.mailer,
+            logger,
+            'invitation',
+            invitationMail(target.email, target.displayName, result.invitationUrl),
+          )
         }
         sendJson(response, 201, result)
       },

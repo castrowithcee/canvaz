@@ -28,6 +28,7 @@ import { loadConfig } from '../../src/server/config.js'
 import type { AppContext } from '../../src/server/context.js'
 import { createRequestListener } from '../../src/server/http.js'
 import type { LogFields, LogLevel } from '../../src/server/log.js'
+import type { Mail, Mailer } from '../../src/server/mailer.js'
 import { createMetrics } from '../../src/server/metrics.js'
 import { createOidcClient } from '../../src/server/oidc.js'
 import { createRateLimiter } from '../../src/server/rate-limit.js'
@@ -46,7 +47,10 @@ export type TestApp = {
   readonly realtime: RealtimeGateway
   readonly rooms: BoardRooms
   readonly logs: readonly LogEntry[]
+  /** Die verschickten Nachrichten. Ohne Postausgang in der Konfiguration bleibt die Liste leer. */
+  readonly mails: readonly Mail[]
   clearLogs(): void
+  clearMails(): void
   /** Verschiebt die Uhr der Anwendung; `null` stellt die echte Zeit wieder her. */
   setNow(value: Date | null): void
   close(): Promise<void>
@@ -109,6 +113,17 @@ export async function startTestApp(options: {
     ...options.env,
   })
 
+  const mails: Mail[] = []
+  // Statt eines echten SMTP-Servers der Port selbst: geprueft wird, was die Anwendung verschickt, nicht was
+  // nodemailer daraus macht.
+  const mailer: Mailer | null =
+    config.mail === null
+      ? null
+      : (mail: Mail) => {
+          mails.push(mail)
+          return Promise.resolve()
+        }
+
   const logs: LogEntry[] = []
   const logger = (level: LogLevel, event: string, fields: LogFields = {}) => {
     logs.push({ level, event, fields })
@@ -148,6 +163,7 @@ export async function startTestApp(options: {
     boards,
     storage: createAssetStorage(config.storage),
     oidc: config.oidc === null ? null : createOidcClient(config.oidc, config.baseUrl),
+    mailer,
     realtime,
     rooms,
     logger,
@@ -175,8 +191,12 @@ export async function startTestApp(options: {
     realtime,
     rooms,
     logs,
+    mails,
     clearLogs(): void {
       logs.length = 0
+    },
+    clearMails(): void {
+      mails.length = 0
     },
     setNow(value: Date | null): void {
       frozenNow = value

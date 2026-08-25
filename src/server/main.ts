@@ -18,6 +18,7 @@ import { ConfigError, loadConfig } from './config.js'
 import type { AppContext } from './context.js'
 import { createRequestListener } from './http.js'
 import { consoleLogger, describeError } from './log.js'
+import { createSmtpMailer } from './mailer.js'
 import { createMetrics } from './metrics.js'
 import { createOidcClient } from './oidc.js'
 import { createRateLimiter } from './rate-limit.js'
@@ -72,6 +73,9 @@ const context: AppContext = {
   storage,
   // Ohne konfigurierten Provider gibt es keinen Client - und damit auch keine OIDC-Routen.
   oidc: config.oidc === null ? null : createOidcClient(config.oidc, config.baseUrl),
+  // Ohne konfigurierten Postausgang gibt es keinen Transport - und damit keine Nachricht, auf die jemand
+  // vergeblich wartet.
+  mailer: config.mail === null ? null : createSmtpMailer(config.mail),
   realtime,
   rooms,
   logger: consoleLogger,

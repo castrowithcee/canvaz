@@ -22,20 +22,35 @@ Reconciliation in `src/domain/board/reconcile.ts` ist Eigencode.
 
 ## Lokal starten
 
+`compose.yml` ist der lokale Stack: Anwendung, PostgreSQL und MinIO. Die Anwendung gibt selbst **keinen
+Hostport** ab - sie haengt an einem Reverse Proxy, der aus seinem eigenen Stack dem Netz `canvaz` beitritt
+und unter dem Namen der Instanz antwortet.
+
 ```sh
 npm install
-cp .env.example .env      # Platzhalter ersetzen; .env ist gitignoriert
-npm run db:up             # PostgreSQL im Container, Hostport 55432
+cp .env.example .env             # Platzhalter ersetzen; .env ist gitignoriert
+docker network create canvaz     # einmalig; der Proxy haengt darin und darf es nicht verlieren
+docker compose up -d --build     # Anwendung, PostgreSQL und MinIO
 npm run db:migrate
 npm run admin:bootstrap -- --name "Vorname Nachname" --email adresse@example.com   # einmalig
-npm run start:server      # API und gebaute SPA auf Port 3000
-npm run dev               # alternativ: Vite auf Port 5173 mit Proxy auf /api
 ```
 
-`npm run db:up` startet PostgreSQL und MinIO aus `compose.yml`. Die Hostports sind bewusst **55432** und
-**59000** statt 5432 und 9000, damit sie nicht mit anderen lokalen Diensten kollidieren. Die Datenbank
-`canvaz_test` wird beim ersten Start mit angelegt und gehoert den Integrationstests; MinIO ist der
-Gegenpart des `s3`-Storage-Adapters und wird nur fuer dessen Pruefung gebraucht.
+Danach antwortet die Instanz unter dem Namen aus `CANVAZ_BASE_URL`. Sitzungscookie und OIDC-Rueckkehr
+haengen an genau dieser Herkunft: ein zweiter Weg auf dieselbe Instanz waere ohnehin nur ein halber.
+
+Ohne Proxy - oder waehrend der Arbeit an der Oberflaeche - laufen dieselben Teile auf dem Host:
+
+```sh
+npm run db:up                    # nur PostgreSQL und MinIO aus compose.yml
+npm run start:server             # API und gebaute SPA auf Port 3000
+npm run dev                      # alternativ: Vite auf Port 5173 mit Proxy auf /api
+```
+
+Die Hostports von Datenbank und Objektspeicher sind bewusst **55432** und **59000** statt 5432 und 9000,
+damit sie nicht mit anderen lokalen Diensten kollidieren; sie bleiben am Loopback, weil Testlauf, Migration
+und `admin:bootstrap` auf dem Host laufen und kein HTTP sprechen. Die Datenbank `canvaz_test` wird beim
+ersten Start mit angelegt und gehoert den Integrationstests; MinIO ist der Gegenpart des
+`s3`-Storage-Adapters und wird nur fuer dessen Pruefung gebraucht.
 
 Der Server startet nicht mit unvollstaendiger Konfiguration; fehlende Umgebungsvariablen werden beim Start
 gesammelt gemeldet. Siehe `.env.example`.
@@ -99,6 +114,34 @@ vergibt keine Rechte mehr.
 nachtraegliche Rollenvergabe; in der Systemadministration angelegte Konten sind gewoehnliche Nutzer. Geht
 der Zugang zum Bootstrap-Konto verloren, laesst er sich nur ueber einen direkten Datenbankzugriff wieder
 herstellen (Einladung fuer dieses Konto oder `is_system_admin` auf einem anderen setzen).
+
+### Postausgang (optional)
+
+Ohne konfigurierten Postausgang verschickt die Instanz **nichts**: ein Einladungslink steht genau einmal in
+der Antwort der Anlage, und wer ihn zustellt, entscheidet der Betrieb. Mit Postausgang kommen genau zwei
+Nachrichten dazu, beide an die Adresse des betroffenen Kontos:
+
+| Anlass | Inhalt |
+| --- | --- |
+| Konto angelegt oder Einladung erneuert | der Einladungslink, gueltig 72 Stunden und einmal einloesbar |
+| Passwort administrativ zurueckgesetzt | die Mitteilung, dass es zurueckgesetzt wurde - **ohne** das neue Passwort |
+
+Ein Passwort steht in keiner Nachricht. Ein Postfach ist kein Ort fuer ein Geheimnis, das ohne zweiten
+Faktor Zugang gibt; das neue Initialpasswort geht den Weg, den die Administration mit dem Konto vereinbart
+hat.
+
+Konfiguriert wird der Weg wie OIDC: **ganz oder gar nicht**. Ohne jede der Variablen gibt es ihn nicht;
+sobald eine gesetzt ist, gelten Server (`CANVAZ_SMTP_HOST`) und Absender (`CANVAZ_MAIL_FROM`) als gewollt
+und ein fehlender Wert ist ein Startfehler. `CANVAZ_SMTP_PORT` ist ohne Angabe 587, implizites TLS
+(`CANVAZ_SMTP_SECURE`) folgt dem Port - 465 ja, sonst STARTTLS, wenn der Server es anbietet.
+`CANVAZ_SMTP_USER` und `CANVAZ_SMTP_PASSWORD` gehoeren zusammen oder entfallen beide; ein Postausgang im
+eigenen Netz verlangt haeufig keine Anmeldung. Die Anwendung kennt ausschliesslich diese Variablen: welcher
+Server dahintersteht, ist Sache der Umgebung und steht in keiner Datei dieses Repositorys.
+
+**Der Versand ist eine Zustellung und keine Bedingung.** Das Konto ist angelegt, bevor die erste Verbindung
+zum Postausgang steht. Ein nicht erreichbarer Server macht daraus keinen Fehlschlag: der Vorgang antwortet
+wie ohne Postausgang, der Link steht in der Antwort, und der Fehlversuch erscheint als `mail.failed` im
+Protokoll - mit Empfaenger und Anlass, nie mit Inhalt, weil der bei einer Einladung den Wert traegt.
 
 ### Externe Anmeldung (optional)
 
@@ -1375,6 +1418,11 @@ genau eine Suite (`assetStorageContract`), zweimal ausgefuehrt - einmal gegen `f
 sie kennt ausschliesslich `AssetStoragePort`. Der Neustart-Nachweis in
 `tests/integration/board-assets.test.ts` laeuft ebenfalls fuer beide Adapter: hochladen, den
 Anwendungsprozess vollstaendig ersetzen, abrufen, Bytes vergleichen.
+
+`tests/integration/account-mails.test.ts` prueft die zwei Nachrichten der Kontoverwaltung an der echten
+Anwendung: die Einladung traegt denselben Link wie die Antwort, eine erneuerte Einladung nicht mehr den
+alten, und die Mitteilung ueber eine Ruecksetzung nennt das neue Passwort nicht. Der Test kennt keinen
+SMTP-Server - er sammelt am Port der Anwendung, weil dort die Zusage liegt und nicht im Transport.
 
 `tests/integration/realtime.test.ts` faehrt die Echtzeitstrecke ueber **echte WebSocket-Verbindungen**:
 Beitritt mit und ohne Berechtigung, Entzug und Archivierung waehrend bestehender Verbindung, manipulierte

@@ -1,11 +1,57 @@
-# Lokale Entwicklungsdienste: PostgreSQL und MinIO.
+# Der lokale Stack: Anwendung, PostgreSQL und MinIO.
 #
-# Hohe Hostports statt der Standardports: auf Entwicklungsmaschinen laufen haeufig andere Dienste, und die
-# niedrigen Ports 8080, 8088, 8443 und 2022 sind auf dem Referenzhost bereits belegt.
-# Die Zugangsdaten hier sind lokale Entwicklungswerte und keine Secrets; beide Instanzen lauschen nur auf
-# 127.0.0.1 und sind von aussen nicht erreichbar.
+# Start:   docker compose up -d --build
+# Zustand: docker compose ps
+# Logs:    docker compose logs -f <dienst>
+# Stop:    docker compose down
+#
+# Erreichbar ist die Anwendung ueber den Reverse Proxy unter http://canvaz.localhost:27000. Der Proxy liegt
+# in einem eigenen Stack und tritt dem Netz dieses Stacks bei; die Anwendung gibt selbst keinen Hostport ab.
+# Einen zweiten Weg zu ihr gibt es nicht.
+#
+# Datenbank und Objektspeicher haengen weiterhin am Loopback: die Testlaeufe, die Migration und
+# `admin:bootstrap` laufen auf dem Host und sprechen kein HTTP, also auch nicht ueber den Proxy. Hohe
+# Hostports statt der Standardports, weil 5432 und 9000 auf dem Referenzhost belegt sind.
+#
+# Die Zugangsdaten hier sind lokale Entwicklungswerte und keine Secrets. Alles, was ein Geheimnis ist, steht
+# in `.env` und ist gitignoriert.
+#
+# `compose.prod.yml` daneben ist die Produktionsvariante fuer einen eigenen Host; sie bringt ihre eigene
+# TLS-Terminierung mit und kennt diesen Proxy nicht.
+
+name: canvaz
 
 services:
+  app:
+    build: .
+    restart: unless-stopped
+    # Kein Hostport: der einzige Weg zur Anwendung fuehrt ueber den Proxy. Die Basis-URL traegt denselben
+    # Namen, weil Sitzungscookie und OIDC-Rueckkehr an genau diese Herkunft gebunden sind.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      CANVAZ_PORT: '3000'
+      CANVAZ_BASE_URL: ${CANVAZ_BASE_URL:-http://canvaz.localhost:27000}
+      CANVAZ_WEB_ROOT: dist/web
+      # Im Netz des Stacks statt am Loopback: der Container erreicht die Datenbank unter ihrem Dienstnamen.
+      DATABASE_URL: postgres://canvaz:canvaz@postgres:5432/canvaz
+      CANVAZ_STORAGE_FILESYSTEM_ROOT: /var/lib/canvaz/assets
+      # Der Proxy setzt `x-forwarded-for`; ohne dieses Bekenntnis landen alle Clients in einem Eimer der
+      # Ratengrenze.
+      CANVAZ_TRUSTED_PROXY: 'true'
+    volumes:
+      - canvaz-assets:/var/lib/canvaz/assets
+    depends_on:
+      postgres:
+        condition: service_healthy
+    stop_grace_period: 30s
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.canvaz.rule=Host(`canvaz.localhost`)
+      - traefik.http.routers.canvaz.entrypoints=web
+      - traefik.http.services.canvaz.loadbalancer.server.port=3000
+
   postgres:
     image: postgres:18-alpine
     restart: unless-stopped
@@ -46,3 +92,14 @@ services:
 volumes:
   canvaz-postgres-data:
   canvaz-minio-data:
+  canvaz-assets:
+
+# Das Netz des Stacks. Es liegt ausserhalb dieser Datei, weil der Proxy aus seinem eigenen Stack darin
+# haengt: `docker compose down` wuerde ein hier verwaltetes Netz unter dem laufenden Proxy wegziehen.
+# Einmalig anlegen:
+#
+#   docker network create canvaz
+networks:
+  default:
+    name: canvaz
+    external: true

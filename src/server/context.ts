@@ -14,6 +14,7 @@ import type { WorkspaceStore } from '../domain/workspace/repositories.js'
 import type { BoardRooms } from './board-rooms.js'
 import type { AppConfig } from './config.js'
 import type { Logger } from './log.js'
+import type { Mailer } from './mailer.js'
 import type { Metrics } from './metrics.js'
 import type { OidcClient } from './oidc.js'
 import type { RealtimeGateway } from './realtime.js'
@@ -28,6 +29,11 @@ export type AppContext = {
   readonly storage: AssetStoragePort
   /** `null` heisst: kein Identity Provider konfiguriert. Dann gibt es die OIDC-Routen gar nicht erst. */
   readonly oidc: OidcClient | null
+  /**
+   * `null` heisst: kein Postausgang konfiguriert. Dann verschickt die Instanz nichts; der Einladungslink
+   * bleibt der Weg, den ein Administrator selbst zustellt.
+   */
+  readonly mailer: Mailer | null
   readonly realtime: RealtimeGateway
   /**
    * Die offenen Boardraeume.

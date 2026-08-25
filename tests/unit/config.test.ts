@@ -165,4 +165,39 @@ describe('Konfiguration', () => {
 
     expect(config.secureCookies).toBe(false)
   })
+
+  it('laesst den Postausgang weg, solange keine seiner Variablen gesetzt ist', () => {
+    expect(loadConfig(validEnv).mail).toBeNull()
+  })
+
+  it('liest Server und Absender ein und laesst die Anmeldung offen', () => {
+    const config = loadConfig({ ...validEnv, CANVAZ_SMTP_HOST: 'smtp.example.com', CANVAZ_MAIL_FROM: 'Canvaz@Example.com' })
+
+    expect(config.mail).toEqual({
+      host: 'smtp.example.com',
+      port: 587,
+      secure: false,
+      auth: null,
+      // Dieselbe Normalisierung wie bei jeder anderen Adresse der Instanz.
+      from: 'canvaz@example.com',
+    })
+  })
+
+  it('nimmt implizites TLS fuer Port 465 an', () => {
+    const config = loadConfig({
+      ...validEnv,
+      CANVAZ_SMTP_HOST: 'smtp.example.com',
+      CANVAZ_SMTP_PORT: '465',
+      CANVAZ_MAIL_FROM: 'canvaz@example.com',
+    })
+
+    expect(config.mail?.secure).toBe(true)
+  })
+
+  it('weist eine halbe Anmeldung und einen fehlenden Absender zurueck', () => {
+    expect(() => loadConfig({ ...validEnv, CANVAZ_SMTP_HOST: 'smtp.example.com', CANVAZ_SMTP_USER: 'canvaz' })).toThrow(
+      ConfigError,
+    )
+    expect(() => loadConfig({ ...validEnv, CANVAZ_SMTP_HOST: 'smtp.example.com' })).toThrow(ConfigError)
+  })
 })
