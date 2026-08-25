@@ -69,7 +69,7 @@ function viewerRoleOf(board: BoardView): EffectiveBoardRole {
  * ausdrueckliche Bestaetigung schickt ihn ab. Das Board landet im Ziel unmittelbar im Arbeitsbereich; in
  * einen Ordner legt es dort dieselbe Ansicht im naechsten Schritt.
  *
- * callbell-dev: bewusst ohne Ordnerwahl im Ziel - dafuer muesste diese Ansicht den fremden Ordnerbaum
+ * qatlas-dev: bewusst ohne Ordnerwahl im Ziel - dafuer muesste diese Ansicht den fremden Ordnerbaum
  * mitladen. Ergaenzen, sobald jemand regelmaessig ueber Arbeitsbereiche hinweg einsortiert.
  */
 function MoveToWorkspace({

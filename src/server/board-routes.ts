@@ -1105,7 +1105,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
             // Board, aber ein gleichzeitiger zweiter Versuch derselben Datei meint dieselben Bytes; eine
             // Loeschung koennte sie unter seinem Datensatz wegziehen. Der Schluessel ist inhaltsadressiert,
             // deshalb schreibt ein Wiederholungsversuch genau ihn erneut und es waechst kein Muell.
-            // callbell-dev: verwaiste Bytes bleiben liegen und werden benannt; ein Aufraeumlauf braucht
+            // qatlas-dev: verwaiste Bytes bleiben liegen und werden benannt; ein Aufraeumlauf braucht
             // dieselbe gesonderte Entscheidung wie das Hard Delete.
             context.logger('error', 'board.asset.orphan', { boardId, storageKey, cause: String(error) })
           }
@@ -1159,7 +1159,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
           // Der gespeicherte Typ, nie der beim Upload behauptete: er wurde aus dem Inhalt gewonnen.
           contentType: asset.mimeType,
           // Berechtigungsabhaengiger Inhalt gehoert in keinen Zwischenspeicher - auch nicht in einen
-          // privaten. callbell-dev: bewusst kein ETag; erst messen, wenn wiederholtes Laden stoert.
+          // privaten. qatlas-dev: bewusst kein ETag; erst messen, wenn wiederholtes Laden stoert.
           cacheControl: 'private, no-store',
         })
       },

@@ -19,7 +19,7 @@ ENV NODE_ENV=production
 WORKDIR /app
 COPY package.json package-lock.json ./
 # Ohne Entwicklungsabhaengigkeiten: das Image fuehrt gebautes JavaScript aus, kein TypeScript.
-# callbell-dev: die Bibliotheken der SPA (Excalidraw, React) stehen als Laufzeitabhaengigkeiten im Manifest
+# qatlas-dev: die Bibliotheken der SPA (Excalidraw, React) stehen als Laufzeitabhaengigkeiten im Manifest
 # und liegen deshalb auch im Laufzeitimage, obwohl sie dort nur im gebauten Bundle gebraucht werden - rund
 # 240 MB, die der Serverprozess nie laedt. Sie herauszunehmen heisst, sie im Manifest zu verschieben; das
 # ist eine Aenderung am Abhaengigkeitsvertrag des Pakets und gehoert in einen eigenen Schritt, sobald
