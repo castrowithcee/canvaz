@@ -24,7 +24,7 @@ import type { ReactNode } from 'react'
 import { X } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
-import { IconButton } from './ui.js'
+import { Button, IconButton } from './ui.js'
 
 /**
  * Haelt ein `dialog`-Element im Gleichlauf mit `open`.
@@ -225,12 +225,29 @@ export function MenuLinkItem({ children }: { readonly children: ReactNode }) {
  * Schaltflaechen steht. Geoeffnet wird mit Klick, `Enter`, `Leertaste` oder Pfeil nach unten.
  */
 export function Menu({
+  id,
   label,
   icon,
+  text,
   children,
 }: {
+  /**
+   * Kennung des Ausloesers.
+   *
+   * Sie macht ihn wiederfindbar, nachdem die Ansicht dazwischen etwas anderes gezeigt hat - etwa eine
+   * Eingabe im Fluss der Liste, die den Knopf so lange ersetzt. Ohne diesen Fall braucht ein Menue sie nicht.
+   */
+  readonly id?: string
   readonly label: string
   readonly icon: LucideIcon
+  /**
+   * Beschriftung des Ausloesers.
+   *
+   * Ohne sie besteht er allein aus dem Symbol und traegt `label` als zugaenglichen Namen - die Form fuer
+   * ein Kontextmenue an einem Eintrag. Mit ihr ist er eine gewoehnliche Schaltflaeche, deren Text den
+   * aktuellen Stand nennt (etwa den gewaehlten Arbeitsbereich); `label` bleibt daneben ihr voller Name.
+   */
+  readonly text?: string
   readonly children: ReactNode
 }) {
   const [open, setOpen] = useState(false)
@@ -302,17 +319,36 @@ export function Menu({
         }
       }}
     >
-      <IconButton
-        ref={triggerRef}
-        label={label}
-        icon={icon}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-controls={open ? menuId : undefined}
-        onClick={() => {
-          setOpen((was) => !was)
-        }}
-      />
+      {text === undefined ? (
+        <IconButton
+          ref={triggerRef}
+          id={id}
+          label={label}
+          icon={icon}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-controls={open ? menuId : undefined}
+          onClick={() => {
+            setOpen((was) => !was)
+          }}
+        />
+      ) : (
+        <Button
+          ref={triggerRef}
+          id={id}
+          icon={icon}
+          aria-label={label}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-controls={open ? menuId : undefined}
+          extraClass="menu__trigger"
+          onClick={() => {
+            setOpen((was) => !was)
+          }}
+        >
+          {text}
+        </Button>
+      )}
       {open && (
         <MenuContext.Provider value={close}>
           <ul className="menu__list" id={menuId} ref={listRef} role="menu" aria-label={label}>

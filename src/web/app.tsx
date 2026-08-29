@@ -4,35 +4,49 @@
  * Drei Zustaende: laedt, nicht angemeldet, angemeldet. Die Oberflaeche blendet nichts als Sicherheitsgrenze
  * aus - jede geschuetzte Antwort kommt bereits serverseitig geprueft. Bewusst ohne UI-Framework.
  *
- * Die angemeldete Anwendung ist eine dauerhafte Huelle aus Kopfzeile, Seitenleiste und Inhaltsbereich; die
+ * Die angemeldete Anwendung ist eine dauerhafte Huelle aus Kopfzeile, Explorer und Inhaltsbereich; die
  * gezeigte Ansicht entscheidet die Adresse (siehe `router.ts`). Daneben stehen **genau zwei** weitere
  * Adressen: die Gastansicht unter `GUEST_APP_PATH` und das Einloesen einer Einladung unter
  * `INVITE_APP_PATH`. Beide werden vor jedem Sitzungszustand entschieden, damit weder ein Gast noch ein
  * Eingeladener erst eine Anmeldung oder gar eine Huelle mit Arbeitsbereichen bekommt.
+ *
+ * ## Ein Stand fuer Baum und Inhalt
+ *
+ * Ordner und Boards des aktiven Arbeitsbereichs laedt die Huelle **einmal** (`useExplorer`) und gibt
+ * denselben Stand an Seitenleiste und Inhaltsflaeche. Sie zeigen damit nie zwei verschiedene Baeume, und
+ * eine Mutation aktualisiert beide in einem Zug. Ein globaler Store waere dafuer eine Ebene zu viel.
+ *
+ * ## Eine Navigation, zwei Breiten
+ *
+ * Die Seitenleiste ist auf jeder Breite derselbe Knoten: ein natives `dialog`. Breit ist sie eine Spalte
+ * des Rasters und laesst sich einklappen (der Zustand ueberlebt das Neuladen); schmal ist sie eine
+ * temporaere Ebene mit Fokusfang, Escape und Fokusrueckgabe von der Plattform. Umgeschaltet wird per CSS;
+ * das Javascript entscheidet allein, worauf der eine Schalter der Kopfzeile wirkt.
  *
  * Der Anwendungsserver liefert fuer jeden unbekannten GET-Pfad dieselbe `index.html` (siehe
  * `server/http.ts`); ein Neuladen tief im Baum landet deshalb wieder in derselben Ansicht.
  */
 
 import { Suspense, useCallback, useEffect, useState } from 'react'
-import { CircleUserRound, LogOut, PanelLeft, RotateCcw } from 'lucide-react'
+import { ChevronsUpDown, CircleUserRound, LogOut, PanelLeft, RotateCcw } from 'lucide-react'
 
-import type { BoardView, FolderView, LoginErrorCode, MeResponse, WorkspaceView } from '../contracts/api.js'
+import type { LoginErrorCode, MeResponse, WorkspaceView } from '../contracts/api.js'
 import { GUEST_APP_PATH, INVITE_APP_PATH, LOGIN_ERROR_PARAM } from '../contracts/api.js'
 import { InviteApp, LoginView, PasswordSettings } from './account.js'
 import { AdminUsers } from './admin-users.js'
-import { ApiError, fetchBoards, fetchFolders, fetchMe, fetchWorkspaces, logout } from './api.js'
+import { ApiError, fetchMe, fetchWorkspaces, logout } from './api.js'
 import { BoardEditor } from './board/lazy-editor.js'
 import { BoardDetails } from './board-details.js'
 import { BoardTrash } from './board-trash.js'
 import { Boards } from './boards.js'
 import { Dashboard } from './dashboard.js'
-import { FolderTree } from './folders.js'
+import type { Explorer } from './explorer.js'
+import { ExplorerTree, useExplorer } from './explorer.js'
 import { GuestApp } from './guest.js'
 import { Drawer, Menu, MenuItem, MenuLinkItem } from './overlays.js'
 import type { AppRoute } from './router.js'
 import { Link, navigateBack, routeHref, useRoute } from './router.js'
-import { actionClass, Button, IconButton, Loading, Notice, PageState, Skeleton } from './ui.js'
+import { actionClass, Button, IconButton, Loading, Notice, PageState } from './ui.js'
 import { WorkspaceMembers, WorkspaceOverview, WorkspaceSettings } from './workspaces.js'
 
 const LOGIN_ERROR_TEXTS: Readonly<Record<LoginErrorCode, string>> = {
@@ -96,15 +110,18 @@ function Header({
   me,
   route,
   navId,
-  navOpen,
+  navShown,
+  navLabel,
   onToggleNav,
   onSignedOut,
 }: {
   readonly me: MeResponse
   readonly route: AppRoute
-  /** Die Seitenleiste, die der Ausloeser in der Kopfzeile oeffnet. */
+  /** Die Seitenleiste, auf die der Ausloeser in der Kopfzeile wirkt. */
   readonly navId: string
-  readonly navOpen: boolean
+  /** Steht die Seitenleiste gerade da? Breit heisst das ausgeklappt, schmal geoeffnet. */
+  readonly navShown: boolean
+  readonly navLabel: string
   readonly onToggleNav: () => void
   readonly onSignedOut: () => void
 }) {
@@ -133,12 +150,11 @@ function Header({
   return (
     <header className="app__header">
       <div className="flex items-center gap-2">
-        {/* Nur auf schmalen Flaechen sichtbar; breiter steht die Seitenleiste ohnehin da. */}
         <IconButton
-          label={navOpen ? 'Navigation schliessen' : 'Navigation oeffnen'}
+          label={navLabel}
           icon={PanelLeft}
           extraClass="app__nav-toggle"
-          aria-expanded={navOpen}
+          aria-expanded={navShown}
           aria-controls={navId}
           onClick={onToggleNav}
         />
@@ -179,150 +195,94 @@ function Header({
 }
 
 /**
- * Seitenleiste: aktiver Arbeitsbereich, Wechsel, sein Ordnerbaum und seine Boards.
+ * Der Explorer der Seitenleiste: Wechsel des Arbeitsbereichs, sein Baum und seine seltenen Verwaltungswege.
  *
- * Baum und Boardliste werden hier eigens geladen. Es sind damit dieselben Abfragen wie in der Boardansicht,
- * aber unabhaengig von deren Filtern - die Seitenleiste zeigt immer den ganzen Baum und alle aktiven
- * Boards, auch waehrend die Ansicht einen Ordner, das Archiv oder einen Suchtreffer zeigt.
- *
- * Der Baum nennt ausschliesslich Ordner. Er ist Navigation und keine Berechtigung: welche Boards ein
- * gewaehlter Ordner zeigt, entscheidet weiterhin der Server.
+ * Er navigiert und legt nichts an: Anlegen, Umbenennen, Verschieben und Entfernen stehen an den Objekten
+ * der Inhaltsflaeche (`boards.tsx`), damit es je Handlung genau einen Ort gibt. Der Baum selbst zeigt
+ * ausschliesslich Ordner und Boards; welche davon jemand sieht, entscheidet weiterhin der Server.
  */
 function Sidebar({
   workspaces,
   active,
   route,
-  boardsToken,
+  explorer,
 }: {
   readonly workspaces: readonly WorkspaceView[]
   readonly active: WorkspaceView | null
   readonly route: AppRoute
-  /** Aendert sich, sobald die Boardansicht die Liste veraendert hat; dann laedt die Leiste neu. */
-  readonly boardsToken: number
+  readonly explorer: Explorer
 }) {
-  const [boards, setBoards] = useState<readonly BoardView[] | null>(null)
-  const [folders, setFolders] = useState<readonly FolderView[]>([])
-  const [error, setError] = useState<string | null>(null)
-  const activeId = active?.id ?? null
-
-  const load = useCallback(() => {
-    if (activeId === null) {
-      setBoards([])
-      setFolders([])
-      return
-    }
-    setError(null)
-    fetchBoards(activeId, { status: 'active', query: '' })
-      .then((response) => {
-        setBoards(response.boards)
-      })
-      .catch(() => {
-        setBoards([])
-        setError('Die Boards konnten nicht geladen werden.')
-      })
-    fetchFolders(activeId)
-      .then((response) => {
-        setFolders(response.folders)
-      })
-      .catch(() => {
-        setFolders([])
-      })
-  }, [activeId])
-
-  useEffect(() => {
-    setBoards(null)
-    load()
-  }, [load, boardsToken])
-
-  const openBoardId = route.kind === 'board' ? route.boardId : null
-
   return (
     <nav aria-label="Arbeitsbereich und Boards">
-      <h2 className="sidebar__title">Arbeitsbereiche</h2>
-      {workspaces.length === 0 && <p className="hint">Noch kein Arbeitsbereich.</p>}
-      <ul className="sidebar__list">
-        {workspaces.map((workspace) => (
-          <li key={workspace.id}>
+      <h2 className="sidebar__title">Arbeitsbereich</h2>
+      {active === null ? (
+        <p className="hint">
+          Noch kein Arbeitsbereich.{' '}
+          <Link route={{ kind: 'arbeitsbereiche' }}>Arbeitsbereiche verwalten</Link>
+        </p>
+      ) : (
+        <Menu
+          label={`Arbeitsbereich wechseln, aktuell ${active.name}`}
+          icon={ChevronsUpDown}
+          text={`${active.name}${active.status === 'active' ? '' : ' (archiviert)'}`}
+        >
+          {workspaces.map((workspace) => (
+            <MenuLinkItem key={workspace.id}>
+              <Link
+                className="menu__item"
+                role="menuitem"
+                route={{ kind: 'arbeitsbereich', workspaceId: workspace.id, folder: null }}
+                current={workspace.id === active.id}
+              >
+                {workspace.name}
+                {workspace.status === 'active' ? '' : ' (archiviert)'}
+              </Link>
+            </MenuLinkItem>
+          ))}
+          <MenuLinkItem>
             <Link
-              route={{ kind: 'arbeitsbereich', workspaceId: workspace.id, folder: null }}
-              current={workspace.id === activeId}
+              className="menu__item"
+              role="menuitem"
+              route={{ kind: 'arbeitsbereiche' }}
+              current={route.kind === 'arbeitsbereiche'}
             >
-              {workspace.name}
-              {workspace.status === 'active' ? '' : ' (archiviert)'}
+              Arbeitsbereiche verwalten
             </Link>
-          </li>
-        ))}
-      </ul>
-      <p>
-        <Link route={{ kind: 'arbeitsbereiche' }} current={route.kind === 'arbeitsbereiche'}>
-          Arbeitsbereiche verwalten
-        </Link>
-      </p>
+          </MenuLinkItem>
+        </Menu>
+      )}
 
       {active !== null && (
         <>
-          <h2 className="sidebar__title">Ordner in {active.name}</h2>
-          <FolderTree
-            workspaceId={active.id}
-            folders={folders}
-            active={route.kind === 'arbeitsbereich' ? route.folder : null}
+          <h2 className="sidebar__title">Ordner und Boards</h2>
+          <ExplorerTree
+            workspace={active}
+            explorer={explorer}
+            selection={route.kind === 'arbeitsbereich' ? route.folder : null}
+            openBoardId={route.kind === 'board' ? route.boardId : null}
           />
 
-          <h2 className="sidebar__title">Boards in {active.name}</h2>
-          {/* Die Form der Liste steht fest, also haelt sie der Platzhalter - keine allgemeine Drehmarke. */}
-          {boards === null && (
-            <ul className="sidebar__list" aria-busy="true">
-              <li className="visually-hidden" aria-live="polite">
-                Boards werden geladen …
-              </li>
-              {[0, 1, 2].map((row) => (
-                <li key={row} className="skeleton-row" aria-hidden="true">
-                  <Skeleton />
-                </li>
-              ))}
-            </ul>
-          )}
-          {error !== null && (
-            <Notice>
-              <p>{error}</p>
-              <p className="actions">
-                <Button icon={RotateCcw} onClick={load}>
-                  Erneut laden
-                </Button>
-              </p>
-            </Notice>
-          )}
-          {boards !== null && boards.length === 0 && error === null && (
-            <p className="hint">Noch kein aktives Board.</p>
-          )}
+          <h2 className="sidebar__title">Arbeitsbereich verwalten</h2>
           <ul className="sidebar__list">
-            {(boards ?? []).map((board) => (
-              <li key={board.id}>
-                <Link
-                  route={{ kind: 'board', workspaceId: active.id, boardId: board.id, version: null }}
-                  current={board.id === openBoardId}
-                >
-                  {board.title}
-                </Link>
-              </li>
-            ))}
+            <li>
+              <Link route={{ kind: 'mitglieder', workspaceId: active.id }} current={route.kind === 'mitglieder'}>
+                Mitglieder
+              </Link>
+            </li>
+            <li>
+              <Link route={{ kind: 'papierkorb', workspaceId: active.id }} current={route.kind === 'papierkorb'}>
+                Papierkorb
+              </Link>
+            </li>
+            <li>
+              <Link
+                route={{ kind: 'einstellungen', workspaceId: active.id }}
+                current={route.kind === 'einstellungen'}
+              >
+                Einstellungen
+              </Link>
+            </li>
           </ul>
-          <p>
-            <Link route={{ kind: 'mitglieder', workspaceId: active.id }} current={route.kind === 'mitglieder'}>
-              Mitglieder
-            </Link>
-            {' · '}
-            <Link
-              route={{ kind: 'einstellungen', workspaceId: active.id }}
-              current={route.kind === 'einstellungen'}
-            >
-              Einstellungen
-            </Link>
-            {' · '}
-            <Link route={{ kind: 'papierkorb', workspaceId: active.id }} current={route.kind === 'papierkorb'}>
-              Papierkorb
-            </Link>
-          </p>
         </>
       )}
     </nav>
@@ -331,8 +291,31 @@ function Sidebar({
 
 const UNKNOWN_WORKSPACE = 'Dieser Arbeitsbereich ist nicht (mehr) fuer dich freigegeben oder existiert nicht.'
 
-/** Die Seitenleiste ist derselbe Knoten, den der Ausloeser in der Kopfzeile oeffnet. */
+/** Die Seitenleiste ist derselbe Knoten, auf den der Ausloeser in der Kopfzeile wirkt. */
 const NAV_ID = 'navigation'
+
+/** Der eingeklappte Zustand der breiten Seitenleiste. Er gehoert diesem Geraet, nicht dem Konto. */
+const COLLAPSED_KEY = 'canvaz:explorer-eingeklappt'
+
+function readCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(COLLAPSED_KEY) === '1'
+  } catch {
+    // Ein Browser ohne Speicher (privates Fenster, gesperrte Seitendaten) faengt einfach ausgeklappt an.
+    return false
+  }
+}
+
+function writeCollapsed(collapsed: boolean): void {
+  try {
+    window.localStorage.setItem(COLLAPSED_KEY, collapsed ? '1' : '0')
+  } catch {
+    // Ohne Speicher bleibt der Zustand fuer diese Sitzung; das ist kein Fehler, den jemand sehen muesste.
+  }
+}
+
+/** Ab hier ist die Seitenleiste eine Spalte des Rasters. Derselbe Wert steht in `styles.css`. */
+const WIDE = '(min-width: 48rem)'
 
 /** Der Inhaltsbereich: genau eine Ansicht, ausgewaehlt von der Adresse. */
 function Content({
@@ -340,6 +323,7 @@ function Content({
   route,
   workspaces,
   workspace,
+  explorer,
   onWorkspacesChanged,
   onProfileChanged,
   onBoardsChanged,
@@ -349,6 +333,7 @@ function Content({
   readonly workspaces: readonly WorkspaceView[]
   /** Der Arbeitsbereich der Adresse; `null`, wenn die Adresse keinen nennt oder er nicht sichtbar ist. */
   readonly workspace: WorkspaceView | null
+  readonly explorer: Explorer
   readonly onWorkspacesChanged: () => void
   readonly onProfileChanged: () => void
   readonly onBoardsChanged: () => void
@@ -390,18 +375,13 @@ function Content({
         )
       }
       return (
-        <section aria-labelledby="arbeitsbereich">
-          <h2 id="arbeitsbereich">
-            {workspace.name}
-            {workspace.status === 'active' ? '' : ' (archiviert)'}
-          </h2>
-          <Boards
-            me={me}
-            workspace={workspace}
-            folder={route.kind === 'arbeitsbereich' ? route.folder : null}
-            onListChanged={onBoardsChanged}
-          />
-        </section>
+        <Boards
+          me={me}
+          workspace={workspace}
+          folder={route.kind === 'arbeitsbereich' ? route.folder : null}
+          explorer={explorer}
+          onChanged={onBoardsChanged}
+        />
       )
     }
     case 'konto':
@@ -439,11 +419,17 @@ function Shell({
   const route = useRoute()
   const [workspaces, setWorkspaces] = useState<readonly WorkspaceView[] | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [boardsToken, setBoardsToken] = useState(0)
   /** Nur auf schmalen Flaechen von Belang: dort ist die Seitenleiste eine temporaere Ebene. */
   const [navOpen, setNavOpen] = useState(false)
+  /** Nur auf breiten Flaechen von Belang: dort ist sie eine Spalte, die sich einklappen laesst. */
+  const [collapsed, setCollapsed] = useState(readCollapsed)
+  const [wide, setWide] = useState(() => window.matchMedia(WIDE).matches)
   /** Zuletzt besuchter Arbeitsbereich; er haelt die Seitenleiste auch in Konto- und Verwaltungsansichten. */
   const [lastWorkspaceId, setLastWorkspaceId] = useState<string | null>(null)
+  /** Der zuletzt gezeigte Bibliothekskontext - der Rueckweg, wenn ein Board ohne eigene Historie schliesst. */
+  const [library, setLibrary] = useState<{ readonly workspaceId: string; readonly folder: string | null } | null>(
+    null,
+  )
 
   const load = useCallback(() => {
     setError(null)
@@ -468,9 +454,11 @@ function Shell({
     }
   }, [routeWorkspaceId])
 
-  const bumpBoards = useCallback(() => {
-    setBoardsToken((token) => token + 1)
-  }, [])
+  useEffect(() => {
+    if (route.kind === 'arbeitsbereich') {
+      setLibrary({ workspaceId: route.workspaceId, folder: route.folder })
+    }
+  }, [route])
 
   // Nach einem Schritt in der Navigation ist die Ebene erledigt.
   const href = routeHref(route)
@@ -478,19 +466,28 @@ function Shell({
     setNavOpen(false)
   }, [href])
 
-  // Wird das Fenster breit, ist die Leiste ohnehin eine Spalte; eine offene Ebene waere dann nur im Weg.
+  // Wird das Fenster breit, ist die Leiste eine Spalte; eine offene Ebene waere dann nur im Weg.
   useEffect(() => {
-    const wide = window.matchMedia('(min-width: 48rem)')
+    const query = window.matchMedia(WIDE)
     const sync = (): void => {
-      if (wide.matches) {
+      setWide(query.matches)
+      if (query.matches) {
         setNavOpen(false)
       }
     }
-    wide.addEventListener('change', sync)
+    query.addEventListener('change', sync)
     return () => {
-      wide.removeEventListener('change', sync)
+      query.removeEventListener('change', sync)
     }
   }, [])
+
+  const find = (id: string | null): WorkspaceView | null =>
+    id === null || workspaces === null ? null : (workspaces.find((entry) => entry.id === id) ?? null)
+  const routeWorkspace = find(routeWorkspaceId)
+  const activeWorkspace = routeWorkspace ?? find(lastWorkspaceId) ?? workspaces?.[0] ?? null
+
+  // Ein Stand fuer Baum und Inhalt. Der Aufruf steht vor jeder Verzweigung - Hooks sind unbedingt.
+  const explorer = useExplorer(activeWorkspace?.id ?? null)
 
   if (workspaces === null) {
     return (
@@ -501,14 +498,13 @@ function Shell({
     )
   }
 
-  const find = (id: string | null): WorkspaceView | null =>
-    id === null ? null : (workspaces.find((entry) => entry.id === id) ?? null)
-  const routeWorkspace = find(routeWorkspaceId)
-  const activeWorkspace = routeWorkspace ?? find(lastWorkspaceId) ?? workspaces[0] ?? null
-
   // Der Editor braucht die ganze Flaeche; Kopfzeile und Seitenleiste treten dafuer ab.
   if (route.kind === 'board' && routeWorkspace !== null) {
-    const back: AppRoute = { kind: 'arbeitsbereich', workspaceId: routeWorkspace.id, folder: null }
+    const back: AppRoute = {
+      kind: 'arbeitsbereich',
+      workspaceId: routeWorkspace.id,
+      folder: library !== null && library.workspaceId === routeWorkspace.id ? library.folder : null,
+    }
     return (
       <Suspense
         fallback={
@@ -533,8 +529,17 @@ function Shell({
     )
   }
 
+  const navShown = wide ? !collapsed : navOpen
+  const navLabel = wide
+    ? collapsed
+      ? 'Explorer ausklappen'
+      : 'Explorer einklappen'
+    : navOpen
+      ? 'Navigation schliessen'
+      : 'Navigation oeffnen'
+
   return (
-    <div className="app">
+    <div className={wide && collapsed ? 'app app--eingeklappt' : 'app'}>
       <a className="skip" href="#inhalt">
         Zum Inhalt springen
       </a>
@@ -542,11 +547,19 @@ function Shell({
         me={me}
         route={route}
         navId={NAV_ID}
-        navOpen={navOpen}
+        navShown={navShown}
+        navLabel={navLabel}
+        onSignedOut={onSignedOut}
         onToggleNav={() => {
+          if (wide) {
+            setCollapsed((was) => {
+              writeCollapsed(!was)
+              return !was
+            })
+            return
+          }
           setNavOpen((was) => !was)
         }}
-        onSignedOut={onSignedOut}
       />
       <Drawer
         id={NAV_ID}
@@ -568,7 +581,7 @@ function Shell({
             }
           }}
         >
-          <Sidebar workspaces={workspaces} active={activeWorkspace} route={route} boardsToken={boardsToken} />
+          <Sidebar workspaces={workspaces} active={activeWorkspace} route={route} explorer={explorer} />
         </div>
       </Drawer>
       <main className="app__main" id="inhalt" tabIndex={-1}>
@@ -578,9 +591,10 @@ function Shell({
           route={route}
           workspaces={workspaces}
           workspace={routeWorkspace}
+          explorer={explorer}
           onWorkspacesChanged={load}
           onProfileChanged={onReload}
-          onBoardsChanged={bumpBoards}
+          onBoardsChanged={explorer.reload}
         />
       </main>
     </div>

@@ -1067,6 +1067,203 @@
     margin: --spacing(2) --spacing(4);
   }
 
+  /* ------------------------------------------------------ Ansicht: Explorer */
+
+  /*
+   * Der Baum der Seitenleiste.
+   *
+   * Verschachtelte Listen statt einer Baumrolle: die Struktur steht im Dokument, und Einrueckung entsteht
+   * aus der Verschachtelung und nicht aus einer gerechneten Tiefe. Auswahl und Aufklappen sind zwei
+   * getrennte Bedienelemente in einer Zeile.
+   */
+  .tree,
+  .tree__children {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .tree__children {
+    /* Die Einrueckung einer Ebene. Sie liegt links vom Aufklappschalter des Kindes. */
+    padding-inline-start: --spacing(4);
+  }
+
+  .tree__row {
+    align-items: center;
+    display: flex;
+    gap: --spacing(1);
+  }
+
+  .tree__twisty {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-sm);
+    color: var(--color-text-muted);
+    display: flex;
+    flex: none;
+    height: var(--spacing-touch);
+    justify-content: center;
+    min-height: var(--spacing-touch);
+    padding: 0;
+    width: var(--spacing-touch);
+  }
+
+  .tree__twisty:hover {
+    background: var(--color-surface-muted);
+    color: var(--color-text);
+  }
+
+  /* Ein Blatt hat nichts aufzuklappen; der Platz bleibt trotzdem, damit die Beschriftungen fluchten. */
+  .tree__twisty--leer {
+    pointer-events: none;
+  }
+
+  .tree__label {
+    align-items: center;
+    border-radius: var(--radius-sm);
+    color: var(--color-text);
+    display: flex;
+    flex: 1;
+    gap: --spacing(2);
+    min-height: var(--spacing-touch);
+    min-width: 0;
+    padding: --spacing(1) --spacing(2);
+    text-decoration: none;
+  }
+
+  .tree__label:hover {
+    background: var(--color-surface-muted);
+  }
+
+  .tree__name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /*
+   * Die aktuelle Auswahl traegt mehr als Farbe: einen Balken am Rand und fettere Schrift. Wer Farben nicht
+   * unterscheidet, erkennt sie trotzdem.
+   */
+  .tree__label[aria-current='page'],
+  .sidebar__list a[aria-current='page'] {
+    background: var(--color-accent-soft);
+    border-inline-start: 3px solid var(--color-accent);
+    font-weight: 600;
+    padding-inline-start: calc(--spacing(2) - 3px);
+  }
+
+  /* Der Ausloeser des Arbeitsbereichswechsels traegt seinen Namen und fuellt die Leiste. */
+  .menu:has(> .menu__trigger) {
+    display: block;
+  }
+
+  .menu__trigger {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  /* Ueberschrift und die Aktionen ihres Kontexts stehen in einer Zeile und brechen gemeinsam um. */
+  .page-head {
+    align-items: baseline;
+    display: flex;
+    flex-wrap: wrap;
+    gap: --spacing(2) --spacing(4);
+    justify-content: space-between;
+  }
+
+  .page-head h2 {
+    margin: 0;
+  }
+
+  .breadcrumb {
+    display: flex;
+    flex-wrap: wrap;
+    font-size: var(--text-sm);
+    gap: --spacing(2);
+    list-style: none;
+    margin: 0 0 --spacing(2);
+    padding: 0;
+  }
+
+  .breadcrumb li + li::before {
+    color: var(--color-text-muted);
+    content: '/';
+    margin-inline-end: --spacing(2);
+  }
+
+  /*
+   * Kompakte Zeilenliste der Sammlung: Titel, Beiwerk und das Kontextmenue des Eintrags.
+   *
+   * **Ohne `overflow`**: das Menue einer Zeile haengt an ihr und wuerde an dieser Kante abgeschnitten. Die
+   * runden Ecken tragen deshalb die erste und die letzte Zeile selbst.
+   */
+  .rows {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    list-style: none;
+    margin: --spacing(4) 0;
+    padding: 0;
+  }
+
+  .row {
+    align-items: center;
+    background: var(--color-surface);
+    display: flex;
+    flex-wrap: wrap;
+    gap: --spacing(2);
+    padding: --spacing(1) --spacing(2);
+  }
+
+  .row:first-child {
+    border-start-end-radius: var(--radius-md);
+    border-start-start-radius: var(--radius-md);
+  }
+
+  .row:last-child {
+    border-end-end-radius: var(--radius-md);
+    border-end-start-radius: var(--radius-md);
+  }
+
+  .row + .row {
+    border-top: 1px solid var(--color-border);
+  }
+
+  .row__label {
+    align-items: center;
+    color: var(--color-text);
+    display: flex;
+    flex: 1;
+    gap: --spacing(2);
+    min-height: var(--spacing-touch);
+    min-width: 0;
+    text-decoration: none;
+  }
+
+  .row__label:hover {
+    text-decoration: underline;
+  }
+
+  .row__meta {
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+
+  /* Kurze Eingabe im Fluss der Liste - sie nimmt den Platz der Zeile ein, in der sie steht. */
+  .inline-name {
+    align-items: center;
+    display: flex;
+    flex: 1;
+    flex-wrap: wrap;
+    gap: --spacing(2);
+  }
+
+  .inline-name input {
+    flex: 1;
+    min-width: 12rem;
+  }
+
   /* -------------------------------------------------------------- Breiten */
 
   /*
@@ -1103,8 +1300,19 @@
     }
 
     /* Auf der breiten Flaeche ist die Leiste keine Ebene: Name und Schliessweg entfallen. */
-    .app__sidebar .drawer__head,
-    .app__nav-toggle {
+    .app__sidebar .drawer__head {
+      display: none;
+    }
+
+    /*
+     * Eingeklappt: die Spalte verschwindet, der Inhalt nimmt die ganze Breite. Derselbe Schalter der
+     * Kopfzeile holt sie zurueck; sein Zustand steht in `aria-expanded` und ueberlebt das Neuladen.
+     */
+    .app--eingeklappt {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .app--eingeklappt .app__sidebar {
       display: none;
     }
   }
