@@ -29,6 +29,7 @@
   "dependencies": {
     "@excalidraw/excalidraw": "0.18.1",
     "jose": "^6.2.9",
+    "lucide-react": "^1.37.0",
     "nodemailer": "^7.0.13",
     "openid-client": "^6.8.5",
     "pg": "^8.16.3",
@@ -38,6 +39,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^24.10.1",
     "@types/nodemailer": "^8.0.1",
     "@types/pg": "^8.15.6",
@@ -47,6 +49,7 @@
     "@vitejs/plugin-react": "^5.1.0",
     "eslint": "^10.8.1",
     "globals": "^16.5.0",
+    "tailwindcss": "^4.3.3",
     "tsx": "^4.23.12",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.48.0",

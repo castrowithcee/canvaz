@@ -20,12 +20,13 @@
 
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { PenLine, RotateCcw } from 'lucide-react'
 
 import type { GuestSessionResponse } from '../contracts/api.js'
 import { MAX_GUEST_DISPLAY_NAME_LENGTH } from '../domain/board/guest.js'
 import { ApiError, fetchGuestSession, joinBoardAsGuest } from './api.js'
 import { BoardEditor } from './board/lazy-editor.js'
-import { Loading, Notice } from './ui.js'
+import { Button, describedBy, Field, Loading, Notice, PageState } from './ui.js'
 
 /** Das Token steht im Fragment und ist base64url kodiert; es braucht keine Dekodierung. */
 function readTokenFromFragment(): string | null {
@@ -100,12 +101,15 @@ function JoinForm({
             })
         }}
       >
-        <div className="field">
-          <label htmlFor="guest-name">Dein Anzeigename</label>
+        <Field
+          id="guest-name"
+          label="Dein Anzeigename"
+          hint={`Hoechstens ${String(MAX_GUEST_DISPLAY_NAME_LENGTH)} Zeichen. Der Gastzugang gilt fuer genau dieses eine Board und endet von selbst.`}
+        >
           <input
             id="guest-name"
             name="displayName"
-            aria-describedby="guest-name-hint"
+            aria-describedby={describedBy('guest-name', true, false)}
             value={displayName}
             maxLength={MAX_GUEST_DISPLAY_NAME_LENGTH}
             required
@@ -114,15 +118,17 @@ function JoinForm({
               setDisplayName(event.target.value)
             }}
           />
-        </div>
-        <p className="hint" id="guest-name-hint">
-          Hoechstens {String(MAX_GUEST_DISPLAY_NAME_LENGTH)} Zeichen. Der Gastzugang gilt fuer genau dieses
-          eine Board und endet von selbst.
-        </p>
+        </Field>
         <p>
-          <button className="button--primary" type="submit" disabled={busy || displayName.trim().length === 0}>
+          <Button
+            variant="primary"
+            icon={PenLine}
+            type="submit"
+            busy={busy}
+            disabled={displayName.trim().length === 0}
+          >
             Board als Gast oeffnen
-          </button>
+          </Button>
         </p>
         {error !== null && <Notice text={error} />}
       </form>
@@ -164,12 +170,11 @@ export function GuestApp() {
   if (state.kind === 'failed') {
     return (
       <Shell>
-        <Notice text={state.message} />
-        <p className="actions">
-          <button type="button" onClick={load}>
+        <PageState kind="error" title="Das hat nicht geklappt" description={state.message}>
+          <Button variant="primary" icon={RotateCcw} onClick={load}>
             Erneut versuchen
-          </button>
-        </p>
+          </Button>
+        </PageState>
       </Shell>
     )
   }

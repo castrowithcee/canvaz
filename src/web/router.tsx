@@ -243,17 +243,21 @@ export function Link({
   children,
   className,
   current,
+  role,
 }: {
   readonly route: AppRoute
   readonly children: ReactNode
   readonly className?: string
   /** Wahr, wenn diese Adresse gerade gezeigt wird; sie bekommt dann `aria-current="page"`. */
   readonly current?: boolean
+  /** Nur fuer einen Link, der zugleich Eintrag eines Menues ist (`menuitem`). */
+  readonly role?: 'menuitem'
 }) {
   return (
     <a
       href={routeHref(route)}
       className={className}
+      role={role}
       aria-current={current === true ? 'page' : undefined}
       onClick={(event: MouseEvent) => {
         if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {

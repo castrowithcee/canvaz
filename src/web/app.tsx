@@ -15,6 +15,7 @@
  */
 
 import { Suspense, useCallback, useEffect, useState } from 'react'
+import { CircleUserRound, LogOut, PanelLeft, RotateCcw } from 'lucide-react'
 
 import type { BoardView, FolderView, LoginErrorCode, MeResponse, WorkspaceView } from '../contracts/api.js'
 import { GUEST_APP_PATH, INVITE_APP_PATH, LOGIN_ERROR_PARAM } from '../contracts/api.js'
@@ -28,9 +29,10 @@ import { Boards } from './boards.js'
 import { Dashboard } from './dashboard.js'
 import { FolderTree } from './folders.js'
 import { GuestApp } from './guest.js'
+import { Drawer, Menu, MenuItem, MenuLinkItem } from './overlays.js'
 import type { AppRoute } from './router.js'
-import { Link, navigateBack, useRoute } from './router.js'
-import { Empty, Loading, Notice } from './ui.js'
+import { Link, navigateBack, routeHref, useRoute } from './router.js'
+import { actionClass, Button, IconButton, Loading, Notice, PageState, Skeleton } from './ui.js'
 import { WorkspaceMembers, WorkspaceOverview, WorkspaceSettings } from './workspaces.js'
 
 const LOGIN_ERROR_TEXTS: Readonly<Record<LoginErrorCode, string>> = {
@@ -60,27 +62,50 @@ function clearLoginError(): void {
 }
 
 /** Eine benannte Ansicht statt eines leeren Bildschirms - fuer unbekannte, fremde und fehlende Objekte. */
-function NotFound({ text }: { readonly text: string }) {
+function NotFound({ text, forbidden = false }: { readonly text: string; readonly forbidden?: boolean }) {
   return (
     <section aria-labelledby="nicht-gefunden">
-      <h2 id="nicht-gefunden">Diese Ansicht gibt es nicht</h2>
-      <p>{text}</p>
-      <p>
-        <Link className="button button--primary" route={{ kind: 'einstieg', filter: null }}>
+      <h2 id="nicht-gefunden" className="visually-hidden">
+        Diese Ansicht gibt es nicht
+      </h2>
+      <PageState
+        kind={forbidden ? 'forbidden' : 'not-found'}
+        title={forbidden ? 'Dafuer fehlt dir die Berechtigung' : 'Diese Ansicht gibt es nicht'}
+        description={text}
+      >
+        <Link className={actionClass('primary')} route={{ kind: 'einstieg', filter: null }}>
           Zum Dashboard
         </Link>
-      </p>
+      </PageState>
     </section>
+  )
+}
+
+/** Gemeinsame Fehlermeldung mit genau einem naechsten Schritt: es noch einmal versuchen. */
+function LoadFailed({ text, onRetry }: { readonly text: string; readonly onRetry: () => void }) {
+  return (
+    <PageState kind="error" title="Das hat nicht geklappt" description={text}>
+      <Button variant="primary" icon={RotateCcw} onClick={onRetry}>
+        Erneut laden
+      </Button>
+    </PageState>
   )
 }
 
 function Header({
   me,
   route,
+  navId,
+  navOpen,
+  onToggleNav,
   onSignedOut,
 }: {
   readonly me: MeResponse
   readonly route: AppRoute
+  /** Die Seitenleiste, die der Ausloeser in der Kopfzeile oeffnet. */
+  readonly navId: string
+  readonly navOpen: boolean
+  readonly onToggleNav: () => void
   readonly onSignedOut: () => void
 }) {
   const [error, setError] = useState<string | null>(null)
@@ -103,24 +128,50 @@ function Header({
       })
   }
 
+  const account = `${me.user.displayName}${me.user.email === null ? '' : ` (${me.user.email})`}`
+
   return (
     <header className="app__header">
-      <h1 className="app__brand">
-        <Link route={{ kind: 'einstieg', filter: null }}>Canvaz</Link>
-      </h1>
+      <div className="flex items-center gap-2">
+        {/* Nur auf schmalen Flaechen sichtbar; breiter steht die Seitenleiste ohnehin da. */}
+        <IconButton
+          label={navOpen ? 'Navigation schliessen' : 'Navigation oeffnen'}
+          icon={PanelLeft}
+          extraClass="app__nav-toggle"
+          aria-expanded={navOpen}
+          aria-controls={navId}
+          onClick={onToggleNav}
+        />
+        <h1 className="app__brand">
+          <Link route={{ kind: 'einstieg', filter: null }}>Canvaz</Link>
+        </h1>
+      </div>
       <nav className="app__nav" aria-label="Konto und Verwaltung">
-        <Link route={{ kind: 'konto' }} current={route.kind === 'konto'}>
-          {me.user.displayName}
-          {me.user.email === null ? '' : ` (${me.user.email})`}
-        </Link>
-        {me.user.isSystemAdmin && (
-          <Link route={{ kind: 'konten' }} current={route.kind === 'konten'}>
-            Kontenverwaltung
-          </Link>
-        )}
-        <button type="button" onClick={signOut} disabled={busy}>
-          Abmelden
-        </button>
+        <Menu label={`Konto und Verwaltung, angemeldet als ${account}`} icon={CircleUserRound}>
+          <li className="menu__label" role="presentation">
+            {account}
+          </li>
+          <MenuLinkItem>
+            <Link className="menu__item" role="menuitem" route={{ kind: 'konto' }} current={route.kind === 'konto'}>
+              Konto
+            </Link>
+          </MenuLinkItem>
+          {me.user.isSystemAdmin && (
+            <MenuLinkItem>
+              <Link
+                className="menu__item"
+                role="menuitem"
+                route={{ kind: 'konten' }}
+                current={route.kind === 'konten'}
+              >
+                Kontenverwaltung
+              </Link>
+            </MenuLinkItem>
+          )}
+          <MenuItem icon={LogOut} onSelect={signOut} disabled={busy}>
+            Abmelden
+          </MenuItem>
+        </Menu>
       </nav>
       {error !== null && <Notice text={error} />}
     </header>
@@ -186,9 +237,9 @@ function Sidebar({
   const openBoardId = route.kind === 'board' ? route.boardId : null
 
   return (
-    <nav className="app__sidebar" aria-label="Arbeitsbereich und Boards">
+    <nav aria-label="Arbeitsbereich und Boards">
       <h2 className="sidebar__title">Arbeitsbereiche</h2>
-      {workspaces.length === 0 && <Empty text="Noch kein Arbeitsbereich." />}
+      {workspaces.length === 0 && <p className="hint">Noch kein Arbeitsbereich.</p>}
       <ul className="sidebar__list">
         {workspaces.map((workspace) => (
           <li key={workspace.id}>
@@ -218,19 +269,31 @@ function Sidebar({
           />
 
           <h2 className="sidebar__title">Boards in {active.name}</h2>
-          {boards === null && <Loading text="Boards werden geladen …" />}
+          {/* Die Form der Liste steht fest, also haelt sie der Platzhalter - keine allgemeine Drehmarke. */}
+          {boards === null && (
+            <ul className="sidebar__list" aria-busy="true">
+              <li className="visually-hidden" aria-live="polite">
+                Boards werden geladen …
+              </li>
+              {[0, 1, 2].map((row) => (
+                <li key={row} className="skeleton-row" aria-hidden="true">
+                  <Skeleton />
+                </li>
+              ))}
+            </ul>
+          )}
           {error !== null && (
             <Notice>
               <p>{error}</p>
               <p className="actions">
-                <button type="button" onClick={load}>
+                <Button icon={RotateCcw} onClick={load}>
                   Erneut laden
-                </button>
+                </Button>
               </p>
             </Notice>
           )}
           {boards !== null && boards.length === 0 && error === null && (
-            <Empty text="Noch kein aktives Board." />
+            <p className="hint">Noch kein aktives Board.</p>
           )}
           <ul className="sidebar__list">
             {(boards ?? []).map((board) => (
@@ -267,6 +330,9 @@ function Sidebar({
 }
 
 const UNKNOWN_WORKSPACE = 'Dieser Arbeitsbereich ist nicht (mehr) fuer dich freigegeben oder existiert nicht.'
+
+/** Die Seitenleiste ist derselbe Knoten, den der Ausloeser in der Kopfzeile oeffnet. */
+const NAV_ID = 'navigation'
 
 /** Der Inhaltsbereich: genau eine Ansicht, ausgewaehlt von der Adresse. */
 function Content({
@@ -354,7 +420,7 @@ function Content({
       return me.user.isSystemAdmin ? (
         <AdminUsers me={me} />
       ) : (
-        <NotFound text="Die Kontenverwaltung steht nur der Systemadministration offen." />
+        <NotFound forbidden text="Die Kontenverwaltung steht nur der Systemadministration offen." />
       )
     case 'unbekannt':
       return <NotFound text="Diese Adresse gehoert zu keiner Ansicht dieser Anwendung." />
@@ -374,6 +440,8 @@ function Shell({
   const [workspaces, setWorkspaces] = useState<readonly WorkspaceView[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [boardsToken, setBoardsToken] = useState(0)
+  /** Nur auf schmalen Flaechen von Belang: dort ist die Seitenleiste eine temporaere Ebene. */
+  const [navOpen, setNavOpen] = useState(false)
   /** Zuletzt besuchter Arbeitsbereich; er haelt die Seitenleiste auch in Konto- und Verwaltungsansichten. */
   const [lastWorkspaceId, setLastWorkspaceId] = useState<string | null>(null)
 
@@ -402,6 +470,26 @@ function Shell({
 
   const bumpBoards = useCallback(() => {
     setBoardsToken((token) => token + 1)
+  }, [])
+
+  // Nach einem Schritt in der Navigation ist die Ebene erledigt.
+  const href = routeHref(route)
+  useEffect(() => {
+    setNavOpen(false)
+  }, [href])
+
+  // Wird das Fenster breit, ist die Leiste ohnehin eine Spalte; eine offene Ebene waere dann nur im Weg.
+  useEffect(() => {
+    const wide = window.matchMedia('(min-width: 48rem)')
+    const sync = (): void => {
+      if (wide.matches) {
+        setNavOpen(false)
+      }
+    }
+    wide.addEventListener('change', sync)
+    return () => {
+      wide.removeEventListener('change', sync)
+    }
   }, [])
 
   if (workspaces === null) {
@@ -450,19 +538,41 @@ function Shell({
       <a className="skip" href="#inhalt">
         Zum Inhalt springen
       </a>
-      <Header me={me} route={route} onSignedOut={onSignedOut} />
-      <Sidebar workspaces={workspaces} active={activeWorkspace} route={route} boardsToken={boardsToken} />
+      <Header
+        me={me}
+        route={route}
+        navId={NAV_ID}
+        navOpen={navOpen}
+        onToggleNav={() => {
+          setNavOpen((was) => !was)
+        }}
+        onSignedOut={onSignedOut}
+      />
+      <Drawer
+        id={NAV_ID}
+        open={navOpen}
+        title="Navigation"
+        className="app__sidebar"
+        onClose={() => {
+          setNavOpen(false)
+        }}
+      >
+        {/*
+          * Ein Schritt in der Navigation schliesst die Ebene - auch, wenn er auf die gerade gezeigte Ansicht
+          * fuehrt und die Adresse sich deshalb nicht aendert.
+          */}
+        <div
+          onClick={(event) => {
+            if (event.target instanceof Element && event.target.closest('a') !== null) {
+              setNavOpen(false)
+            }
+          }}
+        >
+          <Sidebar workspaces={workspaces} active={activeWorkspace} route={route} boardsToken={boardsToken} />
+        </div>
+      </Drawer>
       <main className="app__main" id="inhalt" tabIndex={-1}>
-        {error !== null && (
-          <Notice>
-            <p>{error}</p>
-            <p className="actions">
-              <button type="button" onClick={load}>
-                Erneut laden
-              </button>
-            </p>
-          </Notice>
-        )}
+        {error !== null && <LoadFailed text={error} onRetry={load} />}
         <Content
           me={me}
           route={route}
@@ -522,12 +632,7 @@ function MemberApp() {
     return (
       <main className="shell">
         <h1>Canvaz</h1>
-        <Notice text={state.message} />
-        <p className="actions">
-          <button type="button" onClick={load}>
-            Erneut versuchen
-          </button>
-        </p>
+        <LoadFailed text={state.message} onRetry={load} />
       </main>
     )
   }

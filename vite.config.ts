@@ -2,6 +2,7 @@ import { cp } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 
+import tailwindcss from '@tailwindcss/vite'
 import { defineConfig } from 'vite'
 import type { Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
@@ -34,7 +35,7 @@ const OUT_DIR = 'dist/web'
 
 // Excalidraw liest zur Laufzeit `process.env.IS_PREACT`; ohne dieses Define bricht der Browser-Build.
 export default defineConfig({
-  plugins: [react(), copyExcalidrawFonts(OUT_DIR)],
+  plugins: [react(), tailwindcss(), copyExcalidrawFonts(OUT_DIR)],
   define: {
     'process.env.IS_PREACT': JSON.stringify('false'),
   },

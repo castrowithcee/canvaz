@@ -9,9 +9,13 @@
  * zwischengespeichert und ist danach nicht wieder abrufbar; ein verlorener Link wird widerrufen und neu
  * erzeugt. Ein Initialpasswort vergibt der Systemadmin selbst und uebergibt es ausserhalb der Anwendung -
  * die Instanz versendet nichts.
+ *
+ * Die Hauptaktion dieser Ansicht ist das Anlegen eines Kontos. Die Aktionen einer Zeile sind Nebenaktionen;
+ * das Zuruecksetzen eines Passworts und das Widerrufen einer Einladung nennen ihre Folge in einem Dialog.
  */
 
 import { useCallback, useEffect, useState } from 'react'
+import { KeyRound, Mail, MailX, RotateCcw, UserCheck, UserPlus, UserX } from 'lucide-react'
 
 import type { AdminUserView, MeResponse } from '../contracts/api.js'
 import { MIN_PASSWORD_LENGTH } from '../contracts/api.js'
@@ -24,21 +28,28 @@ import {
   revokeUserInvitation,
   setUserStatus,
 } from './api.js'
-import { Empty, Loading, Notice } from './ui.js'
+import { Dialog } from './overlays.js'
+import { Badge, Button, Field, Notice, PageState, TableSkeleton } from './ui.js'
+
+const USER_COLUMNS = ['Anzeigename', 'E-Mail', 'Status', 'Rolle', 'Zugang', 'Aktion']
 
 function messageOf(cause: unknown, fallback: string): string {
   return cause instanceof ApiError ? cause.message : fallback
 }
 
-function statusLabel(status: AdminUserView['status']): string {
-  return status === 'active' ? 'aktiv' : 'deaktiviert'
+function StatusBadge({ status }: { readonly status: AdminUserView['status'] }) {
+  return status === 'active' ? <Badge tone="success">aktiv</Badge> : <Badge tone="danger">deaktiviert</Badge>
 }
 
-function accessLabel(user: AdminUserView): string {
+function AccessBadge({ user }: { readonly user: AdminUserView }) {
   if (user.invitationExpiresAt !== null) {
-    return `Einladung offen bis ${new Date(user.invitationExpiresAt).toLocaleString('de-DE')}`
+    return (
+      <Badge tone="accent">
+        Einladung offen bis {new Date(user.invitationExpiresAt).toLocaleString('de-DE')}
+      </Badge>
+    )
   }
-  return user.hasPassword ? 'lokales Passwort' : 'kein lokaler Zugang'
+  return user.hasPassword ? <Badge>lokales Passwort</Badge> : <Badge>kein lokaler Zugang</Badge>
 }
 
 /** Ein frisch erzeugter Einladungslink. Er steht genau hier und wird nirgends aufbewahrt. */
@@ -90,8 +101,7 @@ function CreateAccount({ me, onCreated }: { readonly me: MeResponse; readonly on
           })
       }}
     >
-      <div className="field">
-        <label htmlFor="konto-name">Anzeigename</label>
+      <Field id="konto-name" label="Anzeigename">
         <input
           id="konto-name"
           value={displayName}
@@ -101,9 +111,8 @@ function CreateAccount({ me, onCreated }: { readonly me: MeResponse; readonly on
             setDisplayName(event.target.value)
           }}
         />
-      </div>
-      <div className="field">
-        <label htmlFor="konto-adresse">E-Mail-Adresse (zugleich der Anmeldename)</label>
+      </Field>
+      <Field id="konto-adresse" label="E-Mail-Adresse (zugleich der Anmeldename)">
         <input
           id="konto-adresse"
           type="email"
@@ -113,9 +122,8 @@ function CreateAccount({ me, onCreated }: { readonly me: MeResponse; readonly on
             setEmail(event.target.value)
           }}
         />
-      </div>
-      <div className="field">
-        <label htmlFor="konto-weg">Uebergabe</label>
+      </Field>
+      <Field id="konto-weg" label="Uebergabe">
         <select
           id="konto-weg"
           value={mode}
@@ -126,12 +134,12 @@ function CreateAccount({ me, onCreated }: { readonly me: MeResponse; readonly on
           <option value="invitation">Befristeter Einladungslink</option>
           <option value="password">Initialpasswort</option>
         </select>
-      </div>
+      </Field>
       {mode === 'password' && (
-        <div className="field">
-          <label htmlFor="konto-passwort">
-            Initialpasswort (mindestens {MIN_PASSWORD_LENGTH} Zeichen, Wechsel bei der ersten Anmeldung)
-          </label>
+        <Field
+          id="konto-passwort"
+          label={`Initialpasswort (mindestens ${String(MIN_PASSWORD_LENGTH)} Zeichen, Wechsel bei der ersten Anmeldung)`}
+        >
           <input
             id="konto-passwort"
             type="password"
@@ -143,12 +151,12 @@ function CreateAccount({ me, onCreated }: { readonly me: MeResponse; readonly on
               setInitialPassword(event.target.value)
             }}
           />
-        </div>
+        </Field>
       )}
       <p>
-        <button className="button--primary" type="submit" disabled={busy}>
+        <Button variant="primary" icon={UserPlus} type="submit" busy={busy}>
           Konto anlegen
-        </button>
+        </Button>
       </p>
       {invitation !== null && <InvitationHint url={invitation} />}
       {error !== null && <Notice text={error} />}
@@ -157,60 +165,86 @@ function CreateAccount({ me, onCreated }: { readonly me: MeResponse; readonly on
 }
 
 /** Ruecksetzung auf ein neues Initialpasswort. Sie beendet jede Sitzung des Kontos. */
-function ResetPassword({
+function ResetPasswordDialog({
   me,
   user,
+  onClose,
   onDone,
 }: {
   readonly me: MeResponse
-  readonly user: AdminUserView
+  /** Das Konto, dessen Passwort zurueckgesetzt wird; `null` heisst: der Dialog ist geschlossen. */
+  readonly user: AdminUserView | null
+  readonly onClose: () => void
   readonly onDone: () => void
 }) {
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const fieldId = 'reset-passwort'
+
+  // Der Dialog bleibt fuer die ganze Tabelle derselbe Knoten - damit der Fokus verlaesslich zu seinem
+  // Ausloeser zurueckkehrt. Beim Wechsel des Kontos beginnt er trotzdem leer.
+  useEffect(() => {
+    setPassword('')
+    setError(null)
+  }, [user])
 
   return (
-    <form
-      className="stack card"
-      onSubmit={(event) => {
-        event.preventDefault()
-        setBusy(true)
-        setError(null)
-        resetUserPassword(me.csrfToken, { userId: user.id, password })
-          .then(() => {
-            setPassword('')
-            onDone()
-          })
-          .catch((cause: unknown) => {
-            setError(messageOf(cause, 'Das Passwort konnte nicht zurueckgesetzt werden.'))
-          })
-          .finally(() => {
-            setBusy(false)
-          })
-      }}
+    <Dialog
+      open={user !== null}
+      danger
+      title={user === null ? 'Passwort zuruecksetzen' : `Passwort von ${user.displayName} zuruecksetzen`}
+      onClose={onClose}
     >
-      <div className="field">
-        <label htmlFor={`reset-${user.id}`}>Neues Initialpasswort fuer {user.displayName}</label>
-        <input
-          id={`reset-${user.id}`}
-          type="password"
-          value={password}
-          autoComplete="new-password"
-          minLength={MIN_PASSWORD_LENGTH}
-          required
-          onChange={(event) => {
-            setPassword(event.target.value)
-          }}
-        />
-      </div>
-      <p>
-        <button className="button--primary" type="submit" disabled={busy}>
-          Passwort setzen
-        </button>
-      </p>
-      {error !== null && <Notice text={error} />}
-    </form>
+      {user !== null && (
+      <form
+        className="stack"
+        onSubmit={(event) => {
+          event.preventDefault()
+          setBusy(true)
+          setError(null)
+          resetUserPassword(me.csrfToken, { userId: user.id, password })
+            .then(() => {
+              setPassword('')
+              onDone()
+            })
+            .catch((cause: unknown) => {
+              setError(messageOf(cause, 'Das Passwort konnte nicht zurueckgesetzt werden.'))
+            })
+            .finally(() => {
+              setBusy(false)
+            })
+        }}
+      >
+        <p>
+          Alle bestehenden Sitzungen dieses Kontos enden. Beim naechsten Anmelden verlangt Canvaz sofort ein
+          eigenes Passwort. Uebergib den Wert ausserhalb der Anwendung.
+        </p>
+        <Field id={fieldId} label={`Neues Initialpasswort fuer ${user.displayName}`}>
+          <input
+            id={fieldId}
+            type="password"
+            value={password}
+            autoComplete="new-password"
+            minLength={MIN_PASSWORD_LENGTH}
+            required
+            onChange={(event) => {
+              setPassword(event.target.value)
+            }}
+          />
+        </Field>
+        <p className="actions">
+          <Button variant="primary" icon={KeyRound} type="submit" busy={busy}>
+            Passwort setzen
+          </Button>
+          <Button variant="quiet" onClick={onClose}>
+            Abbrechen
+          </Button>
+        </p>
+        {error !== null && <Notice text={error} />}
+      </form>
+      )}
+    </Dialog>
   )
 }
 
@@ -218,7 +252,8 @@ export function AdminUsers({ me }: { readonly me: MeResponse }) {
   const [users, setUsers] = useState<readonly AdminUserView[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [pendingId, setPendingId] = useState<string | null>(null)
-  const [resetFor, setResetFor] = useState<string | null>(null)
+  const [resetFor, setResetFor] = useState<AdminUserView | null>(null)
+  const [revokeFor, setRevokeFor] = useState<AdminUserView | null>(null)
   const [invitation, setInvitation] = useState<string | null>(null)
 
   const load = useCallback(() => {
@@ -274,9 +309,9 @@ export function AdminUsers({ me }: { readonly me: MeResponse }) {
         <Notice>
           <p>{error}</p>
           <p className="actions">
-            <button type="button" onClick={load}>
+            <Button icon={RotateCcw} onClick={load}>
               Erneut laden
-            </button>
+            </Button>
           </p>
         </Notice>
       )}
@@ -286,20 +321,21 @@ export function AdminUsers({ me }: { readonly me: MeResponse }) {
 
       <h3>Konten</h3>
       {invitation !== null && <InvitationHint url={invitation} />}
-      {users === null && <Loading text="Nutzer werden geladen …" />}
-      {users !== null && users.length === 0 && error === null && <Empty text="Es gibt noch keine Nutzer." />}
+      {users === null && <TableSkeleton columns={USER_COLUMNS} label="Nutzer werden geladen …" />}
+      {users !== null && users.length === 0 && error === null && (
+        <PageState kind="empty" title="Noch keine Konten" description="Es gibt noch keine Nutzer." />
+      )}
       {users !== null && users.length > 0 && (
         <div className="table-wrap">
           <table className="table">
             <caption className="visually-hidden">Alle Nutzer dieser Instanz</caption>
             <thead>
               <tr>
-                <th scope="col">Anzeigename</th>
-                <th scope="col">E-Mail</th>
-                <th scope="col">Status</th>
-                <th scope="col">Rolle</th>
-                <th scope="col">Zugang</th>
-                <th scope="col">Aktion</th>
+                {USER_COLUMNS.map((column) => (
+                  <th key={column} scope="col">
+                    {column}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -314,13 +350,17 @@ export function AdminUsers({ me }: { readonly me: MeResponse }) {
                   <tr key={user.id}>
                     <td>{user.displayName}</td>
                     <td>{user.email ?? '—'}</td>
-                    <td>{statusLabel(user.status)}</td>
-                    <td>{user.isSystemAdmin ? 'Systemadmin' : 'Nutzer'}</td>
-                    <td>{accessLabel(user)}</td>
+                    <td>
+                      <StatusBadge status={user.status} />
+                    </td>
+                    <td>{user.isSystemAdmin ? <Badge tone="accent">Systemadmin</Badge> : <Badge>Nutzer</Badge>}</td>
+                    <td>
+                      <AccessBadge user={user} />
+                    </td>
                     <td>
                       <span className="actions">
-                        <button
-                          type="button"
+                        <Button
+                          icon={activate ? UserCheck : UserX}
                           onClick={() => {
                             run(
                               user.id,
@@ -331,62 +371,55 @@ export function AdminUsers({ me }: { readonly me: MeResponse }) {
                               'Die Aenderung konnte nicht gespeichert werden.',
                             )
                           }}
-                          disabled={(isSelf && !activate) || busy}
+                          disabled={isSelf && !activate}
+                          busy={busy}
                           aria-describedby={reasonId}
+                          aria-label={
+                            activate
+                              ? `${user.displayName} aktivieren`
+                              : `${user.displayName} deaktivieren`
+                          }
                         >
-                          {activate ? `${user.displayName} aktivieren` : `${user.displayName} deaktivieren`}
-                        </button>
-                        <button
-                          type="button"
+                          {activate ? 'Aktivieren' : 'Deaktivieren'}
+                        </Button>
+                        <Button
+                          icon={Mail}
                           onClick={() => {
                             invite(user)
                           }}
-                          disabled={busy}
+                          busy={busy}
                           aria-label={`Einladung fuer ${user.displayName} erzeugen`}
                         >
                           Einladung erzeugen
-                        </button>
-                        <button
-                          type="button"
+                        </Button>
+                        <Button
+                          icon={KeyRound}
                           onClick={() => {
-                            setResetFor(resetFor === user.id ? null : user.id)
+                            setResetFor(user)
                           }}
-                          disabled={busy}
+                          busy={busy}
                           aria-label={`Passwort von ${user.displayName} zuruecksetzen`}
                         >
                           Passwort zuruecksetzen
-                        </button>
+                        </Button>
                         {user.invitationExpiresAt !== null && (
-                          <button
-                            type="button"
+                          <Button
+                            variant="danger"
+                            icon={MailX}
                             onClick={() => {
-                              run(
-                                user.id,
-                                revokeUserInvitation(me.csrfToken, user.id),
-                                'Die Einladung konnte nicht widerrufen werden.',
-                              )
+                              setRevokeFor(user)
                             }}
-                            disabled={busy}
+                            busy={busy}
                             aria-label={`Einladung fuer ${user.displayName} widerrufen`}
                           >
                             Einladung widerrufen
-                          </button>
+                          </Button>
                         )}
                       </span>
                       {reasonId !== undefined && (
                         <p className="hint" id={reasonId}>
                           Ein Systemadmin kann sich nicht selbst deaktivieren.
                         </p>
-                      )}
-                      {resetFor === user.id && (
-                        <ResetPassword
-                          me={me}
-                          user={user}
-                          onDone={() => {
-                            setResetFor(null)
-                            load()
-                          }}
-                        />
                       )}
                     </td>
                   </tr>
@@ -396,6 +429,59 @@ export function AdminUsers({ me }: { readonly me: MeResponse }) {
           </table>
         </div>
       )}
+
+      <ResetPasswordDialog
+        me={me}
+        user={resetFor}
+        onClose={() => {
+          setResetFor(null)
+        }}
+        onDone={() => {
+          setResetFor(null)
+          load()
+        }}
+      />
+
+      <Dialog
+        open={revokeFor !== null}
+        danger
+        title="Einladung widerrufen"
+        onClose={() => {
+          setRevokeFor(null)
+        }}
+      >
+        <p>
+          Der bereits versendete Link fuer <strong>{revokeFor?.displayName}</strong> gilt danach nicht mehr
+          und laesst sich nicht wiederherstellen. Fuer einen neuen Zugang wird eine neue Einladung erzeugt.
+        </p>
+        <p className="actions">
+          <Button
+            variant="danger"
+            icon={MailX}
+            onClick={() => {
+              const user = revokeFor
+              setRevokeFor(null)
+              if (user !== null) {
+                run(
+                  user.id,
+                  revokeUserInvitation(me.csrfToken, user.id),
+                  'Die Einladung konnte nicht widerrufen werden.',
+                )
+              }
+            }}
+          >
+            Einladung widerrufen
+          </Button>
+          <Button
+            variant="quiet"
+            onClick={() => {
+              setRevokeFor(null)
+            }}
+          >
+            Abbrechen
+          </Button>
+        </p>
+      </Dialog>
     </section>
   )
 }

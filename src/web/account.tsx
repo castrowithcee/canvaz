@@ -10,14 +10,18 @@
  *
  * Kein Passwort und kein Einladungswert wird hier gespeichert, gemerkt oder in die Adresszeile geschrieben.
  * Der Einladungswert steht im Fragment der aufgerufenen Adresse und wird nach dem Lesen daraus entfernt.
+ *
+ * Jede Ansicht hat genau **eine** Hauptaktion: den Weg, der hier weiterfuehrt. Der Weg ueber den Identity
+ * Provider steht daneben als gewoehnliche Aktion.
  */
 
 import { useCallback, useEffect, useState } from 'react'
+import { LogIn, KeyRound } from 'lucide-react'
 
 import type { AuthMethodsResponse, MeResponse } from '../contracts/api.js'
 import { AUTH_LOGIN_PATH, MIN_PASSWORD_LENGTH } from '../contracts/api.js'
 import { ApiError, changePassword, fetchAuthMethods, localLogin, redeemInvitation } from './api.js'
-import { Notice } from './ui.js'
+import { actionClass, Button, Field, Notice } from './ui.js'
 
 function messageOf(cause: unknown, fallback: string): string {
   return cause instanceof ApiError ? cause.message : fallback
@@ -37,8 +41,7 @@ function PasswordField({
   readonly onChange: (value: string) => void
 }) {
   return (
-    <div className="field">
-      <label htmlFor={id}>{label}</label>
+    <Field id={id} label={label}>
       <input
         id={id}
         type="password"
@@ -50,7 +53,7 @@ function PasswordField({
           onChange(event.target.value)
         }}
       />
-    </div>
+    </Field>
   )
 }
 
@@ -99,9 +102,9 @@ function ForcedPasswordChange({ email, onChanged }: { readonly email: string; re
         onChange={setNewPassword}
       />
       <p>
-        <button className="button--primary" type="submit" disabled={busy}>
+        <Button variant="primary" icon={KeyRound} type="submit" busy={busy}>
           Passwort setzen und anmelden
-        </button>
+        </Button>
       </p>
       {error !== null && <Notice text={error} />}
     </form>
@@ -141,8 +144,7 @@ function LocalLogin({ onSignedIn }: { readonly onSignedIn: () => void }) {
           })
       }}
     >
-      <div className="field">
-        <label htmlFor="anmelde-adresse">E-Mail-Adresse</label>
+      <Field id="anmelde-adresse" label="E-Mail-Adresse">
         <input
           id="anmelde-adresse"
           type="email"
@@ -153,7 +155,7 @@ function LocalLogin({ onSignedIn }: { readonly onSignedIn: () => void }) {
             setEmail(event.target.value)
           }}
         />
-      </div>
+      </Field>
       <PasswordField
         id="anmelde-passwort"
         label="Passwort"
@@ -162,9 +164,9 @@ function LocalLogin({ onSignedIn }: { readonly onSignedIn: () => void }) {
         onChange={setPassword}
       />
       <p>
-        <button className="button--primary" type="submit" disabled={busy}>
+        <Button variant="primary" icon={LogIn} type="submit" busy={busy}>
           Anmelden
-        </button>
+        </Button>
       </p>
       {error !== null && <Notice text={error} />}
     </form>
@@ -195,7 +197,8 @@ export function LoginView({ error, onSignedIn }: { readonly error: string | null
         <section aria-labelledby="anmeldung-extern">
           <h2 id="anmeldung-extern">Oder ueber den Identity Provider</h2>
           <p>
-            <a className="button button--primary" href={AUTH_LOGIN_PATH}>
+            {/* Gewoehnliche Aktion: die Hauptaktion dieser Seite ist und bleibt die lokale Anmeldung. */}
+            <a className={actionClass()} href={AUTH_LOGIN_PATH}>
               Mit Identity Provider anmelden
             </a>
           </p>
@@ -266,9 +269,9 @@ export function InviteApp() {
             onChange={setPassword}
           />
           <p>
-            <button className="button--primary" type="submit" disabled={busy}>
+            <Button variant="primary" icon={KeyRound} type="submit" busy={busy}>
               Passwort setzen und anmelden
-            </button>
+            </Button>
           </p>
           {error !== null && <Notice text={error} />}
         </form>
@@ -340,9 +343,9 @@ export function PasswordSettings({ me, onChanged }: { readonly me: MeResponse; r
           onChange={setNewPassword}
         />
         <p>
-          <button className="button--primary" type="submit" disabled={busy}>
+          <Button variant="primary" icon={KeyRound} type="submit" busy={busy}>
             Passwort wechseln
-          </button>
+          </Button>
         </p>
         {done && error === null && <Notice kind="success" text="Das Passwort wurde gewechselt." />}
         {error !== null && <Notice text={error} />}
