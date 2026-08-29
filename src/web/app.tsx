@@ -23,6 +23,13 @@
  * temporaere Ebene mit Fokusfang, Escape und Fokusrueckgabe von der Plattform. Umgeschaltet wird per CSS;
  * das Javascript entscheidet allein, worauf der eine Schalter der Kopfzeile wirkt.
  *
+ * ## Der Editor tritt aus der Huelle heraus
+ *
+ * Die Boardroute zeigt den Editor im Vollbild; Kopfzeile und Haupt-Seitenleiste treten dafuer ab. Was ein
+ * Board braucht, traegt er selbst: seine Kopfzeile den Rueckweg in den zuletzt gezeigten
+ * Bibliothekskontext, seine Board-Sidebar die Boardaufgaben. Eine eigene Detailseite gibt es dafuer nicht
+ * mehr - fuer dieselbe Handlung soll es genau einen Ort geben.
+ *
  * Der Anwendungsserver liefert fuer jeden unbekannten GET-Pfad dieselbe `index.html` (siehe
  * `server/http.ts`); ein Neuladen tief im Baum landet deshalb wieder in derselben Ansicht.
  */
@@ -36,7 +43,6 @@ import { InviteApp, LoginView, PasswordSettings } from './account.js'
 import { AdminUsers } from './admin-users.js'
 import { ApiError, fetchMe, fetchWorkspaces, logout } from './api.js'
 import { BoardEditor } from './board/lazy-editor.js'
-import { BoardDetails } from './board-details.js'
 import { BoardTrash } from './board-trash.js'
 import { Boards } from './boards.js'
 import { Dashboard } from './dashboard.js'
@@ -44,8 +50,8 @@ import type { Explorer } from './explorer.js'
 import { ExplorerTree, useExplorer } from './explorer.js'
 import { GuestApp } from './guest.js'
 import { Drawer, Menu, MenuItem, MenuLinkItem } from './overlays.js'
-import type { AppRoute } from './router.js'
-import { Link, navigateBack, routeHref, useRoute } from './router.js'
+import type { AppRoute, BoardPanelView } from './router.js'
+import { Link, navigate, navigateBack, routeHref, useRoute } from './router.js'
 import { actionClass, Button, IconButton, Loading, Notice, PageState } from './ui.js'
 import { WorkspaceMembers, WorkspaceOverview, WorkspaceSettings } from './workspaces.js'
 
@@ -349,7 +355,6 @@ function Content({
     case 'mitglieder':
     case 'einstellungen':
     case 'papierkorb':
-    case 'boarddetails':
     case 'board': {
       if (workspace === null) {
         return <NotFound text={UNKNOWN_WORKSPACE} />
@@ -362,17 +367,6 @@ function Content({
       }
       if (route.kind === 'papierkorb') {
         return <BoardTrash me={me} workspace={workspace} onChanged={onBoardsChanged} />
-      }
-      if (route.kind === 'boarddetails') {
-        return (
-          <BoardDetails
-            me={me}
-            workspace={workspace}
-            workspaces={workspaces}
-            boardId={route.boardId}
-            onChanged={onBoardsChanged}
-          />
-        )
       }
       return (
         <Boards
@@ -498,12 +492,35 @@ function Shell({
     )
   }
 
-  // Der Editor braucht die ganze Flaeche; Kopfzeile und Seitenleiste treten dafuer ab.
+  // Der Editor braucht die ganze Flaeche; Kopfzeile und Haupt-Seitenleiste treten dafuer ab. Seine eigene
+  // Kopfzeile traegt den Rueckweg, und die Board-Sidebar traegt die Boardaufgaben (`board/board-view.tsx`).
   if (route.kind === 'board' && routeWorkspace !== null) {
     const back: AppRoute = {
       kind: 'arbeitsbereich',
       workspaceId: routeWorkspace.id,
       folder: library !== null && library.workspaceId === routeWorkspace.id ? library.folder : null,
+    }
+    /**
+     * Der offene Bereich der Board-Sidebar steht in der Adresse.
+     *
+     * Oeffnen legt einen Historieneintrag an - `Zurueck` schliesst die Sidebar damit sinnvoll. Ein
+     * Bereichswechsel darin ersetzt ihn, sonst muesste man sich durch die Bereiche zurueckklicken.
+     * Geschlossen wird ueber genau diesen Eintrag; fehlt er (geteilter Link direkt auf einen Bereich),
+     * tritt die Boardadresse ohne Bereich an seine Stelle.
+     */
+    const openPanel = (panel: BoardPanelView | null): void => {
+      const target: AppRoute = {
+        kind: 'board',
+        workspaceId: routeWorkspace.id,
+        boardId: route.boardId,
+        version: route.version,
+        panel,
+      }
+      if (panel === null) {
+        navigateBack(target)
+        return
+      }
+      navigate(target, { replace: route.panel !== null })
     }
     return (
       <Suspense
@@ -515,12 +532,34 @@ function Shell({
         }
       >
         <BoardEditor
-          key={`${route.boardId}:${String(route.version ?? 0)}`}
+          /*
+           * Der Arbeitsbereich gehoert in die Identitaet dieser Ansicht: ein Wechsel schliesst serverseitig
+           * jede offene Verbindung des Boards (dokumentierte Folge). Ohne den Neuaufbau bliebe der Editor
+           * mit dem abgewiesenen Raum zurueck und meldete das Board als nicht gefunden.
+           */
+          key={`${routeWorkspace.id}:${route.boardId}:${String(route.version ?? 0)}`}
           boardId={route.boardId}
           csrfToken={me.csrfToken}
           workspaceArchived={routeWorkspace.status === 'archived'}
           previewVersion={route.version}
           guestName={null}
+          member={{
+            me,
+            workspace: routeWorkspace,
+            workspaces,
+            panel: route.panel,
+            onPanel: openPanel,
+            onChanged: explorer.reload,
+            onPreview: (version) => {
+              navigate({
+                kind: 'board',
+                workspaceId: routeWorkspace.id,
+                boardId: route.boardId,
+                version,
+                panel: version === null ? route.panel : null,
+              })
+            },
+          }}
           onClose={() => {
             navigateBack(back)
           }}

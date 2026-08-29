@@ -165,7 +165,7 @@ function BoardRow({
         <span className="tree__twisty tree__twisty--leer" aria-hidden="true" />
         <Link
           className="tree__label"
-          route={{ kind: 'board', workspaceId, boardId: board.id, version: null }}
+          route={{ kind: 'board', workspaceId, boardId: board.id, version: null, panel: null }}
           current={open}
         >
           <SquarePen size={16} aria-hidden="true" />

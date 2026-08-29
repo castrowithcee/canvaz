@@ -18,6 +18,16 @@ import type { DashboardFilterView } from '../contracts/api.js'
 import { DASHBOARD_FILTER_PARAM } from '../contracts/api.js'
 import { parseDashboardFilter } from '../domain/board/model.js'
 
+/**
+ * Bereiche der Board-Sidebar.
+ *
+ * Drei statt einer langen Rolle: die Uebersicht traegt Ablage und Lebenszyklus, die Freigaben das interne
+ * und oeffentliche Teilen, die Versionen Verlauf, Vorschau, Import und Export.
+ */
+export type BoardPanelView = 'uebersicht' | 'freigaben' | 'versionen'
+
+const BOARD_PANELS: readonly BoardPanelView[] = ['uebersicht', 'freigaben', 'versionen']
+
 export type AppRoute =
   /**
    * Einstieg nach der Anmeldung: das Dashboard. `filter` ist die aktive Sicht auf seine Liste und steht
@@ -39,18 +49,18 @@ export type AppRoute =
   | { readonly kind: 'papierkorb'; readonly workspaceId: string }
   | { readonly kind: 'einstellungen'; readonly workspaceId: string }
   /**
-   * Detailansicht genau eines Boards: seine Angaben und alle seine Aktionen an einer Stelle.
+   * Boardeditor im Vollbild. `version` gesetzt heisst: Read-only-Vorschau genau dieser Version.
    *
-   * Eine eigene Adresse und kein Zustand der Boardliste - sie ist teilbar, uebersteht ein Neuladen und
-   * traegt kein Freigabetoken. Welche Aktion sie anbietet, entscheidet weiterhin der Server.
+   * `panel` ist der offene Bereich der Board-Sidebar und steht damit in der Adresse: er ist teilbar,
+   * uebersteht ein Neuladen, und ein `history.back()` schliesst die Sidebar wieder. `null` heisst
+   * geschlossen.
    */
-  | { readonly kind: 'boarddetails'; readonly workspaceId: string; readonly boardId: string }
-  /** Boardeditor im Vollbild. `version` gesetzt heisst: Read-only-Vorschau genau dieser Version. */
   | {
       readonly kind: 'board'
       readonly workspaceId: string
       readonly boardId: string
       readonly version: number | null
+      readonly panel: BoardPanelView | null
     }
   /** Eigene Kontoeinstellungen. */
   | { readonly kind: 'konto' }
@@ -69,6 +79,7 @@ const ACCOUNT_SEGMENT = 'konto'
 const ADMIN_SEGMENT = 'verwaltung'
 const ADMIN_ACCOUNTS_SEGMENT = 'konten'
 const VERSION_PARAM = 'version'
+const PANEL_PARAM = 'bereich'
 const FOLDER_PARAM = 'ordner'
 
 /** Gewaehlter Ordner aus der Adresse. Ein leerer Wert ist keine Wahl, sondern die ganze Liste. */
@@ -93,6 +104,12 @@ function parseVersion(search: string): number | null {
   }
   const version = Number(raw)
   return Number.isInteger(version) && version > 0 ? version : null
+}
+
+/** Offener Bereich der Board-Sidebar aus der Adresse. Ein unbekannter Wert ist kein Fehler, sondern zu. */
+function parseBoardPanel(search: string): BoardPanelView | null {
+  const raw = new URLSearchParams(search).get(PANEL_PARAM)
+  return BOARD_PANELS.find((panel) => panel === raw) ?? null
 }
 
 /**
@@ -130,10 +147,18 @@ export function parseRoute(href: string): AppRoute {
       return { kind: 'papierkorb', workspaceId: second }
     }
     if (third === BOARDS_SEGMENT && fourth !== undefined && segments.length === 4) {
-      return { kind: 'board', workspaceId: second, boardId: fourth, version: parseVersion(search) }
+      return {
+        kind: 'board',
+        workspaceId: second,
+        boardId: fourth,
+        version: parseVersion(search),
+        panel: parseBoardPanel(search),
+      }
     }
+    // Die fruehere Detailseite gibt es nicht mehr; ihre Handlungen stehen in der Board-Sidebar. Ein
+    // geteilter alter Link fuehrt deshalb auf dasselbe Board mit geoeffneter Uebersicht.
     if (third === BOARDS_SEGMENT && fourth !== undefined && fifth === DETAILS_SEGMENT && segments.length === 5) {
-      return { kind: 'boarddetails', workspaceId: second, boardId: fourth }
+      return { kind: 'board', workspaceId: second, boardId: fourth, version: null, panel: 'uebersicht' }
     }
   }
   return { kind: 'unbekannt' }
@@ -159,11 +184,17 @@ export function routeHref(route: AppRoute): string {
       return `${workspace(route.workspaceId)}/${SETTINGS_SEGMENT}`
     case 'papierkorb':
       return `${workspace(route.workspaceId)}/${TRASH_SEGMENT}`
-    case 'boarddetails':
-      return `${workspace(route.workspaceId)}/${BOARDS_SEGMENT}/${encodeURIComponent(route.boardId)}/${DETAILS_SEGMENT}`
     case 'board': {
       const path = `${workspace(route.workspaceId)}/${BOARDS_SEGMENT}/${encodeURIComponent(route.boardId)}`
-      return route.version === null ? path : `${path}?${VERSION_PARAM}=${String(route.version)}`
+      const query = new URLSearchParams()
+      if (route.version !== null) {
+        query.set(VERSION_PARAM, String(route.version))
+      }
+      if (route.panel !== null) {
+        query.set(PANEL_PARAM, route.panel)
+      }
+      const search = query.toString()
+      return search === '' ? path : `${path}?${search}`
     }
     case 'konto':
       return `/${ACCOUNT_SEGMENT}`

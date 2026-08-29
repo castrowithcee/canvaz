@@ -1,10 +1,9 @@
 /**
  * Freigabeverwaltung eines Boards: interne Freigaben, Ownerschaft und oeffentliche Gastlinks.
  *
- * Bewusst kein modaler Dialog, sondern ein Abschnitt im Fluss der Seite - dieselbe Entscheidung wie bei den
- * Arbeitsbereichen und der Boardliste: kein Fokuskaefig, keine eigene Escape-Behandlung, jede Ueberschrift
- * bleibt in der Dokumentstruktur. Geoeffnet wird er aus der Boardzeile, geschlossen mit einer benannten
- * Schaltflaeche.
+ * Ein Abschnitt im Fluss seiner Umgebung und kein eigener Dialog: die Ueberschriften bleiben in der
+ * Dokumentstruktur, und weder Fokuskaefig noch Escape werden hier nachgebaut. Der Abschnitt steht heute im
+ * Bereich "Freigaben" der Board-Sidebar (`board-panel.tsx`); sie traegt Name und Schliessweg.
  *
  * Die Oberflaeche entscheidet nichts. Sie bietet an, was der Server laut seiner Antwort ohnehin traegt, und
  * zeigt jede Ablehnung als Text - der Owner steht in `board.ownerUserId`, die Freigaben kommen aus
@@ -690,12 +689,10 @@ type LinkState =
 export function BoardShare({
   me,
   boardId,
-  onClose,
   onChanged,
 }: {
   readonly me: MeResponse
   readonly boardId: string
-  readonly onClose: () => void
   readonly onChanged: () => void
 }) {
   const [state, setState] = useState<
@@ -745,20 +742,11 @@ export function BoardShare({
     onChanged()
   }
 
-  const closeButton = (
-    <p>
-      <button type="button" onClick={onClose}>
-        Freigaben schliessen
-      </button>
-    </p>
-  )
-
   if (state.kind === 'loading') {
     return (
       <section aria-labelledby="board-share-heading">
         <h5 id="board-share-heading">Freigaben</h5>
         <Loading text="Freigaben werden geladen …" />
-        {closeButton}
       </section>
     )
   }
@@ -767,7 +755,6 @@ export function BoardShare({
       <section aria-labelledby="board-share-heading">
         <h5 id="board-share-heading">Freigaben</h5>
         <Notice text={state.message} />
-        {closeButton}
       </section>
     )
   }
@@ -786,7 +773,6 @@ export function BoardShare({
   return (
     <section aria-labelledby="board-share-heading">
       <h5 id="board-share-heading">Freigaben von {board.title}</h5>
-      {closeButton}
       <p>
         Owner: <strong>{board.ownerDisplayName}</strong>
         {board.ownerUserId === me.user.id && <> (du)</>}
@@ -855,7 +841,6 @@ export function BoardShare({
       {links.kind === 'ready' && (
         <ShareLinks me={me} board={board} links={links.links} onChanged={reload} />
       )}
-      {closeButton}
     </section>
   )
 }

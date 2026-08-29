@@ -1015,12 +1015,18 @@
     margin: 0;
   }
 
-  /* Boardeditor: die Zeichenflaeche bekommt die volle Hoehe, die Leiste bleibt darueber sichtbar. */
+  /*
+   * Boardeditor: eine kompakte Arbeitsleiste ueber der Zeichenflaeche, daneben die Board-Sidebar.
+   *
+   * Die Leiste traegt drei Gruppen - Rueckweg und Titel, verdichtete Zustaende, Boardaktionen. Sie waechst
+   * nicht mit ihrem Inhalt: die Zustandsgruppe darf schrumpfen, der Titel wird gekuerzt, und die Aktionen
+   * behalten ihre Groesse. Damit bleibt die Zeichenflaeche auch auf einem schmalen Fenster die Hauptsache.
+   */
   .board {
     background: var(--color-canvas);
     display: flex;
     flex-direction: column;
-    height: 100vh;
+    height: 100dvh;
   }
 
   .board__bar {
@@ -1030,41 +1036,171 @@
     display: flex;
     flex-wrap: wrap;
     gap: --spacing(2) --spacing(3);
-    padding: --spacing(2) --spacing(4);
+    padding: --spacing(2) --spacing(3);
+  }
+
+  .board__lead {
+    align-items: center;
+    display: flex;
+    flex: 1 1 12rem;
+    gap: --spacing(1);
+    min-width: 0;
   }
 
   .board__title {
     font-size: var(--text-lg);
     margin: 0;
-    margin-right: auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  .board__state,
-  .board__peers {
-    color: var(--color-text-muted);
-    font-size: var(--text-sm);
-    margin: 0;
+  .board__lead .inline-name {
+    flex: 1;
+    min-width: 0;
   }
 
-  /* Der Modus wird nicht ueberlesen: er entscheidet, was die Ansicht ueberhaupt anbietet. */
-  .board__mode {
-    background: var(--color-accent-soft);
-    border: 1px solid var(--color-accent);
+  .board__states {
+    align-items: center;
+    display: flex;
+    flex: 0 1 auto;
+    flex-wrap: wrap;
+    gap: --spacing(2);
+    min-width: 0;
+  }
+
+  .board__actions {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: --spacing(2);
+    margin-left: auto;
+  }
+
+  /*
+   * Der eine Zustand, der jetzt zaehlt. Kurz und farbig genug, um ihn im Blick zu behalten; der
+   * ausformulierte Satz steht als Titel daran und wird nur bei Bedarf gelesen.
+   */
+  .board__status {
     border-radius: var(--radius-md);
-    color: var(--color-text);
     font-size: var(--text-sm);
     font-weight: 600;
     margin: 0;
     padding: 0.15rem --spacing(2);
+    white-space: nowrap;
+  }
+
+  .board__status--neutral {
+    background: var(--color-surface-muted);
+    color: var(--color-text-muted);
+  }
+
+  .board__status--accent {
+    background: var(--color-accent-soft);
+    color: var(--color-text);
+  }
+
+  .board__status--success {
+    background: var(--color-success-soft);
+    color: var(--color-text);
+  }
+
+  .board__status--danger {
+    background: var(--color-danger-soft);
+    color: var(--color-text);
+  }
+
+  .board__peers {
+    align-items: center;
+    color: var(--color-text-muted);
+    display: flex;
+    font-size: var(--text-sm);
+    gap: --spacing(1);
+    margin: 0;
+  }
+
+  /* Zeichenflaeche und Board-Sidebar teilen sich die Restflaeche. */
+  .board__body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
   }
 
   .board__canvas {
     flex: 1;
     min-height: 0;
+    min-width: 0;
   }
 
-  .board .notice {
-    margin: --spacing(2) --spacing(4);
+  /* Nur die Meldungen des Editors selbst; die der Board-Sidebar stehen in deren Polsterung. */
+  .board > .notice,
+  .board > .confirm {
+    margin: --spacing(2) --spacing(3);
+  }
+
+  /*
+   * Die Board-Sidebar ist derselbe Knoten wie ihr Sheet: ein natives `dialog`.
+   *
+   * Schmal bleibt sie geschlossen und wird ueber `showModal()` zur temporaeren Ebene - Fokusfang, Escape,
+   * Fokusrueckgabe und der `inert` gestellte Hintergrund kommen dann von der Plattform, und die
+   * Tastenkuerzel der Zeichenflaeche dahinter loesen nicht mehr aus. Breit macht die Regel weiter unten
+   * daraus eine gewoehnliche Spalte neben der Zeichenflaeche.
+   */
+  .board__panel {
+    background: var(--color-surface);
+    border: 0;
+    border-left: 1px solid var(--color-border);
+    color: var(--color-text);
+    font-size: var(--text-sm);
+    height: 100dvh;
+    inset: 0 0 0 auto;
+    max-height: 100dvh;
+    max-width: min(26rem, 100vw);
+    overflow-y: auto;
+    padding: --spacing(4);
+    width: 100%;
+  }
+
+  .board__panel::backdrop {
+    background: rgb(0 0 0 / 45%);
+  }
+
+  /* Die Bereiche der Sidebar: eine Gruppe gleichrangiger Schalter, der aktive ist markiert. */
+  .board__sections {
+    display: flex;
+    flex-wrap: wrap;
+    gap: --spacing(1);
+    margin-bottom: --spacing(4);
+  }
+
+  .board__section {
+    align-items: center;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    color: var(--color-text-muted);
+    cursor: pointer;
+    display: inline-flex;
+    font: inherit;
+    font-weight: 600;
+    gap: --spacing(2);
+    min-height: var(--spacing-touch);
+    padding: --spacing(1) --spacing(3);
+  }
+
+  .board__section:hover {
+    background: var(--color-surface-muted);
+  }
+
+  .board__section--aktiv {
+    background: var(--color-accent-soft);
+    border-color: var(--color-accent);
+    color: var(--color-text);
+  }
+
+  .board__panel .details,
+  .board__panel .table-wrap {
+    font-size: var(--text-sm);
   }
 
   /* ------------------------------------------------------ Ansicht: Explorer */
@@ -1283,6 +1419,39 @@
 
     .shell {
       padding: --spacing(6) --spacing(4);
+    }
+  }
+
+  /* Sehr schmal: das Sheet nimmt die ganze Flaeche - daneben bliebe ohnehin nichts Bedienbares stehen. */
+  @media (width < 30rem) {
+    .board__panel {
+      max-width: none;
+    }
+  }
+
+  /*
+   * Ab hier ist die Board-Sidebar eine angedockte Spalte statt eines Sheets.
+   *
+   * Die Schwelle liegt hoeher als die der Haupt-Seitenleiste: erst ab dieser Breite bleibt neben 22rem
+   * Sidebar noch genug Zeichenflaeche uebrig. Angedockt verdraengt sie nichts, sondern nimmt eigenen Platz
+   * im Raster - die Bedienelemente von Excalidraw bleiben damit sichtbar, und die Zeichenflaeche vermisst
+   * sich ueber ihren eigenen Beobachter neu.
+   */
+  @media (width >= 64rem) {
+    .board--panel .board__panel,
+    .board--panel .board__panel:not([open]) {
+      border-left: 1px solid var(--color-border);
+      display: block;
+      /* Im Dokument steht die Sidebar vor der Zeichenflaeche, gezeigt wird sie rechts daneben. */
+      order: 1;
+      flex: 0 0 22rem;
+      height: auto;
+      inset: auto;
+      margin: 0;
+      max-height: none;
+      max-width: none;
+      position: static;
+      width: 22rem;
     }
   }
 

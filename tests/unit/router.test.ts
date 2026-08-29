@@ -21,9 +21,22 @@ const ROUTES: readonly (readonly [string, AppRoute])[] = [
   ['/arbeitsbereiche/w-1/mitglieder', { kind: 'mitglieder', workspaceId: 'w-1' }],
   ['/arbeitsbereiche/w-1/einstellungen', { kind: 'einstellungen', workspaceId: 'w-1' }],
   ['/arbeitsbereiche/w-1/papierkorb', { kind: 'papierkorb', workspaceId: 'w-1' }],
-  ['/arbeitsbereiche/w-1/boards/b-2/details', { kind: 'boarddetails', workspaceId: 'w-1', boardId: 'b-2' }],
-  ['/arbeitsbereiche/w-1/boards/b-2', { kind: 'board', workspaceId: 'w-1', boardId: 'b-2', version: null }],
-  ['/arbeitsbereiche/w-1/boards/b-2?version=7', { kind: 'board', workspaceId: 'w-1', boardId: 'b-2', version: 7 }],
+  [
+    '/arbeitsbereiche/w-1/boards/b-2',
+    { kind: 'board', workspaceId: 'w-1', boardId: 'b-2', version: null, panel: null },
+  ],
+  [
+    '/arbeitsbereiche/w-1/boards/b-2?version=7',
+    { kind: 'board', workspaceId: 'w-1', boardId: 'b-2', version: 7, panel: null },
+  ],
+  [
+    '/arbeitsbereiche/w-1/boards/b-2?bereich=freigaben',
+    { kind: 'board', workspaceId: 'w-1', boardId: 'b-2', version: null, panel: 'freigaben' },
+  ],
+  [
+    '/arbeitsbereiche/w-1/boards/b-2?version=7&bereich=versionen',
+    { kind: 'board', workspaceId: 'w-1', boardId: 'b-2', version: 7, panel: 'versionen' },
+  ],
   ['/konto', { kind: 'konto' }],
   ['/verwaltung/konten', { kind: 'konten' }],
 ]
@@ -52,6 +65,29 @@ describe('Pfadschema', () => {
       workspaceId: 'w-1',
       boardId: 'b-2',
       version: null,
+      panel: null,
+    })
+  })
+
+  it('nimmt einen unbekannten Sidebarbereich als geschlossene Sidebar', () => {
+    expect(parseRoute('/arbeitsbereiche/w-1/boards/b-2?bereich=irgendwas')).toEqual({
+      kind: 'board',
+      workspaceId: 'w-1',
+      boardId: 'b-2',
+      version: null,
+      panel: null,
+    })
+  })
+
+  // Die fruehere Detailseite ist in der Board-Sidebar aufgegangen. Ein alter geteilter Link darf deshalb
+  // nicht ins Leere laufen, sondern fuehrt auf dasselbe Board mit geoeffneter Uebersicht.
+  it('fuehrt einen alten Boarddetail-Link auf das Board mit geoeffneter Uebersicht', () => {
+    expect(parseRoute('/arbeitsbereiche/w-1/boards/b-2/details')).toEqual({
+      kind: 'board',
+      workspaceId: 'w-1',
+      boardId: 'b-2',
+      version: null,
+      panel: 'uebersicht',
     })
   })
 

@@ -22,12 +22,29 @@
  * weiter gesichert. Sichtbar sind ausserdem der laufende Versuch, der erfolgreiche Abgleich nach der
  * Wiederaufnahme und jede benannt abgelehnte Nachricht.
  *
+ * ## Kopfzeile und Board-Sidebar
+ *
+ * Die Kopfzeile ist eine Arbeitsleiste und keine Statusseite: Rueckweg, Titel mit Inline-Umbenennung, **ein**
+ * verdichteter Zustand (`board-status.ts`), Presence und die Boardaktionen. Sie wiederholt nicht, was schon
+ * dasteht - ausformuliert wird nur, was Aufmerksamkeit verlangt, und nur das wird Hilfsmitteln angekuendigt.
+ *
+ * Alles Umfangreichere - Ablage, Arbeitsbereichswechsel, Freigaben, Versionen, Import/Export, Archiv und
+ * Papierkorb - steht in der Board-Sidebar (`board-panel.tsx`) neben der Zeichenflaeche. Sie ist auf jeder
+ * Breite derselbe Knoten: breit eine angedockte Spalte, schmal ein modales Sheet mit Fokusfang, Escape und
+ * Fokusrueckgabe von der Plattform. Welcher Bereich offen ist, steht in der Adresse; `Zurueck` schliesst.
+ *
  * ## Ein Editor fuer Mitglieder und Gaeste
  *
  * Dieselbe Ansicht traegt beide Wege. Sie kennt vom Board nur Titel und Status - genau das, was in beiden
  * Antwortformen von `GET /api/boards/scene` steht - und verzweigt auf `viewer`, statt aus einer Gastantwort
- * Felder zu lesen, die es dort nicht gibt. Ein Gast bekommt keinen Weg zurueck: es gibt fuer ihn keine
- * Boardliste, zu der er zurueckkehren koennte.
+ * Felder zu lesen, die es dort nicht gibt. Ein Gast bekommt keinen Weg zurueck und keine Board-Sidebar: es
+ * gibt fuer ihn weder eine Boardliste noch einen Arbeitsbereich, und `member` bleibt fuer ihn `null`.
+ *
+ * ## Kein stiller Datenverlust
+ *
+ * Solange Arbeit nur im Browser liegt - Konflikt, fehlgeschlagene Speicherung oder Aenderungen ohne lebende
+ * Strecke -, fragt der Rueckweg nach, und ein Neuladen des Tabs geht nicht ohne Rueckfrage des Browsers.
+ * Live verbunden ist eine Aenderung dagegen bereits beim Server; dann wird nicht gewarnt.
  *
  * ## Nur Lesen
  *
@@ -50,28 +67,41 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { ArrowLeft, PanelRight, RotateCcw, Save, Share2, SquarePen, Undo2, Users, X } from 'lucide-react'
 
 import '@excalidraw/excalidraw/index.css'
 
-import type { BoardStatusView } from '../../contracts/api.js'
+import type { BoardStatusView, BoardView, MeResponse, WorkspaceView } from '../../contracts/api.js'
 import type { PresenceView } from '../../contracts/realtime.js'
 import type { BinaryFileRef, SceneSnapshot } from '../../contracts/scene.js'
 import { SCENE_SCHEMA_VERSION } from '../../contracts/scene.js'
+import { MAX_BOARD_TITLE_LENGTH } from '../../domain/board/model.js'
 import type { EffectiveBoardRole } from '../../domain/board/policy.js'
-import { mayChangeBoard } from '../../domain/board/policy.js'
+import { mayChangeBoard, mayManageBoard } from '../../domain/board/policy.js'
 import {
   ApiError,
   fetchBoardAssetDataUrl,
   fetchBoardScene,
   fetchBoardVersionScene,
+  renameBoard,
   saveBoardScene,
   uploadBoardAsset,
 } from '../api.js'
-import { Loading, Notice } from '../ui.js'
+import { BoardPanel } from '../board-panel.js'
+import { Drawer } from '../overlays.js'
+import type { BoardPanelView } from '../router.js'
+import { Badge, Button, ConfirmDialog, IconButton, Loading, Notice } from '../ui.js'
+import { boardStatus, readOnlyReason } from './board-status.js'
 import type { BoardEditorPort, EditorPeer } from './board-editor-port.js'
 import { BoardCanvas } from './excalidraw-adapter.js'
 import { connectBoardRealtime } from './realtime-client.js'
 import type { BoardRealtime, RealtimeStatus } from './realtime-client.js'
+
+/** Ab hier steht die Board-Sidebar als Spalte neben der Zeichenflaeche. Derselbe Wert steht in `styles.css`. */
+const PANEL_DOCKED = '(min-width: 64rem)'
+
+/** Die Board-Sidebar ist derselbe Knoten, auf den der Ausloeser der Kopfzeile wirkt. */
+const PANEL_ID = 'board-sidebar'
 
 /** Ruhezeit nach der letzten Aenderung, bevor gespeichert wird. */
 const AUTOSAVE_DELAY_MS = 1_500
@@ -121,73 +151,23 @@ function fremdePeers(peers: readonly PresenceView[], selbst: string | null): rea
 }
 
 /**
- * Der Verbindungszustand in einem Satz.
+ * Der Mitgliedskontext eines Boards.
  *
- * Bewusst ausformuliert statt als Symbol: die Zeile steht in einem `role="status"`-Bereich und wird von
- * einer Sprachausgabe vorgelesen, sobald sie sich aendert.
+ * `null` heisst Gast: kein Rueckweg in eine Bibliothek, keine Board-Sidebar, kein Umbenennen. Ein Gast
+ * kennt genau ein Board und keinen Arbeitsbereich - und die Endpunkte dahinter verlangen ohnehin eine
+ * interne Sitzung.
  */
-function connectionMessage(status: RealtimeStatus, attempt: number, resyncedAt: Date | null): string {
-  switch (status) {
-    case 'verbindet':
-      return 'Verbindung wird aufgebaut …'
-    case 'verbunden':
-      return resyncedAt === null
-        ? 'Live verbunden.'
-        : `Live verbunden. Stand nach Wiederaufnahme um ${resyncedAt.toLocaleTimeString('de-DE')} abgeglichen.`
-    case 'wiederverbinden':
-      return `Verbindung verloren. Wiederverbindung laeuft (Versuch ${String(attempt)}).`
-    case 'getrennt':
-      return 'Nicht live verbunden. Aenderungen werden ueber die Speicherung gesichert.'
-  }
-}
-
-/**
- * Warum diese Ansicht nur liest - oder `null`, wenn sie es nicht tut.
- *
- * Sie behauptet dabei nichts: jeder Grund ist eine Angabe des Servers. Der Archivzustand steht in der
- * geladenen Boardsicht, das Schreibrecht kommt aus der Gastsession oder aus dem Boardraum.
- */
-function readOnlyReason(input: {
-  readonly workspaceArchived: boolean
-  readonly boardArchived: boolean
-  readonly canWrite: boolean | null
-  /** Wahr, wenn die Gastrolle selbst das Leserecht ist - dann ist sie der genauere Grund. */
-  readonly guestViewer: boolean
-  /** Nummer der gezeigten Version, wenn dies eine Vorschau ist. Sie ist der genaueste Grund von allen. */
-  readonly previewOf: number | null
-}): string | null {
-  if (input.previewOf !== null) {
-    return `dies ist die Vorschau von Version ${String(input.previewOf)}`
-  }
-  if (input.workspaceArchived) {
-    return 'der Arbeitsbereich ist archiviert'
-  }
-  if (input.boardArchived) {
-    return 'dieses Board ist archiviert'
-  }
-  if (input.canWrite === false) {
-    return input.guestViewer
-      ? 'dieser Freigabelink gibt nur Leserecht'
-      : 'du hast fuer dieses Board kein Schreibrecht'
-  }
-  return null
-}
-
-function saveMessage(state: SaveState): string {
-  switch (state.kind) {
-    case 'idle':
-      return 'Keine ungespeicherten Aenderungen.'
-    case 'dirty':
-      return 'Nicht gespeicherte Aenderungen.'
-    case 'saving':
-      return 'Wird gespeichert …'
-    case 'saved':
-      return `Gespeichert um ${state.at.toLocaleTimeString('de-DE')}.`
-    case 'conflict':
-      return 'Konflikt: nicht gespeichert.'
-    case 'failed':
-      return `Speichern fehlgeschlagen. ${state.message}`
-  }
+export type BoardMemberContext = {
+  readonly me: MeResponse
+  readonly workspace: WorkspaceView
+  readonly workspaces: readonly WorkspaceView[]
+  /** Offener Bereich der Board-Sidebar; `null` heisst geschlossen. Er steht in der Adresse. */
+  readonly panel: BoardPanelView | null
+  readonly onPanel: (panel: BoardPanelView | null) => void
+  /** Meldet der Huelle, dass sich an den Boards etwas geaendert hat. */
+  readonly onChanged: () => void
+  /** Wechselt in die Vorschau einer Version; `null` fuehrt zurueck auf den aktuellen Stand. */
+  readonly onPreview: (version: number | null) => void
 }
 
 export function BoardEditor({
@@ -196,6 +176,7 @@ export function BoardEditor({
   workspaceArchived,
   previewVersion = null,
   guestName,
+  member = null,
   onClose,
 }: {
   readonly boardId: string
@@ -212,6 +193,7 @@ export function BoardEditor({
    * ist, steht in der Szenenantwort und nicht in dieser Angabe.
    */
   readonly guestName: string | null
+  readonly member?: BoardMemberContext | null
   /** `null` heisst: es gibt keinen Weg zurueck. Genau das gilt fuer einen Gast. */
   readonly onClose: (() => void) | null
 }) {
@@ -239,6 +221,17 @@ export function BoardEditor({
   const [assetProblem, setAssetProblem] = useState<string | null>(null)
   /** Erzwingt eine frische Zeichenflaeche beim Neuladen; sonst blieben verworfene Elemente stehen. */
   const [mountKey, setMountKey] = useState(0)
+  /** Angedockt heisst: die Board-Sidebar ist eine Spalte und kein modales Sheet. */
+  const [docked, setDocked] = useState(() => window.matchMedia(PANEL_DOCKED).matches)
+  /** Inline-Umbenennung des Titels in der Kopfzeile. */
+  const [renaming, setRenaming] = useState(false)
+  const [titleDraft, setTitleDraft] = useState('')
+  const [renameBusy, setRenameBusy] = useState(false)
+  const [renameError, setRenameError] = useState<string | null>(null)
+  /** Zaehler fuer die Board-Sidebar: er steigt, wenn hier etwas am Board geaendert wurde. */
+  const [panelRevision, setPanelRevision] = useState(0)
+  /** Rueckfrage vor dem Verlassen, solange ungesicherte Arbeit im Editor steht. */
+  const [confirmLeave, setConfirmLeave] = useState(false)
 
   // Refs statt State: der Speichervorgang liest den jeweils aktuellen Stand, ohne neu aufgebaut zu werden.
   const versionRef = useRef(0)
@@ -255,6 +248,12 @@ export function BoardEditor({
   const liveRef = useRef(false)
   /** Zuletzt vom Server genanntes Schreibrecht. Er unterscheidet die erste Aussage von einer Aenderung. */
   const canWriteRef = useRef<boolean | null>(null)
+  /** Der Ausloeser der Board-Sidebar. Angedockt gibt ihm die Ansicht den Fokus selbst zurueck. */
+  const panelTriggerRef = useRef<HTMLButtonElement>(null)
+  /** Der Ausloeser der Inline-Umbenennung. Er bekommt den Fokus zurueck, sobald die Eingabe endet. */
+  const renameTriggerRef = useRef<HTMLButtonElement>(null)
+  /** Ob die Eingabe im vorigen Rendern offen war - sonst waere jedes Rendern eine Fokusrueckgabe. */
+  const wasRenamingRef = useRef(false)
 
   const load = useCallback(() => {
     setState({ kind: 'loading' })
@@ -345,6 +344,61 @@ export function BoardEditor({
    * wieder, und eine Speicherung dazwischen erzeugte nur einen Konflikt mit den Checkpoints.
    */
   const speichertSelbst = connection === 'getrennt' && !viewOnly
+  /**
+   * Ungesicherte Arbeit: sie liegt nur im Browser und wuerde beim Verlassen verschwinden.
+   *
+   * Live verbunden ist eine Aenderung bereits beim Server; `dirty` heisst dann nur, dass der naechste
+   * Checkpoint noch aussteht. Konflikt und Fehlschlag sind dagegen immer ungesichert.
+   */
+  const unsaved =
+    !viewOnly && (save.kind === 'conflict' || save.kind === 'failed' || (save.kind === 'dirty' && !live))
+
+  // Ein Neuladen oder Schliessen des Tabs darf ungesicherte Arbeit nicht stillschweigend verwerfen. Den
+  // Text bestimmt der Browser; die Anwendung sagt nur, dass es etwas zu verlieren gibt.
+  useEffect(() => {
+    if (!unsaved) {
+      return
+    }
+    const warn = (event: BeforeUnloadEvent): void => {
+      event.preventDefault()
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => {
+      window.removeEventListener('beforeunload', warn)
+    }
+  }, [unsaved])
+
+  // Die Inline-Eingabe ersetzt ihren eigenen Ausloeser; endet sie, gibt es sonst nichts mehr, worauf der
+  // Fokus stehen koennte, und er faellt auf den Dokumentkoerper. Gespeichert wie abgebrochen kehrt er
+  // deshalb dorthin zurueck, wo die Eingabe begonnen hat.
+  useEffect(() => {
+    if (wasRenamingRef.current && !renaming) {
+      renameTriggerRef.current?.focus()
+    }
+    wasRenamingRef.current = renaming
+  }, [renaming])
+
+  // Breit ist die Board-Sidebar eine Spalte, schmal ein modales Sheet. Umgeschaltet wird per CSS; hier
+  // steht nur, welche der beiden Formen die Plattform bedienen soll.
+  useEffect(() => {
+    const query = window.matchMedia(PANEL_DOCKED)
+    const sync = (): void => {
+      setDocked(query.matches)
+    }
+    query.addEventListener('change', sync)
+    return () => {
+      query.removeEventListener('change', sync)
+    }
+  }, [])
+
+  /** Der frisch geladene Boardstand aus der Sidebar. Titel und Archivzustand haengen daran. */
+  const applyBoard = useCallback((board: BoardView) => {
+    setState((current) =>
+      current.kind === 'ready'
+        ? { kind: 'ready', loaded: { ...current.loaded, title: board.title, status: board.status } }
+        : current,
+    )
+  }, [])
 
   const persist = useCallback(() => {
     if (adapter === null || blockedRef.current) {
@@ -676,64 +730,265 @@ export function BoardEditor({
     guestViewer: state.loaded.role.kind === 'guest' && state.loaded.role.role === 'guest-viewer',
     previewOf: state.loaded.previewOf,
   })
+  /** Ein Zustand statt dreier Saetze. Der ausformulierte Satz steht daneben und draengt sich nicht vor. */
+  const status = boardStatus({
+    save: save.kind,
+    savedAt: save.kind === 'saved' ? save.at : null,
+    failure: save.kind === 'failed' ? save.message : null,
+    connection,
+    attempt,
+    resyncedAt,
+    viewOnly,
+    preview: state.loaded.previewOf !== null,
+  })
+  const title = state.loaded.title
+  /**
+   * Umbenennen darf, wer das Board aendern darf.
+   *
+   * Ueber `viewOnly` haengt das an derselben Aussage des Servers wie die Zeichenflaeche - Vorschau, Archiv
+   * und entzogenes Schreibrecht stehen dort schon. Wird das Recht **waehrend** der Sitzung entzogen,
+   * verschwindet damit auch diese Aktion, statt eine Ablehnung anzubieten.
+   */
+  const titleEditable = member !== null && !viewOnly && mayChangeBoard(state.loaded.role)
+  /** Freigeben ist die hervorgehobene Boardaktion - aber nur fuer den, der sie auch ausfuehren darf. */
+  const shareable = member !== null && state.loaded.previewOf === null && mayManageBoard(state.loaded.role)
+  const panelOpen = member !== null && member.panel !== null
+
+  function closePanel(): void {
+    member?.onPanel(null)
+    // Angedockt gibt es keine Plattformrueckgabe des Fokus: die Ansicht bringt ihn selbst zum Ausloeser.
+    if (docked) {
+      panelTriggerRef.current?.focus()
+    }
+  }
+
+  function submitRename(next: string): void {
+    if (member === null) {
+      return
+    }
+    setRenameBusy(true)
+    setRenameError(null)
+    renameBoard(member.me.csrfToken, boardId, next)
+      .then((board) => {
+        applyBoard(board)
+        setRenaming(false)
+        setPanelRevision((current) => current + 1)
+        member.onChanged()
+      })
+      .catch((cause: unknown) => {
+        setRenameError(
+          cause instanceof ApiError ? cause.message : 'Der Titel konnte nicht geaendert werden.',
+        )
+      })
+      .finally(() => {
+        setRenameBusy(false)
+      })
+  }
 
   return (
-    <div className="board">
+    <div className={panelOpen ? 'board board--panel' : 'board'}>
       <header className="board__bar">
-        <h2 className="board__title">{state.loaded.title}</h2>
-        {/* Der Modus zuerst und immer benannt: er entscheidet, was diese Ansicht ueberhaupt anbietet. */}
-        <p className="board__mode" role="status">
-          {reason === null ? 'Bearbeitungsmodus.' : `Nur-Lesen-Modus: ${reason}.`}
-        </p>
-        {guestName !== null && <p className="board__state">Gastzugang als {guestName}</p>}
-        <p className="board__state" role="status">
-          {viewOnly && (save.kind === 'idle' || save.kind === 'saved')
-            ? 'Nichts zu speichern: diese Ansicht aendert das Board nicht.'
-            : saveMessage(save)}
-        </p>
-        <p className="board__state" role="status">
-          {state.loaded.previewOf === null
-            ? connectionMessage(connection, attempt, resyncedAt)
-            : 'Nicht live verbunden: eine Vorschau zeigt einen festen Stand und nimmt keine Aenderungen auf.'}
-        </p>
-        <p className="board__peers" role="status">
-          {peers.length === 0
-            ? 'Allein auf diesem Board.'
-            : `Mit dabei: ${peers.map((peer) => peer.displayName).join(', ')}`}
-        </p>
-        {!viewOnly && (
-          <button
-            className="button--primary"
-            type="button"
-            onClick={persist}
-            disabled={save.kind === 'saving' || adapter === null}
-          >
-            Board speichern
-          </button>
-        )}
-        {save.kind === 'conflict' && (
-          <button type="button" onClick={load}>
-            Neu laden und eigene Aenderungen verwerfen
-          </button>
-        )}
-        {onClose !== null && (
-          <button type="button" onClick={onClose}>
-            Board schliessen
-          </button>
-        )}
+        <div className="board__lead">
+          {onClose !== null && (
+            <IconButton
+              label="Zurueck zur Bibliothek"
+              icon={ArrowLeft}
+              variant="quiet"
+              onClick={() => {
+                if (unsaved) {
+                  setConfirmLeave(true)
+                  return
+                }
+                onClose()
+              }}
+            />
+          )}
+          {renaming ? (
+            <form
+              className="inline-name"
+              onSubmit={(event) => {
+                event.preventDefault()
+                submitRename(titleDraft.trim())
+              }}
+            >
+              <label className="visually-hidden" htmlFor="board-title">
+                Titel von {title}
+              </label>
+              <input
+                id="board-title"
+                value={titleDraft}
+                maxLength={MAX_BOARD_TITLE_LENGTH}
+                required
+                autoFocus
+                disabled={renameBusy}
+                onChange={(event) => {
+                  setTitleDraft(event.target.value)
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') {
+                    event.preventDefault()
+                    setRenaming(false)
+                  }
+                }}
+              />
+              <Button variant="primary" type="submit" busy={renameBusy} disabled={titleDraft.trim().length === 0}>
+                Speichern
+              </Button>
+              <IconButton
+                label="Umbenennen abbrechen"
+                icon={X}
+                variant="quiet"
+                onClick={() => {
+                  setRenaming(false)
+                }}
+              />
+            </form>
+          ) : (
+            <>
+              <h1 className="board__title">{title}</h1>
+              {titleEditable && (
+                <IconButton
+                  ref={renameTriggerRef}
+                  label={`${title} umbenennen`}
+                  icon={SquarePen}
+                  variant="quiet"
+                  onClick={() => {
+                    setTitleDraft(title)
+                    setRenameError(null)
+                    setRenaming(true)
+                  }}
+                />
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="board__states">
+          {/* Der Modus bleibt sichtbar: er entscheidet, was diese Ansicht ueberhaupt anbietet. */}
+          {reason !== null && (
+            <Badge tone={state.loaded.previewOf === null ? 'neutral' : 'accent'}>
+              {state.loaded.previewOf === null
+                ? 'Nur lesen'
+                : `Version ${String(state.loaded.previewOf)} · nur lesen`}
+              <span className="visually-hidden">: {reason}</span>
+            </Badge>
+          )}
+          {guestName !== null && <Badge>Gast: {guestName}</Badge>}
+          <p className={`board__status board__status--${status.tone}`} title={status.detail}>
+            {status.text}
+            <span className="visually-hidden">. {status.detail}</span>
+          </p>
+          {/*
+            * Angekuendigt wird nur, was Aufmerksamkeit verlangt. Ein gelungener Checkpoint ist sichtbar,
+            * bleibt aber stumm - sonst spraeche eine Sprachausgabe waehrend des Zeichnens im Sekundentakt.
+            */}
+          <p className="visually-hidden" role="status">
+            {status.critical ? status.detail : ''}
+          </p>
+          <p className="board__peers" role="status">
+            <Users size={16} aria-hidden="true" />
+            <span aria-hidden="true">{peers.length === 0 ? 'Allein' : String(peers.length + 1)}</span>
+            <span className="visually-hidden">
+              {peers.length === 0
+                ? 'Allein auf diesem Board.'
+                : `Mit dabei: ${peers.map((peer) => peer.displayName).join(', ')}`}
+            </span>
+          </p>
+        </div>
+
+        <div className="board__actions">
+          {state.loaded.previewOf !== null && member !== null && (
+            <Button
+              variant="primary"
+              icon={Undo2}
+              onClick={() => {
+                member.onPreview(null)
+              }}
+            >
+              Zum aktuellen Stand
+            </Button>
+          )}
+          {save.kind === 'conflict' && (
+            <Button variant="primary" icon={RotateCcw} onClick={load}>
+              Neu laden
+            </Button>
+          )}
+          {/*
+            * Manuell gespeichert wird nur, wo es fachlich noetig ist: ohne lebende Strecke oder nach einem
+            * Fehlschlag. Solange der Boardraum traegt, ist die Zeichnung schon dort.
+            */}
+          {!viewOnly && (save.kind === 'failed' || (save.kind === 'dirty' && !live)) && (
+            <Button
+              variant="primary"
+              icon={Save}
+              onClick={persist}
+              disabled={adapter === null}
+            >
+              Jetzt speichern
+            </Button>
+          )}
+          {shareable && member !== null && (
+            <Button
+              variant="primary"
+              icon={Share2}
+              onClick={() => {
+                member.onPanel('freigaben')
+              }}
+            >
+              Freigeben
+            </Button>
+          )}
+          {member !== null && (
+            <IconButton
+              ref={panelTriggerRef}
+              label={panelOpen ? 'Board-Sidebar schliessen' : 'Board-Sidebar oeffnen'}
+              icon={PanelRight}
+              aria-expanded={panelOpen}
+              aria-controls={PANEL_ID}
+              onClick={() => {
+                if (panelOpen) {
+                  closePanel()
+                  return
+                }
+                member.onPanel('uebersicht')
+              }}
+            />
+          )}
+        </div>
       </header>
+
+      {confirmLeave && onClose !== null && (
+        <ConfirmDialog danger>
+          <p>
+            An diesem Board stehen Aenderungen, die noch nicht gesichert sind. Beim Verlassen gehen sie
+            verloren.
+          </p>
+          <p className="actions">
+            <Button
+              onClick={() => {
+                setConfirmLeave(false)
+              }}
+            >
+              Hierbleiben
+            </Button>
+            <Button variant="danger" onClick={onClose}>
+              Trotzdem schliessen
+            </Button>
+          </p>
+        </ConfirmDialog>
+      )}
+      {renameError !== null && <Notice text={renameError} />}
       {accessNote !== null && (
         <Notice kind="info">
           <p>{accessNote}</p>
           <p className="actions">
-            <button
-              type="button"
+            <Button
               onClick={() => {
                 setAccessNote(null)
               }}
             >
               Hinweis ausblenden
-            </button>
+            </Button>
           </p>
         </Notice>
       )}
@@ -742,22 +997,62 @@ export function BoardEditor({
         <Notice>
           <p>Der Server hat eine Nachricht abgelehnt: {rejected}</p>
           <p className="actions">
-            <button type="button" onClick={() => setRejected(null)}>
+            <Button
+              onClick={() => {
+                setRejected(null)
+              }}
+            >
               Hinweis ausblenden
-            </button>
+            </Button>
           </p>
         </Notice>
       )}
       {save.kind === 'conflict' && (
         <Notice text="Dieses Board wurde inzwischen an anderer Stelle gespeichert. Deine Zeichnung ist noch da, wurde aber nicht uebernommen und hat nichts ueberschrieben. Lade das Board neu, um auf dem aktuellen Stand weiterzuarbeiten." />
       )}
-      <div className="board__canvas">
-        <BoardCanvas
-          key={mountKey}
-          viewMode={viewOnly}
-          scene={state.loaded.scene}
-          onAdapterReady={setAdapter}
-        />
+
+      <div className="board__body">
+        {member !== null && (
+          /*
+           * Ein Knoten fuer beide Breiten: angedockt macht `styles.css` aus dem `dialog` eine gewoehnliche
+           * Spalte, schmal bleibt er ein modales Sheet - dann kommen Fokusfang, Escape und Fokusrueckgabe
+           * von der Plattform, und die Zeichenflaeche dahinter ist `inert`.
+           *
+           * Er steht **vor** der Zeichenflaeche im Dokument: sonst laegen angedockt die zwoelf Tabstopps
+           * der Excalidraw-Bedienelemente zwischen dem Ausloeser der Kopfzeile und dem, was er geoeffnet
+           * hat. Rechts erscheint er trotzdem - das erledigt `order` in `styles.css`.
+           */
+          <Drawer
+            id={PANEL_ID}
+            open={panelOpen && !docked}
+            title="Board-Sidebar"
+            className="board__panel"
+            onClose={closePanel}
+          >
+            {member.panel !== null && (
+              <BoardPanel
+                me={member.me}
+                workspace={member.workspace}
+                workspaces={member.workspaces}
+                boardId={boardId}
+                section={member.panel}
+                revision={panelRevision}
+                onSection={member.onPanel}
+                onChanged={member.onChanged}
+                onBoard={applyBoard}
+                onPreview={member.onPreview}
+              />
+            )}
+          </Drawer>
+        )}
+        <div className="board__canvas">
+          <BoardCanvas
+            key={mountKey}
+            viewMode={viewOnly}
+            scene={state.loaded.scene}
+            onAdapterReady={setAdapter}
+          />
+        </div>
       </div>
     </div>
   )

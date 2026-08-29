@@ -220,6 +220,7 @@ export function Dashboard({
                         workspaceId: board.workspaceId,
                         boardId: board.id,
                         version: null,
+                        panel: null,
                       }}
                     >
                       {board.title}
@@ -253,7 +254,7 @@ export function Dashboard({
                 setTitle('')
                 onBoardsChanged()
                 // Direkt in den Editor: das Anlegen endet dort, wo gearbeitet wird, und nicht in einer Liste.
-                navigate({ kind: 'board', workspaceId: board.workspaceId, boardId: board.id, version: null })
+                navigate({ kind: 'board', workspaceId: board.workspaceId, boardId: board.id, version: null, panel: null })
               })
               .catch((cause: unknown) => {
                 setCreateError(messageOf(cause, 'Das Board konnte nicht angelegt werden.'))

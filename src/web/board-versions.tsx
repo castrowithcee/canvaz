@@ -1,9 +1,9 @@
 /**
  * Versionsverlauf, Export und Import eines Boards.
  *
- * Bewusst kein modaler Dialog, sondern ein Abschnitt im Fluss der Boardliste - dieselbe Entscheidung wie bei
- * den Freigaben: kein Fokuskaefig, keine eigene Escape-Behandlung, jede Ueberschrift bleibt in der
- * Dokumentstruktur. Geoeffnet aus der Boardzeile, geschlossen mit einer benannten Schaltflaeche.
+ * Ein Abschnitt im Fluss seiner Umgebung und kein eigener Dialog - dieselbe Entscheidung wie bei den
+ * Freigaben: kein Fokuskaefig, keine eigene Escape-Behandlung, jede Ueberschrift bleibt in der
+ * Dokumentstruktur. Der Abschnitt steht im Bereich "Versionen" der Board-Sidebar (`board-panel.tsx`).
  *
  * Die Ansicht entscheidet nichts. Ob wiederhergestellt werden darf, sagt die Serverantwort (`mayRestore`);
  * ob importiert werden darf, sagt die Rolle des Boards ueber `mayChangeBoard` - dieselbe Funktion, mit der
@@ -174,7 +174,6 @@ export function BoardVersions({
   boardId,
   workspaceArchived,
   onPreview,
-  onClose,
   onChanged,
 }: {
   readonly me: MeResponse
@@ -183,7 +182,6 @@ export function BoardVersions({
   readonly workspaceArchived: boolean
   /** Oeffnet die Read-only-Vorschau genau einer Version. */
   readonly onPreview: (version: number) => void
-  readonly onClose: () => void
   readonly onChanged: () => void
 }) {
   const [state, setState] = useState<
@@ -222,20 +220,11 @@ export function BoardVersions({
     onChanged()
   }
 
-  const closeButton = (
-    <p>
-      <button type="button" onClick={onClose}>
-        Versionen schliessen
-      </button>
-    </p>
-  )
-
   if (state.kind === 'loading') {
     return (
       <section aria-labelledby="board-versions-heading">
         <h5 id="board-versions-heading">Versionen</h5>
         <Loading text="Versionen werden geladen …" />
-        {closeButton}
       </section>
     )
   }
@@ -244,7 +233,6 @@ export function BoardVersions({
       <section aria-labelledby="board-versions-heading">
         <h5 id="board-versions-heading">Versionen</h5>
         <Notice text={state.message} />
-        {closeButton}
       </section>
     )
   }
@@ -296,7 +284,6 @@ export function BoardVersions({
   return (
     <section aria-labelledby="board-versions-heading">
       <h5 id="board-versions-heading">Versionen von {board.title}</h5>
-      {closeButton}
       <p>
         Aktueller Stand:{' '}
         <strong>{board.sceneVersion === 0 ? 'noch nie gespeichert' : `Version ${String(board.sceneVersion)}`}</strong>.
@@ -441,7 +428,6 @@ export function BoardVersions({
           </table>
         </div>
       )}
-      {closeButton}
     </section>
   )
 }

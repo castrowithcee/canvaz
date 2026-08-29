@@ -34,6 +34,15 @@ import { Button, IconButton } from './ui.js'
  */
 function useModal(open: boolean) {
   const ref = useRef<HTMLDialogElement>(null)
+  /**
+   * Wahr, solange ein selbst ausgeloestes `close()` noch sein `close`-Ereignis erzeugt.
+   *
+   * Das Ereignis kommt bei **jedem** Schliessweg - auch bei dem, den die Ansicht gerade selbst angestossen
+   * hat, weil sich ihr Zustand geaendert hat. Ohne diese Unterscheidung meldete die Ebene ein Schliessen
+   * zurueck, das niemand verlangt hat: eine Board-Sidebar, die beim Verbreitern des Fensters vom Sheet zur
+   * angedockten Spalte wird, verschwaende auf diesem Weg vollstaendig.
+   */
+  const selbstGeschlossen = useRef(false)
 
   useEffect(() => {
     const element = ref.current
@@ -43,11 +52,21 @@ function useModal(open: boolean) {
     if (open && !element.open) {
       element.showModal()
     } else if (!open && element.open) {
+      selbstGeschlossen.current = true
       element.close()
     }
   }, [open])
 
-  return ref
+  return { ref, selbstGeschlossen }
+}
+
+/** Meldet ein Schliessen nur, wenn es von aussen kam - Schaltflaeche, `Escape` oder Abdunklung. */
+function reportClose(selbstGeschlossen: { current: boolean }, onClose: () => void): void {
+  if (selbstGeschlossen.current) {
+    selbstGeschlossen.current = false
+    return
+  }
+  onClose()
 }
 
 /**
@@ -70,7 +89,7 @@ export function Dialog({
   readonly onClose: () => void
   readonly children: ReactNode
 }) {
-  const ref = useModal(open)
+  const { ref, selbstGeschlossen } = useModal(open)
   const titleId = useId()
 
   return (
@@ -78,7 +97,9 @@ export function Dialog({
       ref={ref}
       className={danger ? 'dialog dialog--danger' : 'dialog'}
       aria-labelledby={titleId}
-      onClose={onClose}
+      onClose={() => {
+        reportClose(selbstGeschlossen, onClose)
+      }}
       onClick={(event) => {
         // Ein Klick trifft das `dialog` selbst nur ausserhalb seines Inhalts - das ist die Abdunklung.
         if (event.target === ref.current) {
@@ -118,10 +139,18 @@ export function Drawer({
   readonly onClose: () => void
   readonly children: ReactNode
 }) {
-  const ref = useModal(open)
+  const { ref, selbstGeschlossen } = useModal(open)
 
   return (
-    <dialog id={id} ref={ref} className={className} aria-label={title} onClose={onClose}>
+    <dialog
+      id={id}
+      ref={ref}
+      className={className}
+      aria-label={title}
+      onClose={() => {
+        reportClose(selbstGeschlossen, onClose)
+      }}
+    >
       <div className="drawer__head">
         <p className="sidebar__title">{title}</p>
         <IconButton label={`${title} schliessen`} icon={X} variant="quiet" onClick={onClose} />

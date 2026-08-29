@@ -205,7 +205,13 @@ function EntryMenu({
           <Link
             className="menu__item"
             role="menuitem"
-            route={{ kind: 'boarddetails', workspaceId, boardId: target.board.id }}
+            route={{
+              kind: 'board',
+              workspaceId,
+              boardId: target.board.id,
+              version: null,
+              panel: 'uebersicht',
+            }}
           >
             <Info size={16} aria-hidden="true" />
             Details, Freigaben und Versionen
@@ -508,7 +514,7 @@ export function Boards({
                   setCreating(null)
                   // Das Anlegen endet dort, wo gearbeitet wird: im Editor des neuen Boards.
                   const board = result as BoardView
-                  navigate({ kind: 'board', workspaceId, boardId: board.id, version: null })
+                  navigate({ kind: 'board', workspaceId, boardId: board.id, version: null, panel: null })
                 },
               )
             }}
@@ -640,7 +646,7 @@ export function Boards({
               <li className="row" key={board.id}>
                 <Link
                   className="row__label"
-                  route={{ kind: 'board', workspaceId, boardId: board.id, version: null }}
+                  route={{ kind: 'board', workspaceId, boardId: board.id, version: null, panel: null }}
                 >
                   <SquarePen size={18} aria-hidden="true" />
                   <span>{board.title}</span>
