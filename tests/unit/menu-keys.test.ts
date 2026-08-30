@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { nextMenuIndex } from '../../src/web/overlays.js'
+import { menuPosition, nextMenuIndex } from '../../src/web/overlays.js'
 
 describe('nextMenuIndex', () => {
   it('laeuft im Ring vorwaerts und rueckwaerts', () => {
@@ -31,5 +31,27 @@ describe('nextMenuIndex', () => {
     expect(nextMenuIndex(0, 3, 'Tab')).toBeNull()
     expect(nextMenuIndex(0, 3, 'a')).toBeNull()
     expect(nextMenuIndex(0, 0, 'ArrowDown')).toBeNull()
+  })
+})
+
+describe('menuPosition', () => {
+  it('bleibt am seitlichen Viewportrand und steht unter dem Ausloeser', () => {
+    expect(
+      menuPosition(
+        { top: 20, right: 390, bottom: 64 },
+        { width: 224, height: 180 },
+        { width: 390, height: 844 },
+      ),
+    ).toEqual({ left: 158, top: 68, maxHeight: 828 })
+  })
+
+  it('klappt am unteren Rand nach oben', () => {
+    expect(
+      menuPosition(
+        { top: 700, right: 370, bottom: 744 },
+        { width: 224, height: 220 },
+        { width: 390, height: 844 },
+      ),
+    ).toEqual({ left: 146, top: 476, maxHeight: 828 })
   })
 })

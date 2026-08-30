@@ -137,9 +137,9 @@ function GrantRow({
 
   return (
     <tr>
-      <td>{grant.displayName}</td>
-      <td>{grant.email ?? '—'}</td>
-      <td>
+      <td data-label="Name">{grant.displayName}</td>
+      <td data-label="E-Mail">{grant.email ?? '—'}</td>
+      <td data-label="Rolle">
         {!manageable && GRANT_ROLE_LABELS[grant.role]}
         {manageable && (
         <select
@@ -157,8 +157,8 @@ function GrantRow({
         </select>
         )}
       </td>
-      <td>{formatDate(grant.grantedAt)}</td>
-      <td>
+      <td data-label="Freigegeben">{formatDate(grant.grantedAt)}</td>
+      <td data-label="Aktion">
         {manageable && (
           <span className="actions">
             <button
@@ -640,13 +640,13 @@ function ShareLinkRow({
 
   return (
     <tr>
-      <td>{GUEST_ROLE_LABELS[link.role]}</td>
-      <td>{link.createdByDisplayName ?? '—'}</td>
-      <td>{formatDate(link.createdAt)}</td>
-      <td>{link.expiresAt === null ? 'kein Ablauf' : formatDate(link.expiresAt)}</td>
-      <td>{linkStatus(link, now)}</td>
-      <td>{String(link.guestCount)}</td>
-      <td>
+      <td data-label="Rolle">{GUEST_ROLE_LABELS[link.role]}</td>
+      <td data-label="Angelegt von">{link.createdByDisplayName ?? '—'}</td>
+      <td data-label="Angelegt">{formatDate(link.createdAt)}</td>
+      <td data-label="Ablauf">{link.expiresAt === null ? 'kein Ablauf' : formatDate(link.expiresAt)}</td>
+      <td data-label="Zustand">{linkStatus(link, now)}</td>
+      <td data-label="Gaeste">{String(link.guestCount)}</td>
+      <td data-label="Aktion">
         {link.revokedAt === null && (
           <button
             type="button"

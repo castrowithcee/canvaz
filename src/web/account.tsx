@@ -16,12 +16,12 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { LogIn, KeyRound } from 'lucide-react'
+import { Eye, EyeOff, KeyRound, LogIn } from 'lucide-react'
 
 import type { AuthMethodsResponse, MeResponse } from '../contracts/api.js'
 import { AUTH_LOGIN_PATH, MIN_PASSWORD_LENGTH } from '../contracts/api.js'
 import { ApiError, changePassword, fetchAuthMethods, localLogin, redeemInvitation } from './api.js'
-import { actionClass, Button, Field, Notice } from './ui.js'
+import { actionClass, Button, Field, IconButton, Notice } from './ui.js'
 
 function messageOf(cause: unknown, fallback: string): string {
   return cause instanceof ApiError ? cause.message : fallback
@@ -40,19 +40,33 @@ function PasswordField({
   readonly autoComplete: 'current-password' | 'new-password'
   readonly onChange: (value: string) => void
 }) {
+  const [visible, setVisible] = useState(false)
+
   return (
     <Field id={id} label={label}>
-      <input
-        id={id}
-        type="password"
-        value={value}
-        autoComplete={autoComplete}
-        required
-        minLength={autoComplete === 'new-password' ? MIN_PASSWORD_LENGTH : undefined}
-        onChange={(event) => {
-          onChange(event.target.value)
-        }}
-      />
+      <div className="password-field">
+        <input
+          id={id}
+          type={visible ? 'text' : 'password'}
+          value={value}
+          autoComplete={autoComplete}
+          required
+          minLength={autoComplete === 'new-password' ? MIN_PASSWORD_LENGTH : undefined}
+          onChange={(event) => {
+            onChange(event.target.value)
+          }}
+        />
+        <IconButton
+          label={visible ? `${label} verbergen` : `${label} anzeigen`}
+          icon={visible ? EyeOff : Eye}
+          variant="quiet"
+          extraClass="password-field__toggle"
+          aria-pressed={visible}
+          onClick={() => {
+            setVisible((was) => !was)
+          }}
+        />
+      </div>
     </Field>
   )
 }

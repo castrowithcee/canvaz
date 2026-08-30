@@ -11,16 +11,14 @@
  * `aria-expanded`, Liste als `role="menu"`, Pfeiltasten, `Home`/`End`, `Escape`, Klick nach aussen und
  * Fokusrueckgabe an den Ausloeser.
  *
- * Radix wurde dafuer geprueft und **nicht** genommen. Es traegt Portal, Kollisionsvermeidung und
- * Typeahead; gebraucht wird davon hier nichts: das Menue haengt an genau einer Stelle in der Kopfzeile,
- * steht rechtsbuendig unter seinem Ausloeser und hat drei Eintraege. Dafuer waere eine weitere
- * Abhaengigkeit - neben dem alten, ueber Excalidraw transitiv gebuendelten Radix - mehr Aufwand als die
- * knapp sechzig Zeilen darunter. Sobald ein Menue tatsaechlich aus einer rollenden Flaeche herauszeigen
- * oder einem Rand ausweichen muss, ist Radix die richtige Antwort.
+ * Radix wurde dafuer geprueft und **nicht** genommen. Das React-DOM-Portal loest das Menue aus scrollenden
+ * Containern; die kleine Rechnung unten haelt es im Viewport und klappt es am unteren Rand nach oben.
+ * Typeahead oder eine weitere direkte Abhaengigkeit braucht dieser kurze Menuevertrag nicht.
  */
 
-import { createContext, useCallback, useContext, useEffect, useId, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
@@ -187,6 +185,34 @@ export function nextMenuIndex(current: number, count: number, key: string): numb
   }
 }
 
+/** Positioniert ein Menue unter seinem Ausloeser oder, wenn dort kein Platz ist, darueber. */
+export function menuPosition(
+  trigger: { readonly top: number; readonly right: number; readonly bottom: number },
+  menu: { readonly width: number; readonly height: number },
+  viewport: { readonly width: number; readonly height: number },
+): { readonly left: number; readonly top: number; readonly maxHeight: number } {
+  const margin = 8
+  const gap = 4
+  const maxWidth = Math.max(0, viewport.width - margin * 2)
+  const width = Math.min(menu.width, maxWidth)
+  const maxHeight = Math.max(0, viewport.height - margin * 2)
+  const height = Math.min(menu.height, maxHeight)
+  const left = Math.min(
+    Math.max(margin, trigger.right - width),
+    Math.max(margin, viewport.width - margin - width),
+  )
+  const below = trigger.bottom + gap
+  const above = trigger.top - gap - height
+  const top =
+    below + height <= viewport.height - margin
+      ? below
+      : above >= margin
+        ? above
+        : Math.max(margin, viewport.height - margin - height)
+
+  return { left, top, maxHeight }
+}
+
 const MenuContext = createContext<((focusTrigger?: boolean) => void) | null>(null)
 
 /** Ein Eintrag des Menues. Er schliesst das Menue, bevor er seine Aktion ausloest. */
@@ -280,6 +306,7 @@ export function Menu({
   readonly children: ReactNode
 }) {
   const [open, setOpen] = useState(false)
+  const [position, setPosition] = useState<CSSProperties | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const listRef = useRef<HTMLUListElement>(null)
@@ -295,6 +322,33 @@ export function Menu({
   const items = (): readonly HTMLElement[] =>
     Array.from(listRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? [])
 
+  useLayoutEffect(() => {
+    if (!open) {
+      return
+    }
+    const place = (): void => {
+      const trigger = triggerRef.current
+      const list = listRef.current
+      if (trigger === null || list === null) {
+        return
+      }
+      const box = trigger.getBoundingClientRect()
+      const next = menuPosition(
+        box,
+        { width: list.offsetWidth, height: list.offsetHeight },
+        { width: window.innerWidth, height: window.innerHeight },
+      )
+      setPosition({ left: next.left, top: next.top, maxHeight: next.maxHeight })
+    }
+    place()
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
+    return () => {
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', place, true)
+    }
+  }, [open, children])
+
   // Ein Klick oder ein Fokus ausserhalb schliesst das Menue - ohne den Fokus zurueckzuholen.
   useEffect(() => {
     if (!open) {
@@ -302,7 +356,10 @@ export function Menu({
     }
     const dismiss = (event: Event): void => {
       const target = event.target
-      if (target instanceof Node && rootRef.current?.contains(target) === true) {
+      if (
+        target instanceof Node &&
+        (rootRef.current?.contains(target) === true || listRef.current?.contains(target) === true)
+      ) {
         return
       }
       setOpen(false)
@@ -378,13 +435,22 @@ export function Menu({
           {text}
         </Button>
       )}
-      {open && (
-        <MenuContext.Provider value={close}>
-          <ul className="menu__list" id={menuId} ref={listRef} role="menu" aria-label={label}>
-            {children}
-          </ul>
-        </MenuContext.Provider>
-      )}
+      {open &&
+        createPortal(
+          <MenuContext.Provider value={close}>
+            <ul
+              className="menu__list"
+              id={menuId}
+              ref={listRef}
+              role="menu"
+              aria-label={label}
+              style={position === null ? { visibility: 'hidden' } : position}
+            >
+              {children}
+            </ul>
+          </MenuContext.Provider>,
+          document.body,
+        )}
     </div>
   )
 }

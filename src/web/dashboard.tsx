@@ -213,7 +213,7 @@ export function Dashboard({
             <tbody>
               {boards.map((board) => (
                 <tr key={board.id}>
-                  <td>
+                  <td data-label="Titel">
                     <Link
                       route={{
                         kind: 'board',
@@ -226,13 +226,13 @@ export function Dashboard({
                       {board.title}
                     </Link>
                   </td>
-                  <td>{board.workspaceName}</td>
-                  <td>
+                  <td data-label="Arbeitsbereich">{board.workspaceName}</td>
+                  <td data-label="Zugriff">
                     {ORIGIN_LABELS[board.accessOrigin]}
                     <ShareMarks board={board} />
                   </td>
-                  <td>{ROLE_LABELS[board.viewerRole]}</td>
-                  <td>{new Date(board.updatedAt).toLocaleString('de-DE')}</td>
+                  <td data-label="Meine Rolle">{ROLE_LABELS[board.viewerRole]}</td>
+                  <td data-label="Geaendert">{new Date(board.updatedAt).toLocaleString('de-DE')}</td>
                 </tr>
               ))}
             </tbody>

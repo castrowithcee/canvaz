@@ -189,33 +189,32 @@ export function BoardTrash({
               <tbody>
                 {boards.map((entry) => (
                   <tr key={entry.id}>
-                    <td>
-                      <input
-                        type="checkbox"
-                        id={`trash-select-${entry.id}`}
-                        checked={selected.includes(entry.id)}
-                        onChange={(event) => {
-                          setSelected((current) =>
-                            event.target.checked
-                              ? [...current, entry.id]
-                              : current.filter((id) => id !== entry.id),
-                          )
-                          setConfirming(null)
-                        }}
-                      />
-                      <label className="visually-hidden" htmlFor={`trash-select-${entry.id}`}>
-                        {entry.title} auswaehlen
+                    <td data-label="Auswahl">
+                      <label className="check-control">
+                        <input
+                          type="checkbox"
+                          checked={selected.includes(entry.id)}
+                          onChange={(event) => {
+                            setSelected((current) =>
+                              event.target.checked
+                                ? [...current, entry.id]
+                                : current.filter((id) => id !== entry.id),
+                            )
+                            setConfirming(null)
+                          }}
+                        />
+                        <span className="visually-hidden">{entry.title} auswaehlen</span>
                       </label>
                     </td>
-                    <td>
+                    <td data-label="Titel">
                       {entry.title}
                       {entry.status === 'archived' && ' (archiviert)'}
                     </td>
-                    <td>{entry.folderName ?? 'Arbeitsbereich (kein Ordner)'}</td>
-                    <td>{entry.deletedByDisplayName ?? 'Konto entfernt'}</td>
-                    <td>{new Date(entry.deletedAt).toLocaleString('de-DE')}</td>
-                    <td>{remainingText(entry.purgeAt, now)}</td>
-                    <td>
+                    <td data-label="Urspruenglicher Ordner">{entry.folderName ?? 'Arbeitsbereich (kein Ordner)'}</td>
+                    <td data-label="Geloescht von">{entry.deletedByDisplayName ?? 'Konto entfernt'}</td>
+                    <td data-label="Geloescht am">{new Date(entry.deletedAt).toLocaleString('de-DE')}</td>
+                    <td data-label="Frist">{remainingText(entry.purgeAt, now)}</td>
+                    <td data-label="Aktion">
                       <span className="actions">
                         <button
                           type="button"

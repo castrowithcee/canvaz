@@ -106,15 +106,15 @@ function VersionRow({
 
   return (
     <tr>
-      <th scope="row">
+      <th scope="row" data-label="Version">
         Version {String(version.version)}
         {current && <> (aktueller Stand)</>}
       </th>
-      <td>{formatMoment(version.createdAt)}</td>
-      <td>{version.authorDisplayName ?? 'Gastzugang'}</td>
-      <td>{String(version.elementCount)}</td>
-      <td>{formatBytes(version.byteSize)}</td>
-      <td>
+      <td data-label="Gespeichert">{formatMoment(version.createdAt)}</td>
+      <td data-label="Von">{version.authorDisplayName ?? 'Gastzugang'}</td>
+      <td data-label="Elemente">{String(version.elementCount)}</td>
+      <td data-label="Groesse">{formatBytes(version.byteSize)}</td>
+      <td data-label="Aktion">
         <span className="actions">
         <button
           type="button"

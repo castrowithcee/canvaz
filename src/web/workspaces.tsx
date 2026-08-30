@@ -321,9 +321,9 @@ function MemberRow({
 
   return (
     <tr>
-      <td>{member.displayName}</td>
-      <td>{member.email ?? '—'}</td>
-      <td>
+      <td data-label="Name">{member.displayName}</td>
+      <td data-label="E-Mail">{member.email ?? '—'}</td>
+      <td data-label="Rolle">
         {editable ? (
           <select
             aria-label={`Rolle von ${member.displayName}`}
@@ -342,7 +342,7 @@ function MemberRow({
           <RoleBadge role={member.role} />
         )}
       </td>
-      <td>
+      <td data-label="Aktion">
         {editable && (
           <span className="actions">
             <Button
@@ -695,18 +695,18 @@ export function WorkspaceOverview({
             <tbody>
               {workspaces.map((workspace) => (
                 <tr key={workspace.id}>
-                  <td>
+                  <td data-label="Name">
                     <Link route={{ kind: 'arbeitsbereich', workspaceId: workspace.id, folder: null }}>
                       {workspace.name}
                     </Link>
                   </td>
-                  <td>
+                  <td data-label="Rolle">
                     <RoleBadge role={workspace.role} />
                   </td>
-                  <td>
+                  <td data-label="Status">
                     <StatusBadge status={workspace.status} />
                   </td>
-                  <td>
+                  <td data-label="Ansichten">
                     <Link route={{ kind: 'mitglieder', workspaceId: workspace.id }}>Mitglieder</Link>
                     {' · '}
                     <Link route={{ kind: 'einstellungen', workspaceId: workspace.id }}>Einstellungen</Link>

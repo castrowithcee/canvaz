@@ -348,16 +348,18 @@ export function AdminUsers({ me }: { readonly me: MeResponse }) {
                 const busy = pendingId === user.id
                 return (
                   <tr key={user.id}>
-                    <td>{user.displayName}</td>
-                    <td>{user.email ?? '—'}</td>
-                    <td>
+                    <td data-label="Name">{user.displayName}</td>
+                    <td data-label="E-Mail">{user.email ?? '—'}</td>
+                    <td data-label="Status">
                       <StatusBadge status={user.status} />
                     </td>
-                    <td>{user.isSystemAdmin ? <Badge tone="accent">Systemadmin</Badge> : <Badge>Nutzer</Badge>}</td>
-                    <td>
+                    <td data-label="Rolle">
+                      {user.isSystemAdmin ? <Badge tone="accent">Systemadmin</Badge> : <Badge>Nutzer</Badge>}
+                    </td>
+                    <td data-label="Zugang">
                       <AccessBadge user={user} />
                     </td>
-                    <td>
+                    <td data-label="Aktion">
                       <span className="actions">
                         <Button
                           icon={activate ? UserCheck : UserX}

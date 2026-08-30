@@ -279,7 +279,7 @@ export function TableSkeleton({
           {Array.from({ length: rows }, (_unused, row) => (
             <tr key={row}>
               {columns.map((column) => (
-                <td key={column}>
+                <td key={column} data-label={column}>
                   <Skeleton />
                 </td>
               ))}
