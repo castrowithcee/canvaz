@@ -71,6 +71,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import {
   ArrowLeft,
+  Download,
   History,
   Info,
   MoreHorizontal,
@@ -109,6 +110,7 @@ import { Badge, Button, ConfirmDialog, IconButton, Loading, Notice } from '../ui
 import { boardStatus, readOnlyReason } from './board-status.js'
 import type { BoardEditorPort, EditorPeer } from './board-editor-port.js'
 import { BoardCanvas } from './excalidraw-adapter.js'
+import { usePersonalLibrary } from './personal-library.js'
 import { connectBoardRealtime } from './realtime-client.js'
 import type { BoardRealtime, RealtimeStatus } from './realtime-client.js'
 
@@ -273,6 +275,11 @@ export function BoardEditor({
   const wasRenamingRef = useRef(false)
   /** Die schwebenden Gruppen. Ihre Hoehe ist der obere Rand, den die Bedienelemente der Zeichenflaeche freihalten. */
   const floatRef = useRef<HTMLDivElement>(null)
+  /**
+   * Persoenliche Bibliothek. Sie gehoert dem Nutzer und nicht diesem Board: ihre Speicherung beruehrt weder
+   * Speicherstatus noch Snapshot noch Versionen des Boards. Ein Gast hat keine.
+   */
+  const library = usePersonalLibrary({ csrfToken, persistent: member !== null, adapter })
 
   const load = useCallback(() => {
     setState({ kind: 'loading' })
@@ -842,7 +849,7 @@ export function BoardEditor({
               icon={ArrowLeft}
               variant="quiet"
               onClick={() => {
-                if (unsaved) {
+                if (unsaved || library.unsaved) {
                   setConfirmLeave(true)
                   return
                 }
@@ -1038,8 +1045,9 @@ export function BoardEditor({
           {confirmLeave && onClose !== null && (
             <ConfirmDialog danger>
               <p>
-                An diesem Board stehen Aenderungen, die noch nicht gesichert sind. Beim Verlassen gehen sie
-                verloren.
+                {unsaved
+                  ? 'An diesem Board stehen Aenderungen, die noch nicht gesichert sind. Beim Verlassen gehen sie verloren.'
+                  : 'Deine Bibliothek ist noch nicht gespeichert. Beim Verlassen gehen die letzten Aenderungen verloren.'}
               </p>
               <p className="actions">
                 <Button
@@ -1082,6 +1090,42 @@ export function BoardEditor({
                 >
                   Hinweis ausblenden
                 </Button>
+              </p>
+            </Notice>
+          )}
+          {library.status.kind === 'speichert' && <Notice kind="info" text="Bibliothek wird gespeichert …" />}
+          {library.status.kind === 'gespeichert' && <Notice kind="success" text="Bibliothek gespeichert." />}
+          {library.status.kind === 'fehler' && (
+            <Notice>
+              <p>Deine Bibliothek ist nicht gespeichert. {library.status.message}</p>
+              <p className="actions">
+                <Button icon={RotateCcw} onClick={library.retry}>
+                  Erneut versuchen
+                </Button>
+                <Button icon={Download} onClick={library.exportFile}>
+                  Bibliothek exportieren
+                </Button>
+              </p>
+            </Notice>
+          )}
+          {library.status.kind === 'ladefehler' && (
+            <Notice>
+              <p>
+                {library.status.message} Aenderungen an der Bibliothek werden erst gespeichert, wenn sie geladen
+                ist.
+              </p>
+              <p className="actions">
+                <Button icon={RotateCcw} onClick={library.retry}>
+                  Erneut laden
+                </Button>
+              </p>
+            </Notice>
+          )}
+          {library.note !== null && (
+            <Notice kind="info">
+              <p>{library.note}</p>
+              <p className="actions">
+                <Button onClick={library.dismissNote}>Hinweis ausblenden</Button>
               </p>
             </Notice>
           )}
@@ -1130,6 +1174,7 @@ export function BoardEditor({
             key={mountKey}
             viewMode={viewOnly}
             scene={state.loaded.scene}
+            library={library.editorLibrary}
             onAdapterReady={setAdapter}
           />
         </div>

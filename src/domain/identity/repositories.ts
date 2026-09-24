@@ -5,7 +5,8 @@
  * `src/persistence` und ist die einzige Stelle, die SQL kennt.
  */
 
-import type { AppearanceView } from '../../contracts/api.js'
+import type { AppearanceView, LibraryView } from '../../contracts/api.js'
+import type { LibraryItem } from '../../contracts/library.js'
 import type { LocalCredential, UserInvitation, UserInvitationId } from './local-auth.js'
 import type {
   AuthenticatedSession,
@@ -91,6 +92,22 @@ export interface AppearanceRepository {
   set(userId: UserId, appearance: AppearanceView): Promise<void>
 }
 
+/**
+ * Persoenliche Bibliothek.
+ *
+ * Genau eine Zeile je Nutzer oder keine; ohne Zeile ist die Bibliothek leer (Revision `0`). Wie beim
+ * Erscheinungsbild kennt das Repository keinen anderen Nutzer als den uebergebenen. Die Bibliothek haengt an
+ * keinem Board und beruehrt weder Snapshot noch Versionen.
+ */
+export interface LibraryRepository {
+  findByUserId(userId: UserId): Promise<LibraryView | null>
+  /**
+   * Ersetzt die Bibliothek, wenn sie noch auf `expectedRevision` steht. Liefert die neue Revision oder
+   * `null`, wenn inzwischen eine andere Speicherung dazwischenkam - dann wurde nichts geschrieben.
+   */
+  replace(userId: UserId, items: readonly LibraryItem[], expectedRevision: number): Promise<number | null>
+}
+
 export type NewInvitation = {
   readonly userId: UserId
   /** Hash des Einladungswerts. Der Wert selbst verlaesst den Server genau einmal, in der Anlageantwort. */
@@ -155,6 +172,7 @@ export interface IdentityStore {
   readonly externalIdentities: ExternalIdentityRepository
   readonly localCredentials: LocalCredentialRepository
   readonly appearances: AppearanceRepository
+  readonly libraries: LibraryRepository
   readonly invitations: InvitationRepository
   readonly sessions: SessionRepository
   transaction<T>(run: (store: IdentityStore) => Promise<T>): Promise<T>

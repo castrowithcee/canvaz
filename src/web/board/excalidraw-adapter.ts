@@ -5,24 +5,26 @@
  * Elementfelder werden unveraendert durchgereicht, damit ein Upstream-Update keine Daten verliert.
  */
 
-import { CaptureUpdateAction, Excalidraw } from '@excalidraw/excalidraw'
+import { CaptureUpdateAction, Excalidraw, useHandleLibrary } from '@excalidraw/excalidraw'
 import type {
   ExcalidrawImperativeAPI,
   BinaryFileData,
   BinaryFiles,
   Collaborator,
+  LibraryItems,
   SocketId,
 } from '@excalidraw/excalidraw/types'
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types'
 import type { AppState } from '@excalidraw/excalidraw/types'
-import { createElement, useCallback, useEffect, useRef } from 'react'
+import { createElement, useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 
+import type { LibraryItem } from '../../contracts/library.js'
 import type { BinaryFileRef, PersistedAppState, SceneSnapshot, SyncElement } from '../../contracts/scene.js'
 import { DEFAULT_APP_STATE } from '../../contracts/scene.js'
 import { reconcileElements } from '../../domain/board/reconcile.js'
 import { useColorScheme } from '../appearance.js'
-import type { BoardEditorPort, EditorPeer, LocalChange, LocalPresence } from './board-editor-port.js'
+import type { BoardEditorPort, EditorLibrary, EditorPeer, LocalChange, LocalPresence } from './board-editor-port.js'
 
 /** Excalidraws eigener Rasterabstand, wenn der Boardzustand kein Raster vorgibt. */
 const EXCALIDRAW_DEFAULT_GRID_SIZE = 20
@@ -37,6 +39,29 @@ function toSyncElements(elements: readonly ExcalidrawElement[]): readonly SyncEl
 
 function toExcalidrawElements(elements: readonly SyncElement[]): readonly ExcalidrawElement[] {
   return elements as unknown as readonly ExcalidrawElement[]
+}
+
+/** Wie bei den Elementen: Bibliothekseintraege erfuellen den Vertrag strukturell, der Server prueft ihn. */
+function toLibraryItems(items: LibraryItems): readonly LibraryItem[] {
+  return items as unknown as readonly LibraryItem[]
+}
+
+function toExcalidrawLibraryItems(items: readonly LibraryItem[]): LibraryItems {
+  return items as unknown as LibraryItems
+}
+
+/**
+ * Herkunft des oeffentlichen Bibliothekskatalogs. Nur von dort nimmt der Editor eine Bibliothek ueber die
+ * Ruecksprungadresse (`#addLibrary=`) an - dieselbe Herkunft, die die Content-Security-Policy freigibt.
+ */
+const LIBRARY_CATALOG_ORIGIN = 'https://libraries.excalidraw.com'
+
+function isCatalogLibraryUrl(url: string): boolean {
+  try {
+    return new URL(url).origin === LIBRARY_CATALOG_ORIGIN
+  } catch {
+    return false
+  }
 }
 
 export function toPersistedAppState(appState: Pick<AppState, 'viewBackgroundColor' | 'gridSize' | 'gridModeEnabled' | 'name'>): PersistedAppState {
@@ -204,6 +229,11 @@ export class ExcalidrawBoardAdapter implements BoardEditorPort {
     this.#api.updateScene({ collaborators, captureUpdate: CaptureUpdateAction.NEVER })
   }
 
+  replaceLibrary(items: readonly LibraryItem[]): void {
+    // Kein Zusammenfuehren im Editor: die Liste ist bereits der vollstaendige neue Stand.
+    void this.#api.updateLibrary({ libraryItems: toExcalidrawLibraryItems(items), merge: false })
+  }
+
   /**
    * Meldet den eigenen Zeigezustand.
    *
@@ -252,11 +282,14 @@ export class ExcalidrawBoardAdapter implements BoardEditorPort {
 export function BoardCanvas({
   viewMode,
   scene,
+  library,
   onAdapterReady,
 }: {
   readonly viewMode: boolean
   /** Ausgangsstand. Wird als `initialData` gesetzt, damit der Editor ihn nicht beim Mounten ueberschreibt. */
   readonly scene: SceneSnapshot
+  /** `null` heisst: keine Bibliothek anbinden; der Editor haelt sie dann nur fuer diese Sitzung. */
+  readonly library: EditorLibrary | null
   readonly onAdapterReady: (adapter: ExcalidrawBoardAdapter) => void
 }): ReactElement {
   const adapter = useRef<ExcalidrawBoardAdapter | null>(null)
@@ -264,6 +297,18 @@ export function BoardCanvas({
   // oeffentliche Prop; seine eigenen Stile und Werkzeuge bleiben unberuehrt. Mit der Prop steuert der Host
   // das Thema, und Excalidraw blendet seinen eigenen Umschalter aus - es gibt dafuer genau einen Ort.
   const theme = useColorScheme()
+  const [api, setApi] = useState<ExcalidrawImperativeAPI | null>(null)
+  // Der Ausgangsstand der Bibliothek wird genau einmal je Zeichenflaeche angefordert, nicht bei jedem Rendern.
+  const [initialLibrary] = useState(() => library?.load().then(toExcalidrawLibraryItems) ?? null)
+  const libraryRef = useRef(library)
+  libraryRef.current = library
+  // Rueckweg aus dem oeffentlichen Katalog: Excalidraw liest `#addLibrary=` aus der Adresse, fragt nach und
+  // fuehrt die Bibliothek mit der vorhandenen zusammen. Das Ergebnis kommt ueber `onLibraryChange` - also
+  // ueber denselben Speicherweg wie ein Dateiimport. Ohne dauerhafte Bibliothek bleibt der Weg zu.
+  useHandleLibrary({
+    excalidrawAPI: library?.acceptsCatalog === true ? api : null,
+    validateLibraryUrl: isCatalogLibraryUrl,
+  })
   // Stabile Identitaet: Excalidraw reicht die Schnittstelle erneut heraus, sobald sich der Rueckruf aendert.
   const handleApi = useCallback(
     (api: ExcalidrawImperativeAPI) => {
@@ -273,6 +318,10 @@ export function BoardCanvas({
       // deshalb weder `start` noch `stop`.
       next.start()
       onAdapterReady(next)
+      // Die Schnittstelle kommt waehrend des Renderns des Editors; der eigene Zustand folgt danach.
+      queueMicrotask(() => {
+        setApi(api)
+      })
     },
     [onAdapterReady],
   )
@@ -291,6 +340,9 @@ export function BoardCanvas({
     },
     viewModeEnabled: viewMode,
     theme,
+    onLibraryChange: (items: LibraryItems) => {
+      libraryRef.current?.onChange(toLibraryItems(items))
+    },
     langCode: 'de-DE',
     initialData: {
       elements: toExcalidrawElements(scene.elements),
@@ -305,6 +357,7 @@ export function BoardCanvas({
       // Kamera und Auswahl sind clientlokal und werden nicht gespeichert; der Blick geht deshalb auf den
       // vorhandenen Inhalt statt auf den Nullpunkt.
       scrollToContent: true,
+      ...(initialLibrary === null ? {} : { libraryItems: initialLibrary }),
     },
   })
 }

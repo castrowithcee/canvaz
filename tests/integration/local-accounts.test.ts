@@ -24,6 +24,7 @@ import {
   CSRF_HEADER,
   DEFAULT_APPEARANCE,
   ME_APPEARANCE_PATH,
+  ME_LIBRARY_PATH,
   ME_PATH,
 } from '../../src/contracts/api.js'
 import type {
@@ -32,6 +33,7 @@ import type {
   AuthMethodsResponse,
   CreateInvitationResponse,
   CreateUserResponse,
+  LibraryView,
   LocalLoginResponse,
 } from '../../src/contracts/api.js'
 import { INVITATION_TTL_HOURS, isInvitationRedeemable } from '../../src/domain/identity/local-auth.js'
@@ -572,5 +574,52 @@ describe('Erscheinungsbild', () => {
     const anonym = await post(app, createJar(), ME_APPEARANCE_PATH, DEFAULT_APPEARANCE)
     expect(anonym.status).toBe(401)
     expect((await profileOf(app, root.jar)).appearance).toEqual(gewaehlt)
+  })
+})
+
+describe('Persoenliche Bibliothek', () => {
+  it('gehoert allein dem eigenen Konto, prueft Inhalt und Groesse und ueberschreibt nie still', async () => {
+    const root = await signedInAsSystemAdmin(app)
+    const ada = await memberAccount(root, 'ada@example.com')
+    const eintrag = (id: string, element: Record<string, unknown> = { type: 'rectangle' }) => ({
+      id,
+      status: 'unpublished',
+      created: 1,
+      elements: [{ id: `${id}-el`, version: 1, versionNonce: 1, ...element }],
+    })
+    const lesen = async (account: Account) =>
+      (await (await account.jar.fetch(`${app.baseUrl}${ME_LIBRARY_PATH}`)).json()) as LibraryView
+
+    expect(await lesen(root)).toEqual({ revision: 0, items: [] })
+    const erste = await adminPost(root, ME_LIBRARY_PATH, { revision: 0, items: [eintrag('a')] })
+    expect(erste.status).toBe(200)
+    expect(await erste.json()).toEqual({ revision: 1 })
+
+    // Ein zweites Geraet desselben Kontos sieht sie; ein anderes Konto nicht.
+    const zweitesGeraet = createJar()
+    expect((await localLogin(app, zweitesGeraet, 'root@example.com', TEST_PASSWORD)).status).toBe(200)
+    expect((await lesen({ jar: zweitesGeraet, profile: root.profile })).items).toEqual([eintrag('a')])
+    expect(await lesen(ada)).toEqual({ revision: 0, items: [] })
+
+    // Ein zweites Fenster auf der ueberholten Revision ueberschreibt nichts.
+    expect((await adminPost(root, ME_LIBRARY_PATH, { revision: 0, items: [eintrag('b')] })).status).toBe(409)
+    expect((await adminPost(root, ME_LIBRARY_PATH, { revision: 1, items: [eintrag('a'), eintrag('b')] })).status)
+      .toBe(200)
+    expect((await adminPost(root, ME_LIBRARY_PATH, { revision: 1, items: [] })).status).toBe(409)
+
+    // Ungueltig, mit Bild, zu gross, ohne CSRF-Token oder ohne Sitzung: nichts aendert sich.
+    expect((await adminPost(root, ME_LIBRARY_PATH, { revision: 2, items: [{ id: 'x' }] })).status).toBe(400)
+    const bild = await adminPost(root, ME_LIBRARY_PATH, {
+      revision: 2,
+      items: [eintrag('c', { type: 'image', fileId: 'datei' })],
+    })
+    expect(bild.status).toBe(400)
+    expect(((await bild.json()) as { error: string }).error).toContain('Bilder')
+    const riesig = [eintrag('d', { type: 'text', text: 'x'.repeat(6 * 1024 * 1024) })]
+    expect((await adminPost(root, ME_LIBRARY_PATH, { revision: 2, items: riesig })).status).toBe(413)
+    expect((await adminPost(root, ME_LIBRARY_PATH, { revision: 2, items: [] }, { csrf: false })).status).toBe(403)
+    expect((await post(app, createJar(), ME_LIBRARY_PATH, { revision: 2, items: [] })).status).toBe(401)
+    expect((await fetch(`${app.baseUrl}${ME_LIBRARY_PATH}`)).status).toBe(401)
+    expect(await lesen(root)).toEqual({ revision: 2, items: [eintrag('a'), eintrag('b')] })
   })
 })

@@ -35,9 +35,15 @@ export type Route = {
  * verboten. `data:`/`blob:` bleiben fuer Bilder offen, weil der Zeichenbereich Inhalte als Datenverweis
  * einbettet und exportiert. `frame-ancestors 'none'` ersetzt `X-Frame-Options`. HSTS fehlt bewusst: die
  * TLS-Terminierung ist eine Eingabe des Deployments, nicht dieser Anwendung.
+ *
+ * Genau eine fremde Herkunft darf der Browser abrufen: den oeffentlichen Excalidraw-Bibliothekskatalog. Waehlt
+ * dort jemand "Zu Excalidraw hinzufuegen", kehrt er mit der Adresse der Bibliotheksdatei zurueck, und der
+ * Editor holt sie von dort. Nur Abruf (`connect-src`), keine Skripte, Stile oder Rahmen; welche Adressen der
+ * Editor ueberhaupt annimmt, prueft zusaetzlich der Adapter.
  */
 const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
+  "connect-src 'self' https://libraries.excalidraw.com",
   "base-uri 'self'",
   "object-src 'none'",
   "frame-ancestors 'none'",
