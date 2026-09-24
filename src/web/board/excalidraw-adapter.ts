@@ -21,6 +21,7 @@ import type { ReactElement } from 'react'
 import type { BinaryFileRef, PersistedAppState, SceneSnapshot, SyncElement } from '../../contracts/scene.js'
 import { DEFAULT_APP_STATE } from '../../contracts/scene.js'
 import { reconcileElements } from '../../domain/board/reconcile.js'
+import { useColorScheme } from '../appearance.js'
 import type { BoardEditorPort, EditorPeer, LocalChange, LocalPresence } from './board-editor-port.js'
 
 /** Excalidraws eigener Rasterabstand, wenn der Boardzustand kein Raster vorgibt. */
@@ -259,6 +260,10 @@ export function BoardCanvas({
   readonly onAdapterReady: (adapter: ExcalidrawBoardAdapter) => void
 }): ReactElement {
   const adapter = useRef<ExcalidrawBoardAdapter | null>(null)
+  // Das gerade sichtbare Schema der Produktschale, nie "System". Excalidraw bekommt es ueber seine
+  // oeffentliche Prop; seine eigenen Stile und Werkzeuge bleiben unberuehrt. Mit der Prop steuert der Host
+  // das Thema, und Excalidraw blendet seinen eigenen Umschalter aus - es gibt dafuer genau einen Ort.
+  const theme = useColorScheme()
   // Stabile Identitaet: Excalidraw reicht die Schnittstelle erneut heraus, sobald sich der Rueckruf aendert.
   const handleApi = useCallback(
     (api: ExcalidrawImperativeAPI) => {
@@ -285,6 +290,7 @@ export function BoardCanvas({
       adapter.current?.reportPointer({ x: pointer.x, y: pointer.y })
     },
     viewModeEnabled: viewMode,
+    theme,
     langCode: 'de-DE',
     initialData: {
       elements: toExcalidrawElements(scene.elements),

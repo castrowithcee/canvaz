@@ -331,7 +331,7 @@ describe('Boards anlegen und sehen', () => {
   })
 
   it('verweigert jeden Boardendpunkt ohne Sitzung', async () => {
-    const anonym: Account = { jar: createJar(), profile: { user: {} as never, csrfToken: 'x' } }
+    const anonym: Account = { jar: createJar(), profile: { user: {} as never, csrfToken: 'x', appearance: {} as never } }
 
     expect((await get(anonym, BOARDS_PATH, { [WORKSPACE_ID_PARAM]: FREMDE_KENNUNG })).status).toBe(401)
     expect((await openBoard(anonym, FREMDE_KENNUNG)).status).toBe(401)

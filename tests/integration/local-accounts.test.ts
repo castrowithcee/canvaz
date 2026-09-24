@@ -22,10 +22,13 @@ import {
   AUTH_LOGIN_PATH,
   AUTH_METHODS_PATH,
   CSRF_HEADER,
+  DEFAULT_APPEARANCE,
+  ME_APPEARANCE_PATH,
   ME_PATH,
 } from '../../src/contracts/api.js'
 import type {
   AdminUsersResponse,
+  AppearanceView,
   AuthMethodsResponse,
   CreateInvitationResponse,
   CreateUserResponse,
@@ -43,6 +46,7 @@ import {
   TEST_PASSWORD,
   changePassword,
   localLogin,
+  post,
   profileOf,
   redeemInvitation,
   signedInAsSystemAdmin,
@@ -541,5 +545,32 @@ describe('Kein Klartext verlaesst den Fluss', () => {
     }
     // Gespeichert ist nur der Hash - und der sieht auch so aus.
     expect(gespeichert.some((value) => value.startsWith('scrypt$'))).toBe(true)
+  })
+})
+
+describe('Erscheinungsbild', () => {
+  it('gehoert allein dem eigenen Konto, gilt in jeder Sitzung und nimmt nur bekannte Werte an', async () => {
+    const root = await signedInAsSystemAdmin(app)
+    const ada = await memberAccount(root, 'ada@example.com')
+    expect(root.profile.appearance).toEqual(DEFAULT_APPEARANCE)
+
+    const gewaehlt: AppearanceView = { colorScheme: 'dark', accent: 'petrol' }
+    const gespeichert = await adminPost(root, ME_APPEARANCE_PATH, gewaehlt)
+    expect(gespeichert.status).toBe(200)
+    expect(await gespeichert.json()).toEqual(gewaehlt)
+
+    // Ein zweites Geraet desselben Kontos bekommt die Wahl mit dem Profil; ein anderes Konto nicht.
+    const zweitesGeraet = createJar()
+    expect((await localLogin(app, zweitesGeraet, 'root@example.com', TEST_PASSWORD)).status).toBe(200)
+    expect((await profileOf(app, zweitesGeraet)).appearance).toEqual(gewaehlt)
+    expect((await profileOf(app, ada.jar)).appearance).toEqual(DEFAULT_APPEARANCE)
+
+    // Unbekannte Werte, fehlendes CSRF-Token und fehlende Sitzung aendern nichts.
+    expect((await adminPost(root, ME_APPEARANCE_PATH, { colorScheme: 'dark', accent: '#ff0000' })).status).toBe(400)
+    expect((await adminPost(root, ME_APPEARANCE_PATH, { colorScheme: 'sepia', accent: 'blau' })).status).toBe(400)
+    expect((await adminPost(root, ME_APPEARANCE_PATH, DEFAULT_APPEARANCE, { csrf: false })).status).toBe(403)
+    const anonym = await post(app, createJar(), ME_APPEARANCE_PATH, DEFAULT_APPEARANCE)
+    expect(anonym.status).toBe(401)
+    expect((await profileOf(app, root.jar)).appearance).toEqual(gewaehlt)
   })
 })

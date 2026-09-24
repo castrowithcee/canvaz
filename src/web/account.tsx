@@ -1,5 +1,5 @@
 /**
- * Anmeldung, Einloesen einer Einladung und Passwortwechsel.
+ * Anmeldung, Einloesen einer Einladung, Passwortwechsel und das eigene Erscheinungsbild.
  *
  * Die Anmeldeseite zeigt **nur die Wege, die es hier gibt**: der lokale immer, der externe nur mit
  * konfiguriertem Provider (`/api/auth/methods`). Was sie anbietet, entscheidet damit der Server und nicht
@@ -16,11 +16,11 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { Eye, EyeOff, KeyRound, LogIn } from 'lucide-react'
+import { Eye, EyeOff, KeyRound, LogIn, Palette } from 'lucide-react'
 
-import type { AuthMethodsResponse, MeResponse } from '../contracts/api.js'
-import { AUTH_LOGIN_PATH, MIN_PASSWORD_LENGTH } from '../contracts/api.js'
-import { ApiError, changePassword, fetchAuthMethods, localLogin, redeemInvitation } from './api.js'
+import type { AccentColor, AppearanceView, AuthMethodsResponse, ColorScheme, MeResponse } from '../contracts/api.js'
+import { ACCENT_COLORS, AUTH_LOGIN_PATH, COLOR_SCHEMES, MIN_PASSWORD_LENGTH } from '../contracts/api.js'
+import { ApiError, changePassword, fetchAuthMethods, localLogin, redeemInvitation, saveAppearance } from './api.js'
 import { actionClass, Button, Field, IconButton, Notice } from './ui.js'
 
 function messageOf(cause: unknown, fallback: string): string {
@@ -362,6 +362,117 @@ export function PasswordSettings({ me, onChanged }: { readonly me: MeResponse; r
           </Button>
         </p>
         {done && error === null && <Notice kind="success" text="Das Passwort wurde gewechselt." />}
+        {error !== null && <Notice text={error} />}
+      </form>
+    </section>
+  )
+}
+
+const COLOR_SCHEME_LABELS: Readonly<Record<ColorScheme, string>> = {
+  system: 'System',
+  light: 'Hell',
+  dark: 'Dunkel',
+}
+
+const ACCENT_LABELS: Readonly<Record<AccentColor, string>> = {
+  violett: 'Violett (Standard)',
+  blau: 'Blau',
+  petrol: 'Petrol',
+  fuchsia: 'Fuchsia',
+  graphit: 'Graphit',
+}
+
+/**
+ * Farbschema und Akzentfarbe des eigenen Kontos.
+ *
+ * Die Wahl wird erst mit dem Speichern wirksam und gilt dann sofort, ohne Neuladen, und auf jedem Geraet,
+ * auf dem sich dieses Konto anmeldet. Sie betrifft nur die Oberflaeche um die Zeichenflaeche herum; die
+ * Zeichenflaeche selbst folgt allein dem Farbschema.
+ */
+export function AppearanceSettings({
+  me,
+  onChanged,
+}: {
+  readonly me: MeResponse
+  readonly onChanged: (appearance: AppearanceView) => void
+}) {
+  const [colorScheme, setColorScheme] = useState<ColorScheme>(me.appearance.colorScheme)
+  const [accent, setAccent] = useState<AccentColor>(me.appearance.accent)
+  const [error, setError] = useState<string | null>(null)
+  const [done, setDone] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  return (
+    <section aria-labelledby="erscheinungsbild">
+      <h2 id="erscheinungsbild">Erscheinungsbild</h2>
+      <form
+        className="stack card"
+        onSubmit={(event) => {
+          event.preventDefault()
+          setBusy(true)
+          setError(null)
+          setDone(false)
+          saveAppearance(me.csrfToken, { colorScheme, accent })
+            .then((saved) => {
+              setDone(true)
+              onChanged(saved)
+            })
+            .catch((cause: unknown) => {
+              setError(messageOf(cause, 'Das Erscheinungsbild konnte nicht gespeichert werden.'))
+            })
+            .finally(() => {
+              setBusy(false)
+            })
+        }}
+      >
+        <fieldset>
+          <legend>Farbschema</legend>
+          <div className="choice-group">
+            {COLOR_SCHEMES.map((value) => (
+              <label key={value} className="choice">
+                <input
+                  type="radio"
+                  name="farbschema"
+                  value={value}
+                  checked={colorScheme === value}
+                  onChange={() => {
+                    setColorScheme(value)
+                    setDone(false)
+                  }}
+                />
+                {COLOR_SCHEME_LABELS[value]}
+              </label>
+            ))}
+          </div>
+          <p className="hint">System folgt der Einstellung des Geraets und wechselt mit ihr.</p>
+        </fieldset>
+        <fieldset>
+          <legend>Akzentfarbe</legend>
+          <div className="choice-group">
+            {ACCENT_COLORS.map((value) => (
+              <label key={value} className="choice">
+                <input
+                  type="radio"
+                  name="akzentfarbe"
+                  value={value}
+                  checked={accent === value}
+                  onChange={() => {
+                    setAccent(value)
+                    setDone(false)
+                  }}
+                />
+                <span className="choice__swatch" data-accent={value} aria-hidden="true" />
+                {ACCENT_LABELS[value]}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+        <p>
+          <Button variant="primary" icon={Palette} type="submit" busy={busy}>
+            Erscheinungsbild speichern
+          </Button>
+        </p>
+        {done && error === null && <Notice kind="success" text="Das Erscheinungsbild wurde gespeichert." />}
         {error !== null && <Notice text={error} />}
       </form>
     </section>

@@ -8,6 +8,7 @@
 
 import type {
   AddWorkspaceMemberRequest,
+  AppearanceView,
   AdminUsersResponse,
   AuthMethodsResponse,
   ChangePasswordRequest,
@@ -111,6 +112,7 @@ import {
   FOLDER_REMOVE_PATH,
   FOLDER_RENAME_PATH,
   FOLDERS_PATH,
+  ME_APPEARANCE_PATH,
   ME_PATH,
   WORKSPACE_ID_PARAM,
   WORKSPACE_MEMBER_ADD_PATH,
@@ -167,6 +169,11 @@ function mutation(csrfToken: string, body?: unknown): RequestInit {
     headers: { [CSRF_HEADER]: csrfToken, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   }
+}
+
+/** Speichert das eigene Erscheinungsbild. Der Server kennt nur die Wahl dessen, der die Sitzung fuehrt. */
+export async function saveAppearance(csrfToken: string, appearance: AppearanceView): Promise<AppearanceView> {
+  return request<AppearanceView>(ME_APPEARANCE_PATH, mutation(csrfToken, appearance))
 }
 
 export async function logout(csrfToken: string): Promise<LogoutResponse> {

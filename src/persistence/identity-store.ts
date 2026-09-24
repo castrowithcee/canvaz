@@ -7,6 +7,9 @@
 
 import type { Pool, PoolClient } from 'pg'
 
+import type { AppearanceView } from '../contracts/api.js'
+import { parseAppearance } from '../contracts/api.js'
+
 import type { LocalCredential, UserInvitation, UserInvitationId } from '../domain/identity/local-auth.js'
 import type {
   AuthenticatedSession,
@@ -312,6 +315,31 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Identit
       async listUserIds(): Promise<readonly UserId[]> {
         const result = await db.query<{ user_id: string }>('select user_id from local_credentials')
         return result.rows.map((row) => row.user_id)
+      },
+    },
+
+    appearances: {
+      async findByUserId(userId: UserId): Promise<AppearanceView | null> {
+        const result = await db.query<{ color_scheme: string; accent: string }>(
+          'select color_scheme, accent from user_appearance where user_id = $1',
+          [userId],
+        )
+        const row = result.rows[0]
+        // Die Check-Constraints lassen nur die Werte des Vertrags zu; ein Wert, den diese Fassung nicht mehr
+        // kennt, faellt still auf die Standardwahl zurueck statt die Anmeldung zu brechen.
+        return row === undefined ? null : parseAppearance({ colorScheme: row.color_scheme, accent: row.accent })
+      },
+
+      async set(userId: UserId, appearance: AppearanceView): Promise<void> {
+        await db.query(
+          `insert into user_appearance (user_id, color_scheme, accent)
+           values ($1, $2, $3)
+           on conflict (user_id) do update
+             set color_scheme = excluded.color_scheme,
+                 accent = excluded.accent,
+                 updated_at = now()`,
+          [userId, appearance.colorScheme, appearance.accent],
+        )
       },
     },
 

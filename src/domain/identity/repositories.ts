@@ -5,6 +5,7 @@
  * `src/persistence` und ist die einzige Stelle, die SQL kennt.
  */
 
+import type { AppearanceView } from '../../contracts/api.js'
 import type { LocalCredential, UserInvitation, UserInvitationId } from './local-auth.js'
 import type {
   AuthenticatedSession,
@@ -78,6 +79,18 @@ export interface LocalCredentialRepository {
   listUserIds(): Promise<readonly UserId[]>
 }
 
+/**
+ * Persoenliches Erscheinungsbild.
+ *
+ * Genau eine Zeile je Nutzer oder keine; ohne Zeile gilt die Standardwahl des Vertrags. Das Repository
+ * kennt keinen anderen Nutzer als den uebergebenen - wer seine Wahl aendern darf, entscheidet die Route.
+ */
+export interface AppearanceRepository {
+  findByUserId(userId: UserId): Promise<AppearanceView | null>
+  /** Legt die Wahl an oder ersetzt sie. */
+  set(userId: UserId, appearance: AppearanceView): Promise<void>
+}
+
 export type NewInvitation = {
   readonly userId: UserId
   /** Hash des Einladungswerts. Der Wert selbst verlaesst den Server genau einmal, in der Anlageantwort. */
@@ -141,6 +154,7 @@ export interface IdentityStore {
   readonly users: UserRepository
   readonly externalIdentities: ExternalIdentityRepository
   readonly localCredentials: LocalCredentialRepository
+  readonly appearances: AppearanceRepository
   readonly invitations: InvitationRepository
   readonly sessions: SessionRepository
   transaction<T>(run: (store: IdentityStore) => Promise<T>): Promise<T>
