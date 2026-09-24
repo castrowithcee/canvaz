@@ -1144,71 +1144,128 @@
   }
 
   /*
-   * Boardeditor: eine kompakte Arbeitsleiste ueber der Zeichenflaeche, daneben die Board-Sidebar.
+   * Boardeditor: die Zeichenflaeche nimmt die ganze Hoehe, daneben die Board-Sidebar.
    *
-   * Die Leiste traegt drei Gruppen - Rueckweg und Titel, verdichtete Zustaende, Boardaktionen. Sie waechst
-   * nicht mit ihrem Inhalt: die Zustandsgruppe darf schrumpfen, der Titel wird gekuerzt, und die Aktionen
-   * behalten ihre Groesse. Damit bleibt die Zeichenflaeche auch auf einem schmalen Fenster die Hauptsache.
+   * Ueber der Zeichenflaeche ist keine Zeile reserviert. Zwei kompakte Gruppen schweben darueber - links
+   * Rueckweg, Titel und Boardmenue, rechts Presence, Zustand, Freigabe und Sidebar-Ausloeser. Passen beide
+   * nicht in eine Reihe, bricht die rechte Gruppe um; der Titel wird vorher gekuerzt.
+   *
+   * ## Nichts wird ueberdeckt
+   *
+   * Excalidraw haelt seine eigenen Bedienelemente von einem oberen Sicherheitsabstand frei, den es aus
+   * `--sat` liest (sonst `env(safe-area-inset-top)`). Genau diesen Wert setzt der Editor auf die gemessene
+   * Hoehe der schwebenden Gruppen (`--board-float`, `board/board-view.tsx`). Werkzeugleiste, Menue,
+   * Bibliothek und Eigenschaften beginnen damit darunter; gestaltet wird an Excalidraw nichts, und die
+   * Zeichnung selbst laeuft unter den Gruppen weiter. Vor der ersten Messung gilt eine Reihe als Vorgabe.
    */
   .board {
+    --sat: var(--board-float, calc(var(--safe-area-top) + 3.75rem));
     background: var(--color-canvas);
     display: flex;
     flex-direction: column;
     height: 100dvh;
+    position: relative;
   }
 
-  .board__bar {
-    align-items: center;
-    backdrop-filter: saturate(180%) blur(18px);
-    background: color-mix(in srgb, var(--color-surface) 90%, transparent);
-    border-bottom: 1px solid var(--color-border);
+  /*
+   * Die Ebene der Gruppen. Sie selbst nimmt keine Zeigerereignisse an: zwischen den Gruppen wird
+   * weitergezeichnet. Sie liegt ueber der Zeichenflaeche, aber unter den Ebenen von Excalidraw - dessen
+   * Menues, Dialoge und Bibliothek ueberdecken im Zweifel die Gruppen und nie umgekehrt.
+   */
+  .board__float {
+    align-items: flex-start;
     display: flex;
     flex-wrap: wrap;
-    gap: --spacing(2) --spacing(3);
+    gap: --spacing(2);
+    inset-block-start: 0;
+    inset-inline: 0;
+    justify-content: space-between;
     padding: calc(--spacing(2) + var(--safe-area-top))
-      calc(--spacing(3) + var(--safe-area-right))
-      --spacing(2)
-      calc(--spacing(3) + var(--safe-area-left));
-    position: relative;
-    z-index: 5;
+      calc(--spacing(2) + var(--safe-area-right))
+      0
+      calc(--spacing(2) + var(--safe-area-left));
+    pointer-events: none;
+    position: absolute;
+    z-index: 3;
   }
 
-  .board__lead {
+  .board__float > * {
+    pointer-events: auto;
+  }
+
+  /*
+   * Schmale Zeichenflaeche: Excalidraw legt seine Werkzeugleiste dann selbst an die Oberkante und seine
+   * Zusatzwerkzeuge in festem Abstand an den rechten Rand - beides rueckt nicht mit einem groesseren
+   * oberen Abstand. Die Gruppen schweben deshalb unter der Werkzeugleiste und lassen den rechten Rand frei;
+   * Excalidraw behaelt seinen eigenen Sicherheitsabstand. Welche Form gilt, entscheidet Excalidraw selbst
+   * (`excalidraw--mobile`); die Regel liest sie nur.
+   */
+  .board:has(.excalidraw--mobile) {
+    --sat: var(--safe-area-top);
+  }
+
+  .board:has(.excalidraw--mobile) .board__float {
+    padding-block-start: calc(4rem + var(--safe-area-top));
+    padding-inline-end: calc(--spacing(2) + 2.5rem + var(--safe-area-right));
+  }
+
+  .board__group {
     align-items: center;
+    backdrop-filter: saturate(180%) blur(18px);
+    background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
     display: flex;
-    flex: 1 1 12rem;
     gap: --spacing(1);
+    max-width: 100%;
     min-width: 0;
+    padding: --spacing(1);
+  }
+
+  .board__group--lead {
+    flex: 0 1 auto;
+  }
+
+  .board__group--work {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    margin-inline-start: auto;
+  }
+
+  /*
+   * In der Gruppe tragen Symbolschaltflaechen keinen eigenen Rahmen - die Gruppe ist schon die Flaeche.
+   * Geoeffnet (`aria-expanded`) bleiben sie markiert; die Hauptaktion behaelt ihr Gewicht.
+   */
+  .board__group .icon-button:not([aria-expanded='true']) {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+    color: var(--color-text);
+  }
+
+  .board__group .icon-button:not([aria-expanded='true']):hover {
+    background: var(--color-surface-muted);
   }
 
   .board__title {
-    font-size: var(--text-lg);
-    margin: 0;
+    font-size: var(--text-base);
+    margin: 0 --spacing(1);
+    max-width: clamp(8rem, 30vw, 28rem);
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .board__lead .inline-name {
+  .board__group .inline-name {
     flex: 1;
+    flex-wrap: nowrap;
     min-width: 0;
   }
 
-  .board__states {
-    align-items: center;
-    display: flex;
-    flex: 0 1 auto;
-    flex-wrap: wrap;
-    gap: --spacing(2);
-    min-width: 0;
-  }
-
-  .board__actions {
-    align-items: center;
-    display: flex;
-    flex-wrap: wrap;
-    gap: --spacing(2);
-    margin-left: auto;
+  .board__group .inline-name input {
+    min-width: 6rem;
   }
 
   /*
@@ -1251,9 +1308,27 @@
     font-size: var(--text-sm);
     gap: --spacing(1);
     margin: 0;
+    padding-inline: --spacing(2);
   }
 
-  /* Zeichenflaeche und Board-Sidebar teilen sich die Restflaeche. */
+  /* Meldungen des Editors schweben unter den Gruppen; die der Board-Sidebar stehen in deren Polsterung. */
+  .board__notices {
+    display: grid;
+    flex: 1 1 100%;
+    gap: --spacing(2);
+    max-width: 40rem;
+  }
+
+  .board__notices:empty {
+    display: none;
+  }
+
+  .board__notices > :is(.notice, .confirm) {
+    box-shadow: var(--shadow-sm);
+    margin: 0;
+  }
+
+  /* Zeichenflaeche und Board-Sidebar teilen sich die ganze Hoehe. */
   .board__body {
     display: flex;
     flex: 1;
@@ -1264,12 +1339,6 @@
     flex: 1;
     min-height: 0;
     min-width: 0;
-  }
-
-  /* Nur die Meldungen des Editors selbst; die der Board-Sidebar stehen in deren Polsterung. */
-  .board > .notice,
-  .board > .confirm {
-    margin: --spacing(2) --spacing(3);
   }
 
   /*
@@ -1533,6 +1602,35 @@
     font-size: var(--text-sm);
   }
 
+  /* Die Handlungen einer Zeile: haeufige als Symbol, dahinter immer das Kontextmenue. */
+  .row__actions {
+    align-items: center;
+    display: flex;
+    gap: --spacing(1);
+    margin-inline-start: auto;
+  }
+
+  /*
+   * Haeufige Handlungen erscheinen bei Hover und Fokus, damit die Liste ruhig bleibt. Unsichtbar heisst
+   * nicht unerreichbar: mit der Tastatur liegt der Fokus darauf und macht sie sichtbar, und ohne Hover
+   * (Beruehrung) stehen sie immer da. Das Kontextmenue daneben ist nie verborgen.
+   */
+  .row__quick {
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+
+  .row:hover .row__quick,
+  .row:focus-within .row__quick {
+    opacity: 1;
+  }
+
+  @media (hover: none) {
+    .row__quick {
+      opacity: 1;
+    }
+  }
+
   /* Kurze Eingabe im Fluss der Liste - sie nimmt den Platz der Zeile ein, in der sie steht. */
   .inline-name {
     align-items: center;
@@ -1694,33 +1792,6 @@
       scroll-snap-align: start;
     }
 
-    .board__bar {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-    }
-
-    .board__lead {
-      grid-column: 1;
-      grid-row: 1;
-    }
-
-    .board__actions {
-      grid-column: 2;
-      grid-row: 1;
-      margin-left: 0;
-    }
-
-    .board__states {
-      grid-column: 1 / -1;
-      grid-row: 2;
-      overflow-x: auto;
-      scrollbar-width: none;
-    }
-
-    .board__states::-webkit-scrollbar {
-      display: none;
-    }
-
     .board__sections {
       background: var(--color-surface);
       flex-wrap: nowrap;
@@ -1787,16 +1858,28 @@
       min-width: 100%;
     }
 
-    .board__actions {
-      flex-wrap: nowrap;
-      grid-column: 1 / -1;
-      grid-row: 2;
-      justify-content: flex-end;
-      overflow-x: auto;
+    /* Die linke Gruppe steht allein in ihrer Reihe und darf den Titel dort ausschreiben. */
+    .board__title {
+      max-width: none;
     }
 
-    .board__states {
-      grid-row: 3;
+    /*
+     * Die rechte Gruppe bleibt eine Reihe: die Freigabe zeigt nur ihr Symbol (Name und Kurzhinweis bleiben),
+     * und "Allein" verdichtet sich auf das Personensymbol. Eine Zahl Mitwirkender bleibt stehen.
+     */
+    .board__share {
+      padding-inline: --spacing(2);
+      width: var(--spacing-touch);
+    }
+
+    .board__share-label,
+    .board__peers--allein .board__peers-count {
+      clip-path: inset(50%);
+      height: 1px;
+      overflow: hidden;
+      position: absolute;
+      white-space: nowrap;
+      width: 1px;
     }
 
     .dialog .actions > :is(button, .button) {
@@ -1813,6 +1896,11 @@
    * sich ueber ihren eigenen Beobachter neu.
    */
   @media (width >= 64rem) {
+    /* Angedockt schweben die Gruppen ueber der Zeichenflaeche und nicht ueber der Spalte daneben. */
+    .board--panel .board__float {
+      inset-inline-end: 22rem;
+    }
+
     .board--panel .board__panel,
     .board--panel .board__panel:not([open]) {
       border-left: 1px solid var(--color-border);

@@ -1,8 +1,8 @@
 /**
- * Der Zustand eines Boards, verdichtet fuer die Kopfzeile.
+ * Der Zustand eines Boards, verdichtet fuer die schwebende Gruppe des Editors.
  *
  * Bisher standen Bearbeitungsmodus, Speicherstatus und Verbindung als drei ausformulierte Saetze
- * gleichrangig in der Leiste und verdraengten die Zeichenflaeche. Der Header traegt jetzt **eine** kurze
+ * gleichrangig in der Leiste und verdraengten die Zeichenflaeche. Angezeigt wird jetzt **eine** kurze
  * Zeile; der ausformulierte Satz bleibt als Erlaeuterung daneben stehen und wird nur bei Bedarf gelesen.
  *
  * Diese Datei ist reine Rechnung ohne DOM und ohne React: sie waehlt aus den gleichzeitig moeglichen
@@ -20,7 +20,7 @@ import type { RealtimeStatus } from './realtime-client.js'
 export type SaveKind = 'idle' | 'dirty' | 'saving' | 'saved' | 'conflict' | 'failed'
 
 export type BoardStatus = {
-  /** Kurzform fuer die Kopfzeile. */
+  /** Kurzform fuer die schwebende Gruppe. */
   readonly text: string
   /** Der ausformulierte Satz - als Titel und fuer Hilfsmittel. */
   readonly detail: string
