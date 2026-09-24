@@ -502,6 +502,7 @@ Die Antwort entsteht in der Transaktion und wird erst nach dem Commit gesendet.
 | --- | --- | --- | --- | --- |
 | GET | `/api/boards?workspaceId=&status=&q=` | Mitglied im Arbeitsbereich | 404 | — |
 | POST | `/api/boards` | `board:create` | 404 unsichtbar, sonst 403 | — |
+| POST | `/api/boards/duplicate` | `board:read` auf der Quelle + `board:create` im selben Arbeitsbereich | 404 unsichtbar, sonst 403 | 409 archivierte Quelle |
 | POST | `/api/boards/rename` | `board:rename` | 404 unsichtbar, sonst 403 | — |
 | POST | `/api/boards/status` | `board:archive` / `board:unarchive` | 404 unsichtbar, sonst 403 | — |
 | GET | `/api/boards/scene?boardId=` | `board:read` | 404 | — |
@@ -542,6 +543,21 @@ es gibt.
 
 Freigegeben wird an Nutzer, die bereits Mitglied des Arbeitsbereichs sind; die Auswahl kommt aus
 `/api/workspaces/members`. Ein eigenes Nutzerverzeichnis hat die Boardebene deshalb nicht.
+
+### Duplizieren
+
+Ein Board laesst sich **innerhalb seines Arbeitsbereichs** kopieren - angeboten im Kontextmenue der Boardzeile
+mit Titelvorschlag (`<Titel> (Kopie)`) und derselben Ordnerauswahl wie beim Verschieben. Kopiert wird der
+**zuletzt gespeicherte** Stand samt der Bytes jedes darin genannten Bildes; die Kopie hat eine eigene Kennung,
+eigene Assetdatensaetze unter eigenen Speicherschluesseln und gehoert dem Anfragenden. Freigaben, Gastlinks,
+Verlauf und Archivzustand bleiben am Original: die Kopie beginnt aktiv mit dem kopierten Stand als Version 1.
+Eine archivierte Quelle wird nicht kopiert (409), und in einem archivierten Arbeitsbereich fehlt
+`board:create` (403).
+
+Board, Assetdatensaetze und erste Version entstehen in **einer** Transaktion. Scheitert der Vorgang davor -
+etwa beim Schreiben der Bytes -, entfernt die Route die schon geschriebenen Schluessel wieder: sie gehoeren zu
+einer Boardkennung, die nie sichtbar wurde, und kein anderer Vorgang kann sie brauchen. Nur ein Fehler im
+Commit selbst laesst sie liegen und benennt sie als `board.asset.orphan`, weil sein Ausgang offen ist.
 
 ### Optimistische Versionspruefung
 

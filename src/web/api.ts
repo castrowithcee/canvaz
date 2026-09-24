@@ -77,6 +77,7 @@ import {
   AUTH_METHODS_PATH,
   BOARD_ASSETS_PATH,
   BOARD_DASHBOARD_PATH,
+  BOARD_DUPLICATE_PATH,
   BOARD_FOLDER_PARAM,
   BOARD_FOLDER_PATH,
   BOARD_EXPORT_PATH,
@@ -431,6 +432,19 @@ export async function createBoard(
   folderId: string | null,
 ): Promise<BoardView> {
   return request<BoardView>(BOARDS_PATH, mutation(csrfToken, { workspaceId, title, folderId }))
+}
+
+/**
+ * Dupliziert ein Board in seinem Arbeitsbereich und liefert die Kopie.
+ *
+ * Kopiert wird der zuletzt **gespeicherte** Stand samt Bildern; Freigaben, Gastlinks und Verlauf bleiben am
+ * Original.
+ */
+export async function duplicateBoard(
+  csrfToken: string,
+  change: { readonly boardId: string; readonly title: string; readonly folderId: string | null },
+): Promise<BoardView> {
+  return request<BoardView>(BOARD_DUPLICATE_PATH, mutation(csrfToken, change))
 }
 
 export async function renameBoard(csrfToken: string, boardId: string, title: string): Promise<BoardView> {

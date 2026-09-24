@@ -2,9 +2,10 @@
  * Die Sammlung des gewaehlten Explorerkontexts: Unterordner und Boards genau dieses Knotens.
  *
  * Sie zeigt und **bearbeitet** dort, wo die Objekte stehen. Anlegen geschieht am aktuell gewaehlten Ort,
- * Umbenennen inline am Eintrag, Verschieben ueber eine kurze Zielauswahl, Entfernen mit einem Dialog, der
- * seine Folge vorher nennt. Damit gibt es fuer diese Handlungen genau **einen** Ort - weder eine
- * Verwaltungstabelle oberhalb der Liste noch einen Umweg ueber die Einstellungen oder die Detailansicht.
+ * Umbenennen inline am Eintrag, Verschieben ueber eine kurze Zielauswahl, Duplizieren ueber dieselbe
+ * Zielauswahl mit Titelvorschlag, Entfernen mit einem Dialog, der seine Folge vorher nennt. Damit gibt es
+ * fuer diese Handlungen genau **einen** Ort - weder eine Verwaltungstabelle oberhalb der Liste noch einen
+ * Umweg ueber die Einstellungen oder die Detailansicht.
  *
  * Die Liste ist eine kompakte Zeilenliste und keine Tabelle: verglichen werden hier keine Spalten, es wird
  * gesucht und geoeffnet. Die Detailansicht bleibt fuer Freigaben, Versionen und den Wechsel des
@@ -23,6 +24,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Archive,
   ArchiveRestore,
+  Copy,
   Folder,
   FolderInput,
   FolderPlus,
@@ -46,6 +48,7 @@ import {
   ApiError,
   createBoard,
   createFolder,
+  duplicateBoard,
   fetchBoards,
   moveBoardToFolder,
   moveFolder,
@@ -163,16 +166,21 @@ function InlineName({
 function EntryMenu({
   target,
   editable,
+  duplicable = false,
   workspaceId,
   onRename,
   onMove,
+  onDuplicate,
   onRemove,
 }: {
   readonly target: Target
   readonly editable: boolean
+  /** Wahr, wenn aus diesem Board eine Kopie entstehen darf. Fuer Ordner ohne Bedeutung. */
+  readonly duplicable?: boolean
   readonly workspaceId: string
   readonly onRename: (target: Target) => void
   readonly onMove: (target: Target) => void
+  readonly onDuplicate?: (board: BoardView) => void
   readonly onRemove: (folder: FolderView) => void
 }) {
   const name = targetName(target)
@@ -200,6 +208,16 @@ function EntryMenu({
           }}
         >
           Verschieben …
+        </MenuItem>
+      )}
+      {duplicable && target.kind === 'board' && onDuplicate !== undefined && (
+        <MenuItem
+          icon={Copy}
+          onSelect={() => {
+            onDuplicate(target.board)
+          }}
+        >
+          Duplizieren …
         </MenuItem>
       )}
       {target.kind === 'board' && (
@@ -310,6 +328,7 @@ export function Boards({
   const [creating, setCreating] = useState<'folder' | 'board' | null>(null)
   const [renaming, setRenaming] = useState<Target | null>(null)
   const [moving, setMoving] = useState<Target | null>(null)
+  const [duplicating, setDuplicating] = useState<BoardView | null>(null)
   const [removing, setRemoving] = useState<FolderView | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -420,6 +439,11 @@ export function Boards({
     workspace.status === 'active' &&
     board.status === 'active' &&
     mayChangeBoard({ kind: 'member', role: board.viewerRole })
+  /**
+   * Duplizieren heisst: lesen und im selben Arbeitsbereich anlegen. Lesen darf jede Boardrolle, anlegen jedes
+   * Mitglied eines aktiven Arbeitsbereichs; eine archivierte Quelle wird nicht kopiert.
+   */
+  const duplicableBoard = (board: BoardView): boolean => workspace.status === 'active' && board.status === 'active'
   /** Freigeben darf nur, wer das Board verantwortet - dieselbe Frage, die auch der Editor stellt. */
   const shareableBoard = (board: BoardView): boolean =>
     workspace.status === 'active' && mayManageBoard({ kind: 'member', role: board.viewerRole })
@@ -735,12 +759,14 @@ export function Boards({
                   <EntryMenu
                     target={{ kind: 'board', board }}
                     editable={editableBoard(board)}
+                    duplicable={duplicableBoard(board)}
                     workspaceId={workspaceId}
                     onRename={(target) => {
                       remember(menuId(targetId(target)))
                       setRenaming(target)
                     }}
                     onMove={setMoving}
+                    onDuplicate={setDuplicating}
                     onRemove={setRemoving}
                   />
                 </div>
@@ -788,6 +814,21 @@ export function Boards({
               back()
             },
           )
+        }}
+      />
+
+      <DuplicateDialog
+        board={duplicating}
+        folders={folders}
+        csrfToken={me.csrfToken}
+        onClose={() => {
+          setDuplicating(null)
+        }}
+        onDone={(copy) => {
+          setDuplicating(null)
+          onChanged()
+          // Wie das Anlegen endet das Duplizieren dort, wo gearbeitet wird: im Editor der Kopie.
+          navigate({ kind: 'board', workspaceId, boardId: copy.id, version: null, panel: null })
         }}
       />
 
@@ -901,6 +942,111 @@ function MoveDialog({
               Verschieben
             </Button>
             <Button variant="quiet" onClick={onClose}>
+              Abbrechen
+            </Button>
+          </p>
+        </form>
+      )}
+    </Dialog>
+  )
+}
+
+/** Vorschlag fuer den Titel der Kopie. Gekuerzt wird der Originaltitel, nie der Zusatz. */
+const COPY_SUFFIX = ' (Kopie)'
+
+function copyTitle(title: string): string {
+  return `${title.slice(0, MAX_BOARD_TITLE_LENGTH - COPY_SUFFIX.length).trimEnd()}${COPY_SUFFIX}`
+}
+
+/**
+ * Titel und Zielordner einer Kopie im selben Arbeitsbereich.
+ *
+ * Der Dialog fuehrt seinen Zustand selbst: eine Ablehnung erscheint hier und nicht hinter der Abdunklung,
+ * und solange der Aufruf laeuft, ist die Schaltflaeche gesperrt - ein zweiter Klick legt keine zweite Kopie
+ * an. Die Zielauswahl ist dieselbe wie beim Verschieben.
+ */
+function DuplicateDialog({
+  board,
+  folders,
+  csrfToken,
+  onClose,
+  onDone,
+}: {
+  readonly board: BoardView | null
+  readonly folders: readonly FolderView[]
+  readonly csrfToken: string
+  readonly onClose: () => void
+  readonly onDone: (copy: BoardView) => void
+}) {
+  const [title, setTitle] = useState('')
+  const [folderId, setFolderId] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // Jede Quelle beginnt mit dem Vorschlag und ihrem eigenen Ordner.
+  useEffect(() => {
+    setTitle(board === null ? '' : copyTitle(board.title))
+    setFolderId(board?.folderId ?? null)
+    setError(null)
+  }, [board])
+
+  return (
+    <Dialog
+      open={board !== null}
+      title={board === null ? 'Duplizieren' : `${board.title} duplizieren`}
+      onClose={onClose}
+    >
+      {board !== null && (
+        <form
+          className="stack"
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (busy) {
+              return
+            }
+            setBusy(true)
+            setError(null)
+            duplicateBoard(csrfToken, { boardId: board.id, title: title.trim(), folderId })
+              .then(onDone)
+              .catch((cause: unknown) => {
+                setError(messageOf(cause, 'Das Board konnte nicht dupliziert werden.'))
+              })
+              .finally(() => {
+                setBusy(false)
+              })
+          }}
+        >
+          <p>
+            Kopiert wird der zuletzt gespeicherte Stand samt Bildern. Freigaben, Gastlinks und der Verlauf bleiben
+            am Original; die Kopie gehoert dir.
+          </p>
+          <span className="field">
+            <label htmlFor="duplizieren-titel">Titel der Kopie</label>
+            <input
+              id="duplizieren-titel"
+              value={title}
+              maxLength={MAX_BOARD_TITLE_LENGTH}
+              required
+              disabled={busy}
+              onChange={(event) => {
+                setTitle(event.target.value)
+              }}
+            />
+          </span>
+          <FolderSelect
+            id="duplizieren-ziel"
+            label="Ort der Kopie"
+            folders={folders}
+            value={folderId}
+            disabled={busy}
+            onChange={setFolderId}
+          />
+          {error !== null && <Notice text={error} />}
+          <p className="actions">
+            <Button variant="primary" icon={Copy} type="submit" busy={busy} disabled={title.trim().length === 0}>
+              Duplizieren
+            </Button>
+            <Button variant="quiet" disabled={busy} onClick={onClose}>
               Abbrechen
             </Button>
           </p>
