@@ -26,7 +26,10 @@ if (process.argv.length > 2) {
 const config = loadConfig()
 const pool = createPool(config.databaseUrl)
 try {
-  const result = await recoverSystemAdmin(createIdentityStore(pool), { now: new Date() })
+  const result = await recoverSystemAdmin(createIdentityStore(pool), {
+    now: new Date(),
+    sessionSecret: config.sessionSecret,
+  })
   if (result.kind === 'no-admin') {
     console.error('Diese Instanz hat keinen Systemadmin. Der erste entsteht mit admin:bootstrap.')
     process.exitCode = 1
@@ -43,7 +46,7 @@ try {
       expiresAt: result.expiresAt.toISOString(),
     })
     console.log(`Zugang wiederhergestellt fuer: ${result.user.displayName} <${result.user.email ?? ''}>`)
-    console.log('Alle Sitzungen und offenen Einladungen dieses Kontos sind widerrufen.')
+    console.log('Alle Sitzungen und offenen Einladungen dieses Kontos sind widerrufen, eine Anmeldedrosselung ist aufgehoben.')
     console.log('Wiederherstellungslink (gilt genau einmal, ausserhalb der Anwendung uebergeben):')
     console.log(recoveryUrl(config.baseUrl, result.token))
     console.log(`Gueltig bis: ${result.expiresAt.toISOString()}`)

@@ -109,6 +109,14 @@ export type AppConfig = {
    */
   readonly authRateLimitPerMinute: number
   /**
+   * Anmeldeversuche je Zielkonto und Fenster, unabhaengig davon, von wie vielen Clients sie kommen. Gezaehlt
+   * wird die eingegebene Adresse, ob es das Konto gibt oder nicht; eine erfolgreiche Anmeldung setzt den
+   * Zaehler zurueck.
+   */
+  readonly authAccountAttempts: number
+  /** Laenge dieses Fensters in Minuten. Danach ist die Drosselung von selbst aufgehoben. */
+  readonly authAccountWindowMinutes: number
+  /**
    * Steht die Instanz hinter einem Reverse Proxy?
    *
    * Nur dann wird `x-forwarded-for` ueberhaupt gelesen. Ohne Proxy waere die Kopfzeile frei erfunden und
@@ -293,6 +301,21 @@ const DEFAULT_AUTH_RATE_LIMIT_PER_MINUTE = 10
 const MIN_AUTH_RATE_LIMIT_PER_MINUTE = 5
 const MAX_AUTH_RATE_LIMIT_PER_MINUTE = 600_000
 
+/**
+ * Anmeldeversuche je Zielkonto und Fenster.
+ *
+ * Zehn Versuche in fuenfzehn Minuten, egal von wie vielen Adressen: ein verteiltes Durchprobieren kommt so
+ * auf keine tausend Versuche am Tag und Konto, ein Mensch mit einem Vertipper merkt davon nichts. Die
+ * Drosselung endet mit dem Fenster von selbst - eine dauerhafte Sperre koennte jeder Fremde ausloesen. Die
+ * Untergrenze von drei laesst einen Vertipper samt Wiederholung zu, die Obergrenze des Fensters ist ein Tag.
+ */
+const DEFAULT_AUTH_ACCOUNT_ATTEMPTS = 10
+const MIN_AUTH_ACCOUNT_ATTEMPTS = 3
+const MAX_AUTH_ACCOUNT_ATTEMPTS = 100_000
+const DEFAULT_AUTH_ACCOUNT_WINDOW_MINUTES = 15
+const MIN_AUTH_ACCOUNT_WINDOW_MINUTES = 1
+const MAX_AUTH_ACCOUNT_WINDOW_MINUTES = 1440
+
 const OIDC_VARIABLES = [
   'CANVAZ_OIDC_ISSUER',
   'CANVAZ_OIDC_CLIENT_ID',
@@ -455,6 +478,22 @@ export function loadConfig(env: Env = process.env): AppConfig {
       DEFAULT_AUTH_RATE_LIMIT_PER_MINUTE,
       MIN_AUTH_RATE_LIMIT_PER_MINUTE,
       MAX_AUTH_RATE_LIMIT_PER_MINUTE,
+      problems,
+    ),
+    authAccountAttempts: readInteger(
+      env,
+      'CANVAZ_AUTH_RATE_LIMIT_PER_ACCOUNT',
+      DEFAULT_AUTH_ACCOUNT_ATTEMPTS,
+      MIN_AUTH_ACCOUNT_ATTEMPTS,
+      MAX_AUTH_ACCOUNT_ATTEMPTS,
+      problems,
+    ),
+    authAccountWindowMinutes: readInteger(
+      env,
+      'CANVAZ_AUTH_RATE_LIMIT_WINDOW_MINUTES',
+      DEFAULT_AUTH_ACCOUNT_WINDOW_MINUTES,
+      MIN_AUTH_ACCOUNT_WINDOW_MINUTES,
+      MAX_AUTH_ACCOUNT_WINDOW_MINUTES,
       problems,
     ),
     trustedProxy: readBoolean(env, 'CANVAZ_TRUSTED_PROXY', false, problems),

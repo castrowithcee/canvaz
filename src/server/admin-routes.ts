@@ -49,6 +49,7 @@ import type { Route } from './http.js'
 import { readJsonBody, sendError, sendJson } from './http.js'
 import { createInvitationToken, hashInvitationToken, invitationUrl } from './invitations.js'
 import { deliver, invitationMail, passwordResetMail } from './mailer.js'
+import { clearLoginAttempts } from './login-throttle.js'
 import { hashPassword } from './password.js'
 import { asRequester } from './requester.js'
 
@@ -164,7 +165,7 @@ export function createAdminRoutes(context: AppContext): readonly Route[] {
         // Fehlt das Feld, ist der Einladungsweg gemeint. Steht etwas darin, muss es taugen - ein zu kurzes
         // Initialpasswort wird nicht stillschweigend zur Einladung.
         const wantsPassword = raw !== undefined && raw !== null && raw !== ''
-        const checked = wantsPassword ? parsePassword(raw) : null
+        const checked = wantsPassword ? parsePassword(raw, { email, displayName }) : null
         if (checked !== null && !checked.ok) {
           sendError(response, 400, checked.problem)
           return
@@ -236,14 +237,14 @@ export function createAdminRoutes(context: AppContext): readonly Route[] {
           sendError(response, 400, 'userId wird erwartet')
           return
         }
-        const checked = parsePassword(body?.['password'])
-        if (!checked.ok) {
-          sendError(response, 400, checked.problem)
-          return
-        }
         const target = await context.identity.users.findById(userId)
         if (target === null) {
           sendError(response, 404, 'Unbekannter Nutzer')
+          return
+        }
+        const checked = parsePassword(body?.['password'], target)
+        if (!checked.ok) {
+          sendError(response, 400, checked.problem)
           return
         }
         const passwordHash = await hashPassword(checked.password)
@@ -253,6 +254,8 @@ export function createAdminRoutes(context: AppContext): readonly Route[] {
           // Eine offene Einladung waere ein zweiter Weg auf dasselbe Konto; die Ruecksetzung schliesst ihn.
           await store.invitations.revokeOpenForUser(userId, now)
           await store.sessions.revokeAllForUser(userId, now)
+          // Der Notfallweg fuer ein gedrosseltes Konto: mit dem neuen Passwort geht es sofort weiter.
+          await clearLoginAttempts(store, config.sessionSecret, target.email)
         })
         context.realtime.closeUser(userId)
         logger('info', 'admin.user.password-reset', { actorId: auth.user.id, userId })

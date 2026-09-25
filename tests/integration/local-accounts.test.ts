@@ -39,6 +39,7 @@ import { migrate } from '../../src/persistence/migrate.js'
 import { createPool } from '../../src/persistence/pool.js'
 import { bootstrapSystemAdmin } from '../../src/server/bootstrap-admin.js'
 import { hashInvitationToken } from '../../src/server/invitations.js'
+import { hashPassword } from '../../src/server/password.js'
 import { SESSION_COOKIE } from '../../src/server/session.js'
 import { createJar } from '../support/browser-client.js'
 import type { Jar } from '../support/browser-client.js'
@@ -82,7 +83,7 @@ afterAll(async () => {
 })
 
 beforeEach(async () => {
-  await pool.query('truncate users, workspaces cascade')
+  await pool.query('truncate users, workspaces, login_throttle cascade')
   app.clearLogs()
   app.setNow(null)
 })
@@ -363,6 +364,133 @@ describe('Lokale Anmeldung', () => {
     } finally {
       await eng.close()
     }
+  })
+})
+
+describe('Drosselung je Zielkonto', () => {
+  const GRENZE = 3
+
+  /** Eigene Instanz mit enger Kontogrenze hinter einem Proxy: `x-forwarded-for` steht fuer die Absenderadresse. */
+  function engeInstanz(): Promise<TestApp> {
+    return startTestApp({
+      pool,
+      databaseUrl: DATABASE_URL,
+      env: { CANVAZ_AUTH_RATE_LIMIT_PER_ACCOUNT: String(GRENZE), CANVAZ_TRUSTED_PROXY: 'true' },
+    })
+  }
+
+  function anmelden(instanz: TestApp, email: string, password: string, absender = '198.51.100.1') {
+    return fetch(`${instanz.baseUrl}${AUTH_LOCAL_LOGIN_PATH}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': absender },
+      body: JSON.stringify({ email, password }),
+    })
+  }
+
+  /** Ein Konto mit gesetztem Passwort, ohne Umweg ueber die Systemadministration. */
+  async function konto(instanz: TestApp, email: string, password = NEUES_PASSWORT): Promise<string> {
+    const user = await instanz.store.users.create({ displayName: email, email }, { isSystemAdmin: false })
+    await instanz.store.localCredentials.set(user.id, await hashPassword(password), { mustChangePassword: false })
+    return user.id
+  }
+
+  it('teilt das Budget ueber Absender, laesst andere Konten unberuehrt und behandelt unbekannte gleich', async () => {
+    const eng = await engeInstanz()
+    try {
+      await konto(eng, 'ada@example.com')
+      await konto(eng, 'bob@example.com')
+
+      for (let versuch = 0; versuch < GRENZE; versuch += 1) {
+        const absender = `198.51.100.${String(versuch + 10)}`
+        expect((await anmelden(eng, 'ada@example.com', 'falsches-passwort-x', absender)).status).toBe(401)
+        expect((await anmelden(eng, 'niemand@example.com', 'falsches-passwort-x', absender)).status).toBe(401)
+      }
+
+      // Gedrosselt hilft auch das richtige Passwort von einem neuen Absender nicht - und die Antwort gleicht
+      // der auf eine unbekannte Adresse aufs Wort.
+      const gedrosselt = await anmelden(eng, 'ada@example.com', NEUES_PASSWORT, '203.0.113.99')
+      const unbekannt = await anmelden(eng, 'niemand@example.com', NEUES_PASSWORT, '203.0.113.99')
+      expect(gedrosselt.status).toBe(401)
+      expect(unbekannt.status).toBe(401)
+      expect(await gedrosselt.text()).toBe(await unbekannt.text())
+      expect((await anmelden(eng, 'bob@example.com', NEUES_PASSWORT)).status).toBe(200)
+      // Die Tabelle kennt die Adresse nicht im Klartext.
+      const zeilen = await pool.query("select 1 from login_throttle t where t::text like '%example.com%'")
+      expect(zeilen.rowCount).toBe(0)
+    } finally {
+      await eng.close()
+    }
+  })
+
+  it('uebersteht einen Neustart, laeuft von selbst ab und endet mit einer richtigen Anmeldung', async () => {
+    const vorher = await engeInstanz()
+    try {
+      await konto(vorher, 'ada@example.com')
+      for (let versuch = 0; versuch < GRENZE; versuch += 1) {
+        await anmelden(vorher, 'ada@example.com', 'falsches-passwort-x')
+      }
+    } finally {
+      await vorher.close()
+    }
+
+    const nachher = await engeInstanz()
+    try {
+      expect((await anmelden(nachher, 'ada@example.com', NEUES_PASSWORT)).status).toBe(401)
+
+      // Kein Dauerlock: nach dem Fenster (Standard 15 Minuten) geht es von selbst weiter.
+      nachher.setNow(new Date(Date.now() + 16 * 60_000))
+      expect((await anmelden(nachher, 'ada@example.com', NEUES_PASSWORT)).status).toBe(200)
+
+      // Die richtige Anmeldung setzt zurueck: ohne das waeren es hier fuenf Versuche bei einer Grenze von drei.
+      await anmelden(nachher, 'ada@example.com', 'falsches-passwort-x')
+      await anmelden(nachher, 'ada@example.com', 'falsches-passwort-x')
+      expect((await anmelden(nachher, 'ada@example.com', NEUES_PASSWORT)).status).toBe(200)
+    } finally {
+      await nachher.close()
+    }
+  })
+
+  it('erzwingt fuer ein Bestandspasswort unter der heutigen Regel den Wechsel', async () => {
+    const altesPasswort = 'zwoelf-zeich'
+    const userId = await konto(app, 'ada@example.com', altesPasswort)
+    const jar = createJar()
+
+    const anmeldung = await localLogin(app, jar, 'ada@example.com', altesPasswort)
+
+    expect(((await anmeldung.json()) as LocalLoginResponse).status).toBe('password-change-required')
+    expect(jar.cookies.get(SESSION_COOKIE)).toBeUndefined()
+    expect((await app.store.localCredentials.findByUserId(userId))?.mustChangePassword).toBe(true)
+    const gewechselt = await changePassword(app, jar, {
+      email: 'ada@example.com',
+      currentPassword: altesPasswort,
+      newPassword: NEUES_PASSWORT,
+    })
+    expect(gewechselt.status).toBe(200)
+    expect((await me(jar)).status).toBe(200)
+  })
+})
+
+describe('Passwortregel an jedem Weg, der ein Passwort setzt', () => {
+  it('weist gesperrte und persoenliche Passwoerter bei Wechsel, Einladung und Ruecksetzung ab', async () => {
+    const admin = await signedInAsSystemAdmin(app)
+    const ada = await memberAccount(admin, 'ada@example.com')
+    const created = await createAccount(admin, { displayName: 'Bob Beispielmann', email: 'bob@example.com' })
+    const token = tokenOfInvitationUrl(created.invitationUrl ?? '')
+
+    const wechsel = await changePassword(app, createJar(), {
+      email: 'ada@example.com',
+      currentPassword: NEUES_PASSWORT,
+      newPassword: 'PasswordPassword',
+    })
+    const einladung = await redeemInvitation(app, createJar(), token, 'Bob Beispielmann 2026!')
+    const ruecksetzung = await adminPost(admin, ADMIN_USER_PASSWORD_PATH, {
+      userId: ada.profile.user.id,
+      password: 'Canvaz-Passwort-2026',
+    })
+
+    expect([wechsel.status, einladung.status, ruecksetzung.status]).toEqual([400, 400, 400])
+    // Ein abgewiesenes Passwort verbraucht den Link nicht.
+    expect((await redeemInvitation(app, createJar(), token, NEUES_PASSWORT)).status).toBe(200)
   })
 })
 

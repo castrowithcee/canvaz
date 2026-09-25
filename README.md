@@ -84,13 +84,53 @@ widerrufen jede bestehende Sitzung des Kontos und schliessen dessen offene Verbi
 
 Passwoerter liegen ausschliesslich als **scrypt**-Hash (`N=2^15`, `r=8`, `p=1`, 16 Byte Salz, `node:crypto`)
 in `local_credentials`; das Format traegt seine Parameter selbst, damit ein gespeicherter Hash pruefbar
-bleibt, wenn sie spaeter steigen. Ein Passwort braucht mindestens zwoelf Zeichen und hat sonst keine
-Zusammensetzungsregeln.
+bleibt, wenn sie spaeter steigen.
 
-Anmeldung, Passwortwechsel und Einloesen liegen hinter einer **eigenen, engen Ratengrenze**
-(`CANVAZ_AUTH_RATE_LIMIT_PER_MINUTE`, Standard 10 Versuche je Minute und Client) und pruefen die Herkunft
-wie der WebSocket-Upgrade; ein CSRF-Token tragen sie nicht, weil es noch keine Sitzung gibt. Eine unbekannte
-Adresse und ein falsches Passwort ergeben dieselbe Antwort und kosten dieselbe Rechenzeit.
+**Passwortregel** (NIST SP 800-63B, 3.1.1.2) - dieselbe fuer Anlage, Wechsel, Einloesung einer Einladung
+oder Wiederherstellung und administrative Ruecksetzung, auch fuer den Systemadmin:
+
+- mindestens **15 Zeichen**, hoechstens 200; keine Zusammensetzungsregeln, Einfuegen und lange
+  Passphrasen sind ausdruecklich moeglich;
+- keines der verbreiteten Passwoerter aus der **lokalen Sperrliste**
+  (`src/domain/identity/password-blocklist.ts`: 2000 Eintraege ab 15 Zeichen aus SecLists, MIT-Lizenz,
+  Herkunft im Dateikopf), verglichen ohne Gross-/Kleinschreibung. Es gibt keine Abfrage bei einem externen
+  Dienst;
+- nicht die eigene Adresse, ihr Teil vor dem `@` oder der eigene Anzeigename als ganzes Passwort, und
+  nicht allein aus dem Produktnamen gebaut (`Canvaz-Passwort-2026`). Verglichen werden dabei nur die
+  Buchstaben; eine Passphrase, die eines dieser Woerter enthaelt, bleibt erlaubt.
+
+**Bestandskonten** werden durch die strengere Regel nicht ausgesperrt: ein vorhandener Hash bleibt pruefbar.
+Meldet sich jemand mit einem Passwort an, das die heutige Regel verletzt, setzt die Anmeldung den
+erzwungenen Wechsel (`must_change_password`) - dieselbe Grenze wie nach einem Initialpasswort, ohne Sitzung
+vor dem Wechsel.
+
+Anmeldung, Passwortwechsel und Einloesen liegen hinter einer **eigenen, engen Ratengrenze je Client**
+(`CANVAZ_AUTH_RATE_LIMIT_PER_MINUTE`, Standard 10 Versuche je Minute) und pruefen die Herkunft wie der
+WebSocket-Upgrade; ein CSRF-Token tragen sie nicht, weil es noch keine Sitzung gibt.
+
+Anmeldung und Passwortwechsel - die beiden Endpunkte, die ein Passwort pruefen - zaehlen zusaetzlich **je
+Zielkonto** (OWASP Credential Stuffing Prevention): hoechstens `CANVAZ_AUTH_RATE_LIMIT_PER_ACCOUNT` Versuche
+(Standard 10) im Fenster von `CANVAZ_AUTH_RATE_LIMIT_WINDOW_MINUTES` (Standard 15 Minuten), gleich von wie
+vielen Absendern sie kommen. Einzelheiten:
+
+- Gezaehlt wird die normalisierte **eingegebene** Adresse, ob es das Konto gibt oder nicht. Gespeichert ist
+  sie nur als HMAC-SHA-256 mit dem Sitzungsgeheimnis (`login_throttle`); der Zustand uebersteht damit einen
+  Neustart, und ein neues Sitzungsgeheimnis beginnt die Zaehlung von vorn.
+- Das Fenster beginnt mit dem ersten Versuch; weitere Versuche verlaengern es nicht. Danach endet die
+  Drosselung **von selbst** - eine dauerhafte Sperre, die jeder Fremde ausloesen koennte, gibt es nicht.
+- Eine richtige Anmeldung und ein Passwortwechsel setzen die Zaehlung des Kontos zurueck, ebenso die
+  Einloesung einer Einladung oder eines Wiederherstellungswerts, die administrative Ruecksetzung und
+  `admin:recover`. Das sind zugleich die Wege, ein unter Beschuss stehendes Konto sofort freizugeben.
+- Eine unbekannte Adresse, ein falsches Passwort und ein gedrosseltes Konto ergeben **dieselbe Antwort**
+  (`401`) und kosten dieselbe Rechenzeit; auch gedrosselt wird ein Hash geprueft. Das Protokoll
+  unterscheidet die Faelle (`auth.local.login.failed`, `auth.local.login.throttled`) und nennt dabei
+  hoechstens die interne Nutzerkennung, nie die eingegebene Adresse.
+- Die Einloesung braucht keine Kontogrenze: ein Einladungswert hat 256 Bit und nennt kein Konto.
+
+**Bekannte Grenze:** wer ein Konto ohne Unterbrechung angreift, haelt es fuer die Dauer des Angriffs
+ueberwiegend gedrosselt. Die Freigabe durch die Administration hilft dann nur kurz; die eigentliche Abhilfe
+ist, die Absender am Proxy oder in der Firewall zu sperren. Die Grenze je Client liegt weiterhin im Speicher
+des Prozesses und beginnt nach einem Neustart neu.
 
 ### Erster Systemadmin
 
@@ -125,7 +165,8 @@ npm run admin:recover
 
 Der Befehl nimmt keine Argumente. Er ermittelt den einzigen Systemadmin selbst und verweigert ohne jede
 Aenderung, wenn es keinen, mehrere oder nur einen deaktivierten gibt. Sonst widerruft er in einer
-Transaktion alle Sitzungen und offenen Einladungen des Kontos und gibt einen **Wiederherstellungslink**
+Transaktion alle Sitzungen und offenen Einladungen des Kontos, hebt eine laufende Anmeldedrosselung auf und
+gibt einen **Wiederherstellungslink**
 (`/wiederherstellung#<token>`) auf der Standardausgabe aus: gueltig 30 Minuten, genau einmal einloesbar,
 gespeichert nur als SHA-256-Hash. Ein erneuter Aufruf entwertet den vorherigen Link; gleichzeitige Aufrufe
 laufen unter derselben Advisory-Sperre wie der Bootstrap nacheinander. Offene WebSocket-Verbindungen des
@@ -223,8 +264,8 @@ Codeeinloesung, damit es genau einmal gilt.
 | GET | `/api/ready` | oeffentlich; Bereitschaft, siehe [Betrieb auf einem VPS](#betrieb-auf-einem-vps) |
 | GET | `/api/metrics` | nur im internen Netz; der Reverse Proxy beantwortet ihn nach aussen mit 404 |
 | GET | `/api/auth/methods` | oeffentlich; welche Anmeldewege es hier gibt |
-| POST | `/api/auth/local/login` | oeffentlich, eigene Ratengrenze und Herkunftspruefung |
-| POST | `/api/auth/local/password` | oeffentlich, verlangt das bisherige Passwort |
+| POST | `/api/auth/local/login` | oeffentlich, eigene Ratengrenze je Client und je Zielkonto, Herkunftspruefung |
+| POST | `/api/auth/local/password` | oeffentlich, verlangt das bisherige Passwort; dieselben Grenzen |
 | POST | `/api/auth/invitation/redeem` | oeffentlich, verlangt einen gueltigen Einladungs- oder Wiederherstellungswert |
 | GET | `/api/auth/login` | oeffentlich, leitet zum Identity Provider; **nur mit OIDC-Konfiguration** |
 | GET | `/api/auth/callback` | oeffentlich, Pfad stammt aus `CANVAZ_OIDC_REDIRECT_URI`; **nur mit OIDC-Konfiguration** |

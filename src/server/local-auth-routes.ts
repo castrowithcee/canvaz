@@ -8,8 +8,12 @@
  *   Herkunftspruefung wie der WebSocket-Upgrade. Eine fremde Herkunft kann damit niemandem unbemerkt eine
  *   Sitzung in den Browser setzen.
  * - **Eine eigene, enge Ratengrenze** zusaetzlich zur allgemeinen: hier wird geraten, nicht gebraucht.
- * - **Keine Auskunft ueber Konten.** Eine falsche Adresse und ein falsches Passwort ergeben dieselbe
- *   Antwort, und beide kosten dieselbe Rechenzeit - auch ohne Konto wird ein Hash geprueft.
+ * - **Eine zweite Grenze je Zielkonto** fuer die beiden Endpunkte, die ein Passwort pruefen
+ *   (`login-throttle.ts`): viele Absender teilen sich das Budget eines Kontos. Die Einloesung braucht sie
+ *   nicht - ein Einladungswert hat 256 Bit und nennt kein Konto, an dem sich ein Budget festmachen liesse.
+ * - **Keine Auskunft ueber Konten.** Eine unbekannte Adresse, ein falsches Passwort und ein gedrosseltes
+ *   Konto ergeben dieselbe Antwort, und alle drei kosten dieselbe Rechenzeit - auch ohne Konto und auch
+ *   gedrosselt wird ein Hash geprueft.
  *
  * Ein Passwort und ein Einladungswert erscheinen in keiner Antwort, in keiner Protokollzeile und in keinem
  * Auditereignis; gespeichert wird ausschliesslich ein Hash.
@@ -20,6 +24,9 @@
  * `password-change-required` und legt **keine Sitzung** an. Es gibt damit keinen Zustand, in dem jemand mit
  * einem administrativ vergebenen Passwort arbeiten koennte; der Wechsel ist der einzige Weg weiter, und er
  * verlangt dasselbe Passwort noch einmal.
+ *
+ * Denselben Weg nimmt ein bestehendes Passwort, das die aktuelle Regel nicht mehr erfuellt (zu kurz oder
+ * gesperrt): es meldet noch an, erzwingt aber den Wechsel. So sperrt eine strengere Regel niemanden aus.
  */
 
 import { randomBytes } from 'node:crypto'
@@ -35,6 +42,7 @@ import type { AppContext } from './context.js'
 import type { Route } from './http.js'
 import { readJsonBody, sendError, sendJson } from './http.js'
 import { hashInvitationToken } from './invitations.js'
+import { clearLoginAttempts, takeLoginAttempt } from './login-throttle.js'
 import { hashPassword, isSamePassword, verifyPassword } from './password.js'
 import { clientKey, createRateLimiter } from './rate-limit.js'
 import { setSessionCookie, startSession } from './session.js'
@@ -52,6 +60,13 @@ function dummyPasswordHash(): Promise<string> {
   dummy ??= hashPassword(randomBytes(32).toString('base64url'))
   return dummy
 }
+
+/**
+ * Die eine Antwort auf jede gescheiterte Pruefung: unbekannte Adresse, falsches Passwort, gedrosseltes Konto.
+ * Sie nennt beide Moeglichkeiten, damit auch jemand mit dem richtigen Passwort weiss, was zu tun ist.
+ */
+const CREDENTIALS_REJECTED =
+  'Adresse oder Passwort stimmt nicht, oder es gab zu viele Versuche. Bitte pruefen und spaeter erneut versuchen.'
 
 function readString(body: Record<string, unknown> | null, field: string): string | null {
   const value = body?.[field]
@@ -131,22 +146,34 @@ export function createLocalAuthRoutes(context: AppContext): readonly Route[] {
           sendError(response, 400, 'Adresse und Passwort werden erwartet')
           return
         }
+        const allowed = await takeLoginAttempt(context.identity, config, email, context.now())
         const account = await findLocalAccount(context.identity, email)
-        // Auch ohne Konto wird geprueft: die Antwortzeit soll nichts verraten.
+        // Auch ohne Konto und auch gedrosselt wird geprueft: die Antwortzeit soll nichts verraten.
         const valid = await verifyPassword(password, account?.passwordHash ?? (await dummyPasswordHash()))
-        if (account === null || !valid) {
-          logger('warn', 'auth.local.login.failed', { userId: account?.user.id ?? null })
-          sendError(response, 401, 'Adresse oder Passwort stimmt nicht')
+        if (!allowed || account === null || !valid) {
+          logger('warn', allowed ? 'auth.local.login.failed' : 'auth.local.login.throttled', {
+            userId: account?.user.id ?? null,
+          })
+          sendError(response, 401, CREDENTIALS_REJECTED)
           return
         }
+        await clearLoginAttempts(context.identity, config.sessionSecret, email)
         if (!isUserActive(account.user)) {
           logger('warn', 'auth.local.login.denied', { userId: account.user.id, reason: 'user-deactivated' })
           sendError(response, 403, 'Dieses Konto ist deaktiviert. Bitte an die Systemadministration wenden.')
           return
         }
-        if (account.mustChangePassword) {
+        // Ein Bestandspasswort vor der heutigen Regel: es meldet noch an, fuehrt aber zum Wechsel.
+        const outdated = !parsePassword(password, account.user).ok
+        if (outdated && !account.mustChangePassword) {
+          await context.identity.localCredentials.requireChange(account.user.id, account.passwordHash)
+        }
+        if (account.mustChangePassword || outdated) {
           // Ausdruecklich ohne Sitzung: der Wechsel geht ihr voraus.
-          logger('info', 'auth.local.login.change-required', { userId: account.user.id })
+          logger('info', 'auth.local.login.change-required', {
+            userId: account.user.id,
+            reason: account.mustChangePassword ? 'required' : 'outdated-password',
+          })
           const pending: LocalLoginResponse = { status: 'password-change-required' }
           sendJson(response, 200, pending)
           return
@@ -174,7 +201,7 @@ export function createLocalAuthRoutes(context: AppContext): readonly Route[] {
           sendError(response, 400, 'Adresse und bisheriges Passwort werden erwartet')
           return
         }
-        const checked = parsePassword(body?.['newPassword'])
+        const checked = parsePassword(body?.['newPassword'], { email })
         if (!checked.ok) {
           sendError(response, 400, checked.problem)
           return
@@ -186,16 +213,27 @@ export function createLocalAuthRoutes(context: AppContext): readonly Route[] {
           sendError(response, 400, 'Das neue Passwort muss sich vom bisherigen unterscheiden')
           return
         }
+        // Dasselbe Budget wie die Anmeldung: auch hier wird ein Passwort geprueft.
+        const allowed = await takeLoginAttempt(context.identity, config, email, context.now())
         const account = await findLocalAccount(context.identity, email)
         const valid = await verifyPassword(currentPassword, account?.passwordHash ?? (await dummyPasswordHash()))
-        if (account === null || !valid) {
-          logger('warn', 'auth.local.password.failed', { userId: account?.user.id ?? null })
-          sendError(response, 401, 'Adresse oder Passwort stimmt nicht')
+        if (!allowed || account === null || !valid) {
+          logger('warn', allowed ? 'auth.local.password.failed' : 'auth.local.password.throttled', {
+            userId: account?.user.id ?? null,
+          })
+          sendError(response, 401, CREDENTIALS_REJECTED)
           return
         }
+        await clearLoginAttempts(context.identity, config.sessionSecret, email)
         if (!isUserActive(account.user)) {
           logger('warn', 'auth.local.password.denied', { userId: account.user.id, reason: 'user-deactivated' })
           sendError(response, 403, 'Dieses Konto ist deaktiviert. Bitte an die Systemadministration wenden.')
+          return
+        }
+        // Der Name ist erst nach der Pruefung bekannt; vorher geprueft, verriete er, dass es das Konto gibt.
+        const personal = parsePassword(newPassword, account.user)
+        if (!personal.ok) {
+          sendError(response, 400, personal.problem)
           return
         }
         const passwordHash = await hashPassword(newPassword)
@@ -243,17 +281,28 @@ export function createLocalAuthRoutes(context: AppContext): readonly Route[] {
           if (user === null || !isUserActive(user)) {
             return { kind: 'deactivated' } as const
           }
+          // Vor dem Einloesen: ein Passwort aus Name oder Adresse verbraucht den Link nicht.
+          const personal = parsePassword(checked.password, user)
+          if (!personal.ok) {
+            return { kind: 'weak', problem: personal.problem } as const
+          }
           // Einmalverwendung: gewinnt ein gleichzeitiger Vorgang das Rennen, aendert dieser nichts.
           if (!(await store.invitations.markRedeemed(invitation.id, now))) {
             return { kind: 'invalid' } as const
           }
           await store.localCredentials.set(user.id, passwordHash, { mustChangePassword: false })
+          // Wer den Wert einloest, hat Zugang: eine laufende Drosselung des Kontos endet damit.
+          await clearLoginAttempts(store, config.sessionSecret, user.email)
           const sessionToken = await replaceSessions(store, user.id, now)
           return { kind: 'ok', userId: user.id, purpose: invitation.purpose, token: sessionToken } as const
         })
         if (outcome.kind === 'invalid') {
           logger('warn', 'auth.invitation.rejected', { reason: 'not-redeemable' })
           sendError(response, 400, 'Dieser Link ist ungueltig, abgelaufen oder bereits verbraucht.')
+          return
+        }
+        if (outcome.kind === 'weak') {
+          sendError(response, 400, outcome.problem)
           return
         }
         if (outcome.kind === 'deactivated') {

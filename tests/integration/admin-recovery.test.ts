@@ -16,11 +16,12 @@ import { migrate } from '../../src/persistence/migrate.js'
 import { createPool } from '../../src/persistence/pool.js'
 import { recoverSystemAdmin } from '../../src/server/admin-recovery.js'
 import { createInvitationToken, hashInvitationToken, recoveryUrl } from '../../src/server/invitations.js'
+import { takeLoginAttempt } from '../../src/server/login-throttle.js'
 import { createJar } from '../support/browser-client.js'
 import type { Jar } from '../support/browser-client.js'
 import { localLogin, profileOf, redeemInvitation, signedInAsSystemAdmin } from '../support/local-accounts.js'
 import { openRealtime } from '../support/realtime-socket.js'
-import { startTestApp } from '../support/test-app.js'
+import { TEST_SESSION_SECRET, startTestApp } from '../support/test-app.js'
 import type { TestApp } from '../support/test-app.js'
 
 const DATABASE_URL =
@@ -43,13 +44,16 @@ afterAll(async () => {
 })
 
 beforeEach(async () => {
-  await pool.query('truncate users, workspaces cascade')
+  await pool.query('truncate users, workspaces, login_throttle cascade')
   app.clearLogs()
   app.setNow(null)
 })
 
 async function recover(): Promise<string> {
-  const result = await recoverSystemAdmin(app.store, { now: app.context.now() })
+  const result = await recoverSystemAdmin(app.store, {
+    now: app.context.now(),
+    sessionSecret: app.context.config.sessionSecret,
+  })
   expect(result.kind).toBe('issued')
   return result.kind === 'issued' ? result.token : ''
 }
@@ -71,7 +75,7 @@ async function snapshot(): Promise<unknown> {
 describe('Betreiberbefehl ohne eindeutigen Systemadmin', () => {
   it('bricht ohne Systemadmin ohne jede Aenderung ab', async () => {
     const vorher = await snapshot()
-    expect(await recoverSystemAdmin(app.store, { now: new Date() })).toEqual({ kind: 'no-admin' })
+    expect(await recoverSystemAdmin(app.store, { now: new Date(), sessionSecret: TEST_SESSION_SECRET })).toEqual({ kind: 'no-admin' })
     expect(await snapshot()).toEqual(vorher)
   })
 
@@ -81,7 +85,7 @@ describe('Betreiberbefehl ohne eindeutigen Systemadmin', () => {
     await app.store.users.create({ displayName: 'Zweiter', email: 'zweiter@example.com' }, { isSystemAdmin: true })
     const vorher = await snapshot()
 
-    expect(await recoverSystemAdmin(app.store, { now: new Date() })).toEqual({ kind: 'ambiguous', count: 2 })
+    expect(await recoverSystemAdmin(app.store, { now: new Date(), sessionSecret: TEST_SESSION_SECRET })).toEqual({ kind: 'ambiguous', count: 2 })
     expect(await snapshot()).toEqual(vorher)
     expect((await me(admin.jar)).status).toBe(200)
   })
@@ -139,6 +143,26 @@ describe('Betreiberbefehl mit genau einem Systemadmin', () => {
       expect.objectContaining({ event: 'auth.invitation.redeemed', fields: expect.objectContaining({ purpose: 'recovery' }) }),
     )
     expect(JSON.stringify(app.logs)).not.toContain(token)
+  })
+
+  it('hebt mit Befehl und Einloesung eine Drosselung des Kontos auf', async () => {
+    await signedInAsSystemAdmin(app)
+    const eng = { ...app.context.config, authAccountAttempts: 3 }
+    const drosseln = async (): Promise<boolean> => {
+      let erlaubt = true
+      for (let versuch = 0; versuch < 4; versuch += 1) {
+        erlaubt = await takeLoginAttempt(app.store, eng, 'root@example.com', new Date())
+      }
+      return erlaubt
+    }
+
+    expect(await drosseln()).toBe(false)
+    const token = await recover()
+    expect(await takeLoginAttempt(app.store, eng, 'root@example.com', new Date())).toBe(true)
+
+    expect(await drosseln()).toBe(false)
+    expect((await redeemInvitation(app, createJar(), token, NEUES_PASSWORT)).status).toBe(200)
+    expect(await takeLoginAttempt(app.store, eng, 'root@example.com', new Date())).toBe(true)
   })
 
   it('wirkt abgelaufen nicht mehr', async () => {

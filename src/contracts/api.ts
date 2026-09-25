@@ -134,7 +134,7 @@ export const INVITE_APP_PATH = '/einladung'
 export const RECOVERY_APP_PATH = '/wiederherstellung'
 
 /** Untergrenze eines Passworts. Sie steht im Vertrag, damit die Oberflaeche sie nennen kann, statt zu raten. */
-export const MIN_PASSWORD_LENGTH = 12
+export const MIN_PASSWORD_LENGTH = 15
 export const MAX_PASSWORD_LENGTH = 200
 
 /** Welche Anmeldewege diese Instanz anbietet. Der lokale Weg gibt es immer, der externe ist zugeschaltet. */

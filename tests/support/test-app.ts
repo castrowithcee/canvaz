@@ -109,6 +109,8 @@ export async function startTestApp(options: {
     CANVAZ_RATE_LIMIT_PER_MINUTE: '600000',
     // Dasselbe fuer die enge Grenze der Anmeldestrecken; ihr eigener Testfall setzt sie ausdruecklich herunter.
     CANVAZ_AUTH_RATE_LIMIT_PER_MINUTE: '600000',
+    // Und fuer die Grenze je Zielkonto: ihre Faelle setzen sie ausdruecklich herunter.
+    CANVAZ_AUTH_RATE_LIMIT_PER_ACCOUNT: '100000',
     ...options.storage,
     ...options.env,
   })

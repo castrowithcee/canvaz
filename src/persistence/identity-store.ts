@@ -329,6 +329,35 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Identit
         const result = await db.query<{ user_id: string }>('select user_id from local_credentials')
         return result.rows.map((row) => row.user_id)
       },
+
+      async requireChange(userId: UserId, passwordHash: string): Promise<void> {
+        await db.query(
+          `update local_credentials set must_change_password = true, updated_at = now()
+           where user_id = $1 and password_hash = $2`,
+          [userId, passwordHash],
+        )
+      },
+    },
+
+    loginThrottle: {
+      async hit(keyHash: string, now: Date, windowStart: Date): Promise<number> {
+        // Abgelaufene Fenster aller Konten zuerst, das eigene eingeschlossen: danach beginnt der Versuch
+        // entweder ein neues Fenster oder zaehlt im laufenden weiter. Die Tabelle waechst so nie ueber die
+        // Konten hinaus, die im laufenden Fenster versucht wurden.
+        await db.query('delete from login_throttle where window_started_at < $1', [windowStart])
+        const result = await db.query<{ attempts: number }>(
+          `insert into login_throttle (key_hash, attempts, window_started_at)
+           values ($1, 1, $2)
+           on conflict (key_hash) do update set attempts = login_throttle.attempts + 1
+           returning attempts`,
+          [keyHash, now],
+        )
+        return requireRow(result.rows[0], 'Anmeldeversuch konnte nicht gezaehlt werden').attempts
+      },
+
+      async clear(keyHash: string): Promise<void> {
+        await db.query('delete from login_throttle where key_hash = $1', [keyHash])
+      },
     },
 
     appearances: {

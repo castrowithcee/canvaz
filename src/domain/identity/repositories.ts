@@ -84,6 +84,30 @@ export interface LocalCredentialRepository {
   set(userId: UserId, passwordHash: string, options: { readonly mustChangePassword: boolean }): Promise<void>
   /** Kennungen aller Nutzer mit lokalem Passwort. Die Systemadministration zeigt daran den Anmeldeweg. */
   listUserIds(): Promise<readonly UserId[]>
+  /**
+   * Verlangt den Wechsel eines bestehenden Passworts, das die aktuelle Regel nicht mehr erfuellt.
+   *
+   * Nur, solange noch genau dieser Hash gespeichert ist: ein gleichzeitiger Wechsel wird nicht ueberschrieben.
+   */
+  requireChange(userId: UserId, passwordHash: string): Promise<void>
+}
+
+/**
+ * Anmeldeversuche je Zielkonto.
+ *
+ * Der Schluessel ist bereits ein Hash der eingegebenen Adresse; die Persistenz sieht nie eine Adresse. Das
+ * Fenster beginnt mit dem ersten Versuch und endet von selbst.
+ */
+export interface LoginThrottleRepository {
+  /**
+   * Zaehlt einen Versuch und liefert die Zahl der Versuche im laufenden Fenster, diesen eingeschlossen.
+   *
+   * Atomar: gleichzeitige Versuche erhalten verschiedene Zahlen. Ein Fenster, das vor `windowStart` begann,
+   * gilt als abgelaufen; der Versuch beginnt dann ein neues mit `now`.
+   */
+  hit(keyHash: string, now: Date, windowStart: Date): Promise<number>
+  /** Setzt die Zaehlung eines Kontos zurueck. */
+  clear(keyHash: string): Promise<void>
 }
 
 /**
@@ -173,5 +197,6 @@ export interface IdentityStore {
   readonly appearances: AppearanceRepository
   readonly invitations: InvitationRepository
   readonly sessions: SessionRepository
+  readonly loginThrottle: LoginThrottleRepository
   transaction<T>(run: (store: IdentityStore) => Promise<T>): Promise<T>
 }

@@ -12,6 +12,7 @@
  * - Jede Sitzung des Kontos wird widerrufen. HTTP und neue WebSocket-Verbindungen scheitern sofort, offene
  *   Verbindungen beendet die Nachpruefung des Verbindungsregisters (`realtime.ts`).
  * - Jede offene Einladung und jeder offene Wiederherstellungswert des Kontos wird widerrufen.
+ * - Eine laufende Drosselung der Anmeldung des Kontos (`login-throttle.ts`) wird aufgehoben.
  * - Ein neuer, zufaelliger Wert entsteht, gespeichert nur als Hash, genau einmal einloesbar und kurz
  *   befristet (`RECOVERY_TTL_MINUTES`).
  *
@@ -28,6 +29,7 @@ import { isUserActive } from '../domain/identity/model.js'
 import { recoveryExpiry } from '../domain/identity/local-auth.js'
 import type { IdentityStore } from '../domain/identity/repositories.js'
 import { createInvitationToken, hashInvitationToken } from './invitations.js'
+import { clearLoginAttempts } from './login-throttle.js'
 
 export type RecoveryResult =
   /** `token` ist der Wiederherstellungswert und erscheint genau hier ein einziges Mal. */
@@ -41,9 +43,10 @@ export type RecoveryResult =
 
 export async function recoverSystemAdmin(
   store: IdentityStore,
-  options: { readonly now: Date },
+  /** `sessionSecret` bildet den Schluessel der Drosselung; derselbe Wert, mit dem die Anwendung laeuft. */
+  options: { readonly now: Date; readonly sessionSecret: string },
 ): Promise<RecoveryResult> {
-  const { now } = options
+  const { now, sessionSecret } = options
   return store.transaction(async (tx): Promise<RecoveryResult> => {
     // Die Sperre haelt bis zum Commit; ein gleichzeitiger Aufruf wartet hier.
     const admins = await tx.users.listSystemAdmins()
@@ -59,6 +62,7 @@ export async function recoverSystemAdmin(
     }
     await tx.sessions.revokeAllForUser(admin.id, now)
     await tx.invitations.revokeOpenForUser(admin.id, now)
+    await clearLoginAttempts(tx, sessionSecret, admin.email)
     const token = createInvitationToken()
     const expiresAt = recoveryExpiry(now)
     await tx.invitations.create({

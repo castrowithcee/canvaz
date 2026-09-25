@@ -24,6 +24,22 @@ describe('Passwortregel', () => {
     expect(parsePassword(12)).toMatchObject({ ok: false })
   })
 
+  it('verlangt fuenfzehn Zeichen und keine Zeichenklassen', () => {
+    expect(parsePassword('vierzehn-zeich')).toMatchObject({ ok: false })
+    expect(parsePassword('nur kleinbuchst')).toMatchObject({ ok: true })
+  })
+
+  it('sperrt verbreitete Passwoerter, den Produktnamen und das eigene Konto als ganzes Passwort', () => {
+    const konto = { email: 'ada.lovelace@example.com', displayName: 'Ada Lovelace' }
+
+    expect(parsePassword('PasswordPassword')).toMatchObject({ ok: false })
+    expect(parsePassword('Canvaz2026!Canvaz')).toMatchObject({ ok: false })
+    expect(parsePassword('ada.lovelace@example.com', konto)).toMatchObject({ ok: false })
+    expect(parsePassword('Ada Lovelace 2026!', konto)).toMatchObject({ ok: false })
+    // Enthalten ist nicht gleich: eine Passphrase mit einem dieser Woerter bleibt erlaubt.
+    expect(parsePassword('ada malt gern mit canvaz', konto)).toMatchObject({ ok: true })
+  })
+
   it('trimmt nicht: Leerraum gehoert zum Passwort', () => {
     expect(parsePassword('  mit leerraum  ')).toEqual({ ok: true, password: '  mit leerraum  ' })
   })
