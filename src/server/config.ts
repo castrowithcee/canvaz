@@ -32,8 +32,13 @@ export type OidcConfig = {
 export type MailConfig = {
   readonly host: string
   readonly port: number
-  /** Implizites TLS ab der ersten Verbindung (Port 465). Sonst wird STARTTLS genutzt, wenn der Server es anbietet. */
+  /** Implizites TLS ab der ersten Verbindung (Port 465). Sonst ist STARTTLS Pflicht. */
   readonly secure: boolean
+  /**
+   * Ausnahme fuer einen isolierten Relay ohne TLS: ohne `secure` darf die Verbindung dann im Klartext
+   * bleiben. Nur ausdruecklich gesetzt; ohne Angabe bricht ein Server ohne STARTTLS den Versand ab.
+   */
+  readonly allowInsecure: boolean
   /** `null` heisst: ohne Anmeldung. Ein Auffangserver im eigenen Netz verlangt keine. */
   readonly auth: { readonly user: string; readonly password: string } | null
   /** Absenderadresse jeder Nachricht dieser Instanz. */
@@ -324,7 +329,7 @@ const MAIL_VARIABLES = [
   'CANVAZ_MAIL_FROM',
 ] as const
 
-/** Impliziertes TLS gehoert zu Port 465; jeder andere Port spricht zuerst Klartext und hebt per STARTTLS ab. */
+/** Impliziertes TLS gehoert zu Port 465; jeder andere Port spricht zuerst Klartext und muss per STARTTLS abheben. */
 const SMTP_IMPLICIT_TLS_PORT = 465
 
 /** Der Auffangserver einer Entwicklungsumgebung; der Standard eines echten Anbieters ist 587. */
@@ -339,6 +344,10 @@ const DEFAULT_SMTP_PORT = 587
  *
  * Benutzer und Passwort gehoeren zusammen. Ein Auffangserver im eigenen Netz verlangt keine Anmeldung,
  * deshalb ist das Paar optional - aber halb angemeldet gibt es nicht.
+ *
+ * Ohne implizites TLS ist STARTTLS Pflicht: eine Einladung traegt ihren Wert im Link und darf nicht still
+ * im Klartext zum Relay gehen. Die Ausnahme `CANVAZ_SMTP_ALLOW_INSECURE` gilt nur, wenn sie ausdruecklich
+ * gesetzt ist.
  */
 function readMail(env: Env, problems: string[]): MailConfig | null {
   const configured = MAIL_VARIABLES.some((name) => (env[name]?.trim() ?? '') !== '')
@@ -360,6 +369,7 @@ function readMail(env: Env, problems: string[]): MailConfig | null {
     host: readRequired(env, 'CANVAZ_SMTP_HOST', problems),
     port,
     secure: readBoolean(env, 'CANVAZ_SMTP_SECURE', port === SMTP_IMPLICIT_TLS_PORT, problems),
+    allowInsecure: readBoolean(env, 'CANVAZ_SMTP_ALLOW_INSECURE', false, problems),
     auth: user === '' || password === '' ? null : { user, password },
     from: from ?? '',
   }
