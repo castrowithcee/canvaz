@@ -35,13 +35,26 @@
  */
 
 import { Suspense, useCallback, useEffect, useState } from 'react'
-import { ChevronsUpDown, CircleUserRound, LogOut, PanelLeft, RotateCcw } from 'lucide-react'
+import {
+  ChevronsUpDown,
+  CircleUserRound,
+  EllipsisVertical,
+  Layers,
+  LogOut,
+  PanelLeft,
+  Plus,
+  RotateCcw,
+  Settings,
+  Trash2,
+  Users,
+} from 'lucide-react'
 
 import type { AppearanceView, LoginErrorCode, MeResponse, WorkspaceView } from '../contracts/api.js'
 import { GUEST_APP_PATH, INVITE_APP_PATH, LOGIN_ERROR_PARAM } from '../contracts/api.js'
+import { MAX_WORKSPACE_NAME_LENGTH } from '../domain/workspace/model.js'
 import { AppearanceSettings, InviteApp, LoginView, PasswordSettings } from './account.js'
 import { AdminUsers } from './admin-users.js'
-import { ApiError, fetchMe, fetchWorkspaces, logout } from './api.js'
+import { ApiError, createWorkspace, fetchMe, fetchWorkspaces, logout } from './api.js'
 import { applyAppearance } from './appearance.js'
 import { BoardEditor } from './board/lazy-editor.js'
 import { BoardTrash } from './board-trash.js'
@@ -50,7 +63,7 @@ import { Dashboard } from './dashboard.js'
 import type { Explorer } from './explorer.js'
 import { ExplorerTree, useExplorer } from './explorer.js'
 import { GuestApp } from './guest.js'
-import { Drawer, Menu, MenuItem, MenuLinkItem } from './overlays.js'
+import { Drawer, Menu, MenuItem, MenuLinkItem, NameDialog } from './overlays.js'
 import type { AppRoute, BoardPanelView } from './router.js'
 import { closeLayer, Link, navigate, navigateBack, routeHref, useRoute } from './router.js'
 import { actionClass, Button, IconButton, Loading, Notice, PageState } from './ui.js'
@@ -204,29 +217,97 @@ function Header({
 /**
  * Der Explorer der Seitenleiste: Wechsel des Arbeitsbereichs, sein Baum und seine seltenen Verwaltungswege.
  *
- * Er navigiert und legt nichts an: Anlegen, Umbenennen, Verschieben und Entfernen stehen an den Objekten
- * der Inhaltsflaeche (`boards.tsx`), damit es je Handlung genau einen Ort gibt. Der Baum selbst zeigt
- * ausschliesslich Ordner und Boards; welche davon jemand sieht, entscheidet weiterhin der Server.
+ * Die Gruppe "Arbeitsbereiche" trennt Wechsel und Handlungen: die Auswahl enthaelt nur Arbeitsbereiche, an
+ * der Ueberschrift stehen das Plus fuer das direkte Anlegen und das Menue mit den Verwaltungswegen. Der Baum
+ * darunter navigiert und legt nichts an: Anlegen, Umbenennen, Verschieben und Entfernen von Ordnern und
+ * Boards stehen an den Objekten der Inhaltsflaeche (`boards.tsx`), damit es je Handlung genau einen Ort gibt.
+ * Welche Ordner und Boards jemand sieht, entscheidet weiterhin der Server.
  */
 function Sidebar({
+  me,
   workspaces,
   active,
   route,
   explorer,
+  onWorkspaceCreated,
 }: {
+  readonly me: MeResponse
   readonly workspaces: readonly WorkspaceView[]
   readonly active: WorkspaceView | null
   readonly route: AppRoute
   readonly explorer: Explorer
+  readonly onWorkspaceCreated: (workspace: WorkspaceView) => void
 }) {
+  const [creating, setCreating] = useState(false)
+
   return (
     <nav aria-label="Arbeitsbereich und Boards">
-      <h2 className="sidebar__title">Arbeitsbereich</h2>
+      <div className="sidebar__head">
+        <h2 className="sidebar__title">Arbeitsbereiche</h2>
+        <IconButton
+          label="Arbeitsbereich anlegen"
+          icon={Plus}
+          variant="quiet"
+          onClick={() => {
+            setCreating(true)
+          }}
+        />
+        <Menu label="Arbeitsbereiche verwalten" icon={EllipsisVertical}>
+          <MenuLinkItem>
+            <Link
+              className="menu__item"
+              role="menuitem"
+              route={{ kind: 'arbeitsbereiche' }}
+              current={route.kind === 'arbeitsbereiche'}
+            >
+              <Layers size={16} aria-hidden="true" />
+              Arbeitsbereiche verwalten
+            </Link>
+          </MenuLinkItem>
+          {active !== null && (
+            <>
+              <li className="menu__label" role="presentation">
+                {active.name}
+              </li>
+              <MenuLinkItem>
+                <Link
+                  className="menu__item"
+                  role="menuitem"
+                  route={{ kind: 'mitglieder', workspaceId: active.id }}
+                  current={route.kind === 'mitglieder'}
+                >
+                  <Users size={16} aria-hidden="true" />
+                  Mitglieder
+                </Link>
+              </MenuLinkItem>
+              <MenuLinkItem>
+                <Link
+                  className="menu__item"
+                  role="menuitem"
+                  route={{ kind: 'papierkorb', workspaceId: active.id }}
+                  current={route.kind === 'papierkorb'}
+                >
+                  <Trash2 size={16} aria-hidden="true" />
+                  Papierkorb
+                </Link>
+              </MenuLinkItem>
+              <MenuLinkItem>
+                <Link
+                  className="menu__item"
+                  role="menuitem"
+                  route={{ kind: 'einstellungen', workspaceId: active.id }}
+                  current={route.kind === 'einstellungen'}
+                >
+                  <Settings size={16} aria-hidden="true" />
+                  Einstellungen
+                </Link>
+              </MenuLinkItem>
+            </>
+          )}
+        </Menu>
+      </div>
       {active === null ? (
-        <p className="hint">
-          Noch kein Arbeitsbereich.{' '}
-          <Link route={{ kind: 'arbeitsbereiche' }}>Arbeitsbereiche verwalten</Link>
-        </p>
+        <p className="hint">Noch kein Arbeitsbereich.</p>
       ) : (
         <Menu
           label={`Arbeitsbereich wechseln, aktuell ${active.name}`}
@@ -246,52 +327,40 @@ function Sidebar({
               </Link>
             </MenuLinkItem>
           ))}
-          <MenuLinkItem>
-            <Link
-              className="menu__item"
-              role="menuitem"
-              route={{ kind: 'arbeitsbereiche' }}
-              current={route.kind === 'arbeitsbereiche'}
-            >
-              Arbeitsbereiche verwalten
-            </Link>
-          </MenuLinkItem>
         </Menu>
       )}
 
       {active !== null && (
         <>
-          <h2 className="sidebar__title">Ordner und Boards</h2>
+          <h2 className="sidebar__title">Boards</h2>
           <ExplorerTree
             workspace={active}
             explorer={explorer}
             selection={route.kind === 'arbeitsbereich' ? route.folder : null}
             openBoardId={route.kind === 'board' ? route.boardId : null}
           />
-
-          <h2 className="sidebar__title">Arbeitsbereich verwalten</h2>
-          <ul className="sidebar__list">
-            <li>
-              <Link route={{ kind: 'mitglieder', workspaceId: active.id }} current={route.kind === 'mitglieder'}>
-                Mitglieder
-              </Link>
-            </li>
-            <li>
-              <Link route={{ kind: 'papierkorb', workspaceId: active.id }} current={route.kind === 'papierkorb'}>
-                Papierkorb
-              </Link>
-            </li>
-            <li>
-              <Link
-                route={{ kind: 'einstellungen', workspaceId: active.id }}
-                current={route.kind === 'einstellungen'}
-              >
-                Einstellungen
-              </Link>
-            </li>
-          </ul>
         </>
       )}
+
+      <NameDialog
+        open={creating}
+        title="Arbeitsbereich anlegen"
+        label="Name des neuen Arbeitsbereichs"
+        maxLength={MAX_WORKSPACE_NAME_LENGTH}
+        submitLabel="Arbeitsbereich anlegen"
+        errorOf={(cause) =>
+          cause instanceof ApiError ? cause.message : 'Der Arbeitsbereich konnte nicht angelegt werden.'
+        }
+        onSubmit={(name) =>
+          createWorkspace(me.csrfToken, name).then((workspace) => {
+            setCreating(false)
+            onWorkspaceCreated(workspace)
+          })
+        }
+        onClose={() => {
+          setCreating(false)
+        }}
+      />
     </nav>
   )
 }
@@ -627,7 +696,20 @@ function Shell({
             }
           }}
         >
-          <Sidebar workspaces={workspaces} active={activeWorkspace} route={route} explorer={explorer} />
+          <Sidebar
+            me={me}
+            workspaces={workspaces}
+            active={activeWorkspace}
+            route={route}
+            explorer={explorer}
+            onWorkspaceCreated={(workspace) => {
+              // Der neue Arbeitsbereich steht sofort in der Liste; sonst meldete die Zielansicht ihn bis zum
+              // Neuladen als unbekannt.
+              setWorkspaces((was) => [...(was ?? []), workspace])
+              navigate({ kind: 'arbeitsbereich', workspaceId: workspace.id, folder: null })
+              load()
+            }}
+          />
         </div>
       </Drawer>
       <main className="app__main" id="inhalt" tabIndex={-1}>

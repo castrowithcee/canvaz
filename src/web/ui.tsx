@@ -13,7 +13,8 @@
  * nachgeladen. Eine Schaltflaeche, die nur aus einem Symbol besteht, traegt immer einen zugaenglichen Namen.
  */
 
-import type { ComponentPropsWithRef, ReactNode } from 'react'
+import { useState } from 'react'
+import type { ComponentPropsWithRef, MouseEvent, ReactNode } from 'react'
 import {
   AlertTriangle,
   CheckCircle2,
@@ -289,6 +290,38 @@ export function TableSkeleton({
       </table>
     </div>
   )
+}
+
+/* ------------------------------------------------------ Zeilenauswahl */
+
+/**
+ * Die ausgewaehlte Zeile einer Liste - der Weg zu ihren Aktionen ohne Hover.
+ *
+ * Zeilenaktionen erscheinen nur an der ausgewaehlten, gehoverten oder fokussierten Zeile (`styles.css`).
+ * Beruehrung kennt kein Hover: ein Tipp auf die freie Flaeche einer Zeile waehlt sie deshalb aus, ein
+ * zweiter wieder ab. Ein Tipp auf ihren Link oeffnet weiterhin direkt, eine Schaltflaeche handelt wie immer.
+ * Tastatur und Hilfsmittel brauchen die Auswahl nicht: die Aktionen bleiben in der Tabulatorfolge und
+ * erscheinen mit dem Fokus.
+ */
+export function useRowSelection(): (id: string) => {
+  readonly className: string
+  readonly onClick: (event: MouseEvent<HTMLElement>) => void
+} {
+  const [selected, setSelected] = useState<string | null>(null)
+  return (id) => ({
+    className: selected === id ? 'row row--selected' : 'row',
+    onClick: (event) => {
+      // Nur ein Tipp in der Zeile selbst: React reicht auch Klicks aus dem Portal eines Menues hierher.
+      const target = event.target
+      if (
+        target instanceof Element &&
+        event.currentTarget.contains(target) &&
+        target.closest('a, button, input, select, textarea') === null
+      ) {
+        setSelected((was) => (was === id ? null : id))
+      }
+    },
+  })
 }
 
 /* -------------------------------------------------------- Seitenzustand */

@@ -566,6 +566,19 @@
     margin-top: 0;
   }
 
+  /* Gruppenkopf der Seitenleiste: Ueberschrift, direktes Anlegen und das Menue der Verwaltungswege. */
+  .sidebar__head {
+    align-items: center;
+    display: flex;
+    gap: --spacing(1);
+    margin: 0 0 --spacing(1);
+  }
+
+  .sidebar__head .sidebar__title {
+    flex: 1;
+    margin: 0 --spacing(2);
+  }
+
   /* ------------------------------------------------------ Baustein: Liste */
 
   .list {
@@ -1189,7 +1202,9 @@
     margin: 0 0 --spacing(4);
   }
 
-  .dashboard__filters a {
+  /* Filterpillen: Links einer Sicht (`aria-current`) und Umschalter (`aria-pressed`) in derselben Form. */
+  .dashboard__filters a,
+  .pill {
     align-items: center;
     background: var(--color-surface);
     border: 1px solid var(--color-border);
@@ -1202,17 +1217,39 @@
     text-decoration: none;
   }
 
-  .dashboard__filters a[aria-current='page'] {
+  .dashboard__filters a[aria-current='page'],
+  .pill[aria-pressed='true'] {
     background: var(--color-accent-soft);
     border-color: var(--color-accent);
     color: var(--color-text);
   }
 
-  .board-filters {
-    align-items: flex-start;
+  .pill {
+    box-shadow: none;
+    font-weight: 500;
+    gap: --spacing(2);
+  }
+
+  .pill:hover {
+    border-color: var(--color-border-strong);
+  }
+
+  .pill[aria-pressed='true'] {
+    font-weight: 600;
+  }
+
+  .pills {
     display: flex;
     flex-wrap: wrap;
-    gap: --spacing(6);
+    gap: --spacing(2);
+  }
+
+  /* Suche und Filtergruppe stehen auf einer Grundlinie: die Pillen fluchten mit dem Suchfeld. */
+  .board-filters {
+    align-items: flex-end;
+    display: flex;
+    flex-wrap: wrap;
+    gap: --spacing(3) --spacing(4);
   }
 
   /* Boarddetails: die Angaben stehen als Beschreibungsliste in zwei Spalten. */
@@ -1535,7 +1572,7 @@
   }
 
   .tree__children {
-    /* Die Einrueckung einer Ebene. Sie liegt links vom Aufklappschalter des Kindes. */
+    /* Die Einrueckung einer Ebene. */
     padding-inline-start: --spacing(4);
   }
 
@@ -1543,6 +1580,7 @@
     align-items: center;
     display: flex;
     gap: --spacing(1);
+    position: relative;
   }
 
   .tree__twisty {
@@ -1563,11 +1601,6 @@
   .tree__twisty:hover {
     background: var(--color-surface-muted);
     color: var(--color-text);
-  }
-
-  /* Ein Blatt hat nichts aufzuklappen; der Platz bleibt trotzdem, damit die Beschriftungen fluchten. */
-  .tree__twisty--leer {
-    pointer-events: none;
   }
 
   .tree__label {
@@ -1646,8 +1679,8 @@
   /*
    * Kompakte Zeilenliste der Sammlung: Titel, Beiwerk und das Kontextmenue des Eintrags.
    *
-   * **Ohne `overflow`**: das Menue einer Zeile haengt an ihr und wuerde an dieser Kante abgeschnitten. Die
-   * runden Ecken tragen deshalb die erste und die letzte Zeile selbst.
+   * Das geoeffnete Menue haengt per Portal ausserhalb der Liste (`overlays.tsx`) und wird an keiner Kante
+   * abgeschnitten. Die runden Ecken tragen die erste und die letzte Zeile selbst.
    */
   .rows {
     border: 1px solid var(--color-border);
@@ -1662,9 +1695,9 @@
     align-items: center;
     background: var(--color-surface);
     display: flex;
-    flex-wrap: wrap;
     gap: --spacing(2);
     padding: --spacing(1.5) --spacing(3);
+    position: relative;
     transition: background-color 160ms ease;
   }
 
@@ -1682,18 +1715,27 @@
     border-top: 1px solid var(--color-border);
   }
 
-  .row:hover {
+  .row:hover,
+  .row--selected {
     background: color-mix(in srgb, var(--color-accent-soft) 40%, var(--color-surface));
   }
 
+  .row--selected {
+    box-shadow: inset 3px 0 0 var(--color-accent);
+  }
+
+  /*
+   * Der Titel oeffnet; die freie Flaeche daneben waehlt die Zeile aus (`useRowSelection`). Titel und
+   * Beiwerk werden gekuerzt, wenn die Aktionen erscheinen - der Titel behaelt dabei den Vorrang.
+   */
   .row__label {
     align-items: center;
     color: var(--color-text);
     display: flex;
-    flex: 1;
+    flex: 0 1 auto;
     gap: --spacing(2);
     min-height: var(--spacing-touch);
-    min-width: 0;
+    min-width: min(6rem, 100%);
     text-decoration: none;
   }
 
@@ -1701,52 +1743,67 @@
     text-decoration: underline;
   }
 
+  .row__label > span,
   .row__meta {
-    color: var(--color-text-muted);
-    font-size: var(--text-sm);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  /* Die Handlungen einer Zeile: haeufige als Symbol, dahinter immer das Kontextmenue. */
+  .row__meta {
+    color: var(--color-text-muted);
+    flex: 0 1000 auto;
+    font-size: var(--text-sm);
+    margin-inline-start: auto;
+    min-width: 0;
+  }
+
+  /* Die Handlungen einer Zeile: haeufige als Symbol, dahinter das Kontextmenue. */
   .row__actions {
     align-items: center;
     display: flex;
+    flex: none;
     gap: --spacing(1);
-    margin-inline-start: auto;
   }
 
   /*
-   * Haeufige Handlungen erscheinen bei Hover und Fokus, damit die Liste ruhig bleibt. Unsichtbar heisst
-   * nicht unerreichbar: mit der Tastatur liegt der Fokus darauf und macht sie sichtbar, und ohne Hover
-   * (Beruehrung) stehen sie immer da. Das Kontextmenue daneben ist nie verborgen.
+   * Zeilenaktionen - Schnellaktionen, Optionsmenue, Aufklappschalter des Baums - erscheinen nur an der
+   * ausgewaehlten, gehoverten oder fokussierten Zeile; ein offenes Menue und der aktuelle Eintrag des Baums
+   * halten ihre Zeile aktiv. Im Ruhezustand nehmen sie **keine** Breite ein, bleiben aber in der
+   * Tabulatorfolge und bei Hilfsmitteln: der Fokus darauf macht die Zeile aktiv und sie sichtbar.
+   * Beruehrung kennt kein Hover (und ein haengengebliebenes waere irrefuehrend); dort waehlt ein Tipp aus.
    */
-  .row__quick {
-    opacity: 0;
-    transition: opacity 120ms ease;
-  }
-
-  .row:hover .row__quick,
-  .row:focus-within .row__quick {
-    opacity: 1;
-  }
-
-  @media (hover: none) {
-    .row__quick {
-      opacity: 1;
+  @media (hover: hover) {
+    :is(.row, .tree__row):not(
+        :hover,
+        :focus-within,
+        .row--selected,
+        :has([aria-current='page'], [aria-haspopup][aria-expanded='true'])
+      )
+      > :is(.row__actions, .tree__twisty) {
+      clip-path: inset(50%);
+      height: 1px;
+      overflow: hidden;
+      position: absolute;
+      white-space: nowrap;
+      width: 1px;
     }
   }
 
-  /* Kurze Eingabe im Fluss der Liste - sie nimmt den Platz der Zeile ein, in der sie steht. */
-  .inline-name {
-    align-items: center;
-    display: flex;
-    flex: 1;
-    flex-wrap: wrap;
-    gap: --spacing(2);
-  }
-
-  .inline-name input {
-    flex: 1;
-    min-width: 12rem;
+  @media (hover: none) {
+    :is(.row, .tree__row):not(
+        :focus-within,
+        .row--selected,
+        :has([aria-current='page'], [aria-haspopup][aria-expanded='true'])
+      )
+      > :is(.row__actions, .tree__twisty) {
+      clip-path: inset(50%);
+      height: 1px;
+      overflow: hidden;
+      position: absolute;
+      white-space: nowrap;
+      width: 1px;
+    }
   }
 
   /* -------------------------------------------------------------- Breiten */
@@ -1956,10 +2013,6 @@
     .dialog__body {
       padding: --spacing(4) calc(--spacing(4) + var(--safe-area-right))
         calc(--spacing(4) + var(--safe-area-bottom)) calc(--spacing(4) + var(--safe-area-left));
-    }
-
-    .inline-name input {
-      min-width: 100%;
     }
 
     /* Die linke Gruppe steht allein in ihrer Reihe und darf den Titel dort ausschreiben. */

@@ -162,7 +162,6 @@ function BoardRow({
   return (
     <li className="tree__item">
       <div className="tree__row">
-        <span className="tree__twisty tree__twisty--leer" aria-hidden="true" />
         <Link
           className="tree__label"
           route={{ kind: 'board', workspaceId, boardId: board.id, version: null, panel: null }}
@@ -200,7 +199,15 @@ function FolderNode({
   return (
     <li className="tree__item">
       <div className="tree__row">
-        {gefuellt ? (
+        <Link
+          className="tree__label"
+          route={{ kind: 'arbeitsbereich', workspaceId, folder: folder.id }}
+          current={selection === folder.id}
+        >
+          {open ? <FolderOpen size={16} aria-hidden="true" /> : <Folder size={16} aria-hidden="true" />}
+          <span className="tree__name">{folder.name}</span>
+        </Link>
+        {gefuellt && (
           <button
             type="button"
             className="tree__twisty"
@@ -213,17 +220,7 @@ function FolderNode({
           >
             {open ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}
           </button>
-        ) : (
-          <span className="tree__twisty tree__twisty--leer" aria-hidden="true" />
         )}
-        <Link
-          className="tree__label"
-          route={{ kind: 'arbeitsbereich', workspaceId, folder: folder.id }}
-          current={selection === folder.id}
-        >
-          {open ? <FolderOpen size={16} aria-hidden="true" /> : <Folder size={16} aria-hidden="true" />}
-          <span className="tree__name">{folder.name}</span>
-        </Link>
       </div>
       {open && (
         <ul className="tree__children" id={childrenId}>
@@ -284,8 +281,10 @@ function Nodes({
 /**
  * Der Baum der Seitenleiste: verschachtelte Ordner mit ihren Boards.
  *
- * Auswahl und Aufklappen sind **getrennt**: das Label ist ein Link und navigiert, der Schalter davor klappt
- * nur den Unterbaum auf. Verwendet werden verschachtelte Listen und keine ARIA-Baumrolle - die verlangt
+ * Auswahl und Aufklappen sind **getrennt**: das Label ist ein Link und navigiert, der Schalter dahinter
+ * klappt nur den Unterbaum auf. Er erscheint wie jede Zeilenaktion nur an der aktuellen, gehoverten oder
+ * fokussierten Zeile (`styles.css`) und bleibt dabei in der Tabulatorfolge; ein Blatt hat keinen und haelt
+ * auch keinen leeren Platz. Verwendet werden verschachtelte Listen und keine ARIA-Baumrolle - die verlangt
  * eine vollstaendige Baumtastatur, die hier niemand braucht: Links und Schalter sind schon in der
  * Tabulatorfolge.
  */
@@ -360,7 +359,6 @@ export function ExplorerTree({
       <ul className="tree" aria-busy={busy || undefined}>
         <li className="tree__item">
           <div className="tree__row">
-            <span className="tree__twisty tree__twisty--leer" aria-hidden="true" />
             <Link
               className="tree__label"
               route={{ kind: 'arbeitsbereich', workspaceId: workspace.id, folder: null }}

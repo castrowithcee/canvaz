@@ -13,7 +13,9 @@
  *
  * Radix wurde dafuer geprueft und **nicht** genommen. Das React-DOM-Portal loest das Menue aus scrollenden
  * Containern; die kleine Rechnung unten haelt es im Viewport und klappt es am unteren Rand nach oben.
- * Typeahead oder eine weitere direkte Abhaengigkeit braucht dieser kurze Menuevertrag nicht.
+ * Steht der Ausloeser in einer modalen Ebene (Dialog, schmale Seitenleiste), haengt das Menue an dieser
+ * Ebene: im `body` laege es unter der obersten Schicht und waere `inert`. Typeahead oder eine weitere
+ * direkte Abhaengigkeit braucht dieser kurze Menuevertrag nicht.
  */
 
 import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
@@ -22,7 +24,7 @@ import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
-import { Button, IconButton } from './ui.js'
+import { Button, describedBy, Field, IconButton } from './ui.js'
 
 /**
  * Haelt ein `dialog`-Element im Gleichlauf mit `open`.
@@ -72,6 +74,10 @@ function reportClose(selbstGeschlossen: { current: boolean }, onClose: () => voi
  *
  * `onClose` wird bei jedem Schliessweg gemeldet - Schaltflaeche, `Escape` und Klick auf die Abdunklung. Die
  * Ansicht setzt daraufhin ihren eigenen Zustand; der Fokus kehrt von selbst zum Ausloeser zurueck.
+ *
+ * Ein Formulardialog beginnt in seinem ersten Eingabefeld. `showModal()` setzte den Fokus sonst auf die
+ * erste Schaltflaeche - das Schliessen in der Kopfzeile. Ein Dialog ohne Feld (eine Bestaetigung) bleibt
+ * bei der Plattformwahl.
  */
 export function Dialog({
   open,
@@ -89,6 +95,20 @@ export function Dialog({
 }) {
   const { ref, selbstGeschlossen } = useModal(open)
   const titleId = useId()
+
+  // Laeuft nach dem `showModal()` aus `useModal`: Effekte einer Komponente folgen ihrer Reihenfolge.
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+    const field = ref.current?.querySelector<HTMLElement>(
+      '.dialog__body :is(input, select, textarea):not(:disabled, [type="hidden"])',
+    )
+    field?.focus()
+    if (field instanceof HTMLInputElement) {
+      field.select()
+    }
+  }, [open, ref])
 
   return (
     <dialog
@@ -307,10 +327,17 @@ export function Menu({
 }) {
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState<CSSProperties | null>(null)
+  /** Wohin das Menue haengt: an die modale Ebene seines Ausloesers, sonst an den `body`. */
+  const [host, setHost] = useState<HTMLElement | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const listRef = useRef<HTMLUListElement>(null)
   const menuId = useId()
+
+  const toggle = (): void => {
+    setHost(triggerRef.current?.closest<HTMLElement>('dialog[open]') ?? document.body)
+    setOpen((was) => !was)
+  }
 
   const close = useCallback((focusTrigger = true) => {
     setOpen(false)
@@ -394,7 +421,7 @@ export function Menu({
         if (!open) {
           if (event.key === 'ArrowDown') {
             event.preventDefault()
-            setOpen(true)
+            toggle()
           }
           return
         }
@@ -416,9 +443,7 @@ export function Menu({
           aria-haspopup="menu"
           aria-expanded={open}
           aria-controls={open ? menuId : undefined}
-          onClick={() => {
-            setOpen((was) => !was)
-          }}
+          onClick={toggle}
         />
       ) : (
         <Button
@@ -430,14 +455,13 @@ export function Menu({
           aria-expanded={open}
           aria-controls={open ? menuId : undefined}
           extraClass="menu__trigger"
-          onClick={() => {
-            setOpen((was) => !was)
-          }}
+          onClick={toggle}
         >
           {text}
         </Button>
       )}
       {open &&
+        host !== null &&
         createPortal(
           <MenuContext.Provider value={close}>
             <ul
@@ -451,8 +475,127 @@ export function Menu({
               {children}
             </ul>
           </MenuContext.Provider>,
-          document.body,
+          host,
         )}
     </div>
+  )
+}
+
+/**
+ * Kurzes Formular mit genau einem Namensfeld: Anlegen und Umbenennen im Kontext der Ansicht.
+ *
+ * Der Dialog beginnt im Feld (mit markiertem Vorschlag) und gibt den Fokus beim Schliessen an seinen
+ * Ausloeser zurueck. Eine Ablehnung steht am Feld, die Eingabe bleibt erhalten, und der Fokus kehrt ins Feld
+ * zurueck. Solange `onSubmit` laeuft, ist die Bestaetigung gesperrt; schliessen muss die Ansicht selbst, wenn
+ * ihre Handlung gelungen ist.
+ */
+export function NameDialog({
+  open,
+  title,
+  label,
+  value = '',
+  maxLength,
+  submitLabel,
+  onSubmit,
+  errorOf,
+  onClose,
+}: {
+  readonly open: boolean
+  readonly title: string
+  readonly label: string
+  /** Der Vorschlag beim Oeffnen: der heutige Name beim Umbenennen, leer beim Anlegen. */
+  readonly value?: string
+  readonly maxLength: number
+  readonly submitLabel: string
+  readonly onSubmit: (name: string) => Promise<unknown>
+  /** Uebersetzt eine Ablehnung in den Satz am Feld. */
+  readonly errorOf: (cause: unknown) => string
+  readonly onClose: () => void
+}) {
+  return (
+    <Dialog open={open} title={title} onClose={onClose}>
+      {/* Jedes Oeffnen beginnt mit einem frischen Formular und dem aktuellen Vorschlag. */}
+      {open && (
+        <NameForm
+          label={label}
+          value={value}
+          maxLength={maxLength}
+          submitLabel={submitLabel}
+          onSubmit={onSubmit}
+          errorOf={errorOf}
+          onCancel={onClose}
+        />
+      )}
+    </Dialog>
+  )
+}
+
+function NameForm({
+  label,
+  value,
+  maxLength,
+  submitLabel,
+  onSubmit,
+  errorOf,
+  onCancel,
+}: {
+  readonly label: string
+  readonly value: string
+  readonly maxLength: number
+  readonly submitLabel: string
+  readonly onSubmit: (name: string) => Promise<unknown>
+  readonly errorOf: (cause: unknown) => string
+  readonly onCancel: () => void
+}) {
+  const id = useId()
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [name, setName] = useState(value)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  return (
+    <form
+      className="stack"
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (busy) {
+          return
+        }
+        setBusy(true)
+        setError(null)
+        onSubmit(name.trim())
+          .catch((cause: unknown) => {
+            setError(errorOf(cause))
+            inputRef.current?.focus()
+          })
+          .finally(() => {
+            setBusy(false)
+          })
+      }}
+    >
+      <Field id={id} label={label} {...(error === null ? {} : { error })}>
+        <input
+          ref={inputRef}
+          id={id}
+          value={name}
+          maxLength={maxLength}
+          required
+          readOnly={busy}
+          aria-invalid={error !== null || undefined}
+          aria-describedby={describedBy(id, false, error !== null)}
+          onChange={(event) => {
+            setName(event.target.value)
+          }}
+        />
+      </Field>
+      <p className="actions">
+        <Button variant="primary" type="submit" busy={busy} disabled={name.trim().length === 0}>
+          {submitLabel}
+        </Button>
+        <Button variant="quiet" disabled={busy} onClick={onCancel}>
+          Abbrechen
+        </Button>
+      </p>
+    </form>
   )
 }

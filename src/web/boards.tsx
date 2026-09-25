@@ -1,10 +1,10 @@
 /**
  * Die Sammlung des gewaehlten Explorerkontexts: Unterordner und Boards genau dieses Knotens.
  *
- * Sie zeigt und **bearbeitet** dort, wo die Objekte stehen. Anlegen geschieht am aktuell gewaehlten Ort,
- * Umbenennen inline am Eintrag, Verschieben ueber eine kurze Zielauswahl, Duplizieren ueber dieselbe
- * Zielauswahl mit Titelvorschlag, Entfernen mit einem Dialog, der seine Folge vorher nennt. Damit gibt es
- * fuer diese Handlungen genau **einen** Ort - weder eine Verwaltungstabelle oberhalb der Liste noch einen
+ * Sie zeigt und **bearbeitet** dort, wo die Objekte stehen. Anlegen geschieht am aktuell gewaehlten Ort;
+ * Anlegen und Umbenennen oeffnen einen kurzen Dialog ueber der Liste, Verschieben eine kurze Zielauswahl,
+ * Duplizieren dieselbe Zielauswahl mit Titelvorschlag, Entfernen einen Dialog, der seine Folge vorher
+ * nennt. Damit gibt es fuer diese Handlungen genau **einen** Ort - weder eine Verwaltungstabelle oberhalb der Liste noch einen
  * Umweg ueber die Einstellungen oder die Detailansicht.
  *
  * Die Liste ist eine kompakte Zeilenliste und keine Tabelle: verglichen werden hier keine Spalten, es wird
@@ -23,20 +23,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Archive,
-  ArchiveRestore,
   Copy,
+  EllipsisVertical,
   Folder,
   FolderInput,
   FolderPlus,
   Info,
-  MoreHorizontal,
   Pencil,
   Plus,
   RotateCcw,
   Share2,
   SquarePen,
   Trash2,
-  X,
 } from 'lucide-react'
 
 import type { BoardView, FolderView, MeResponse, WorkspaceView } from '../contracts/api.js'
@@ -59,9 +57,9 @@ import {
 import type { Explorer } from './explorer.js'
 import { boardsOfSelection, childFolders, folderPath, matchesTitle } from './explorer.js'
 import { FolderSelect, folderMessageOf } from './folders.js'
-import { Dialog, Menu, MenuItem, MenuLinkItem } from './overlays.js'
+import { Dialog, Menu, MenuItem, MenuLinkItem, NameDialog } from './overlays.js'
 import { Link, navigate } from './router.js'
-import { actionClass, Button, IconButton, Loading, Notice, PageState } from './ui.js'
+import { actionClass, Button, IconButton, Loading, Notice, PageState, useRowSelection } from './ui.js'
 
 /** Uebersetzt eine Serverantwort in einen Satz. 404 und 403 bekommen bewusst eigene Texte. */
 function messageOf(cause: unknown, fallback: string): string {
@@ -96,72 +94,11 @@ function targetName(target: Target): string {
 }
 
 /**
- * Kurze Eingabe im Fluss der Liste: Enter speichert, Escape verwirft.
- *
- * Fuer Beruehrung stehen beide Wege zusaetzlich als Schaltflaeche da - eine Bildschirmtastatur hat nicht
- * immer eine sichtbare Eingabetaste, und Escape gibt es dort gar nicht.
- */
-function InlineName({
-  id,
-  label,
-  value,
-  maxLength,
-  busy,
-  onSubmit,
-  onCancel,
-}: {
-  readonly id: string
-  readonly label: string
-  readonly value: string
-  readonly maxLength: number
-  readonly busy: boolean
-  readonly onSubmit: (name: string) => void
-  readonly onCancel: () => void
-}) {
-  const [name, setName] = useState(value)
-
-  return (
-    <form
-      className="inline-name"
-      onSubmit={(event) => {
-        event.preventDefault()
-        onSubmit(name.trim())
-      }}
-    >
-      <label className="visually-hidden" htmlFor={id}>
-        {label}
-      </label>
-      <input
-        id={id}
-        value={name}
-        maxLength={maxLength}
-        required
-        autoFocus
-        disabled={busy}
-        onChange={(event) => {
-          setName(event.target.value)
-        }}
-        onKeyDown={(event) => {
-          if (event.key === 'Escape') {
-            event.preventDefault()
-            onCancel()
-          }
-        }}
-      />
-      <Button variant="primary" type="submit" busy={busy} disabled={name.trim().length === 0}>
-        Speichern
-      </Button>
-      <IconButton label="Abbrechen" icon={X} variant="quiet" onClick={onCancel} />
-    </form>
-  )
-}
-
-/**
  * Das Kontextmenue eines Eintrags.
  *
- * Es steht dauerhaft in der Zeile und nie nur bei Hover: mit Tastatur und mit Beruehrung ist es derselbe
- * Weg. Die haeufigen Handlungen stehen oben - auch die, die `QuickActions` bei Hover zusaetzlich an der Zeile
- * zeigt -, das Folgenreiche unten und abgesetzt.
+ * In einer Zeile erscheint es mit ihren anderen Aktionen an der ausgewaehlten, gehoverten oder fokussierten
+ * Zeile; fuer Tastatur und Hilfsmittel bleibt es immer in der Folge. Die haeufigen Handlungen stehen oben -
+ * auch die, die `QuickActions` zusaetzlich an der Zeile zeigt -, das Folgenreiche unten und abgesetzt.
  */
 function EntryMenu({
   target,
@@ -189,7 +126,7 @@ function EntryMenu({
   }
 
   return (
-    <Menu id={menuId(targetId(target))} label={`Aktionen fuer ${name}`} icon={MoreHorizontal}>
+    <Menu id={menuId(targetId(target))} label={`Aktionen fuer ${name}`} icon={EllipsisVertical}>
       {editable && (
         <MenuItem
           icon={Pencil}
@@ -256,10 +193,10 @@ function EntryMenu({
 /**
  * Die haeufigen Handlungen eines Eintrags, direkt an der Zeile.
  *
- * Sie erscheinen bei Hover und Fokus, damit die Liste ruhig bleibt; ohne Hover (Beruehrung) stehen sie
- * immer da (`styles.css`). Keine davon gibt es **nur** hier: Umbenennen steht ebenso im Kontextmenue, und
- * die Freigabe fuehrt in denselben Bereich der Informationsleiste wie die Freigabe im Editor. Das Kontextmenue
- * daneben bleibt der sichtbare Ausloeser fuer alles.
+ * Sie erscheinen mit dem Kontextmenue an der ausgewaehlten, gehoverten oder fokussierten Zeile, damit die
+ * Liste ruhig bleibt; auf Beruehrung waehlt ein Tipp auf die freie Zeilenflaeche aus (`useRowSelection`).
+ * Keine davon gibt es **nur** hier: Umbenennen steht ebenso im Kontextmenue, und die Freigabe fuehrt in
+ * denselben Bereich der Informationsleiste wie die Freigabe im Editor.
  */
 function QuickActions({
   target,
@@ -334,16 +271,17 @@ export function Boards({
   const [error, setError] = useState<string | null>(null)
   const [info, setInfo] = useState<string | null>(null)
   /**
-   * Der Ausloeser, der den Fokus zurueckbekommt, sobald eine Eingabe im Fluss der Liste endet.
+   * Der Ausloeser, der den Fokus zurueckbekommt, sobald eine Verschiebung oder ein Entfernen gelungen ist.
    *
-   * Gemerkt wird seine Kennung und nicht sein Knoten: waehrend der Eingabe steht der Knopf gar nicht da
-   * (die Eingabe nimmt seinen Platz ein) oder ist gesperrt, und ein gesperrter Knopf nimmt keinen Fokus.
-   * Gesucht wird er deshalb erst, wenn die Liste wieder gezeichnet ist.
+   * Gemerkt wird seine Kennung und nicht sein Knoten: die Liste wird danach neu gezeichnet, und der Eintrag
+   * steht womoeglich gar nicht mehr darin. Gesucht wird er deshalb erst, wenn die Liste wieder steht.
+   * Anlegen und Umbenennen brauchen das nicht - ihr Dialog gibt den Fokus selbst an den Ausloeser zurueck.
    */
   const restore = useRef<string | null>(null)
   /** Der Ausloeser, der beim naechsten Zeichnen den Fokus bekommt, und der Anstoss dafuer. */
   const wanted = useRef<string | null>(null)
   const [focusTick, setFocusTick] = useState(0)
+  const rowProps = useRowSelection()
 
   useEffect(() => {
     const id = wanted.current
@@ -515,12 +453,9 @@ export function Boards({
         <div className="actions">
           {workspace.status === 'active' && (
             <Button
-              id="neues-board"
               variant="primary"
               icon={Plus}
-              disabled={creating !== null}
               onClick={() => {
-                remember('neues-board')
                 setCreating('board')
               }}
             >
@@ -529,11 +464,8 @@ export function Boards({
           )}
           {manageFolders && (
             <Button
-              id="neuer-ordner"
               icon={FolderPlus}
-              disabled={creating !== null}
               onClick={() => {
-                remember('neuer-ordner')
                 setCreating('folder')
               }}
             >
@@ -545,10 +477,7 @@ export function Boards({
               target={{ kind: 'folder', folder: current }}
               editable={manageFolders}
               workspaceId={workspaceId}
-              onRename={(target) => {
-                remember(menuId(targetId(target)))
-                setRenaming(target)
-              }}
+              onRename={setRenaming}
               onMove={setMoving}
               onRemove={setRemoving}
             />
@@ -556,52 +485,8 @@ export function Boards({
         </div>
       </div>
 
-      {creating !== null && (
-        <div className="card">
-          <InlineName
-            id="explorer-neu"
-            label={
-              creating === 'folder'
-                ? `Name des neuen Ordners in ${heading}`
-                : `Titel des neuen Boards in ${heading}`
-            }
-            value=""
-            maxLength={creating === 'folder' ? MAX_FOLDER_NAME_LENGTH : MAX_BOARD_TITLE_LENGTH}
-            busy={busy}
-            onCancel={() => {
-              setCreating(null)
-              back()
-            }}
-            onSubmit={(name) => {
-              if (creating === 'folder') {
-                run(
-                  'folder',
-                  createFolder(me.csrfToken, { workspaceId, name, parentId: place }),
-                  'Der Ordner konnte nicht angelegt werden.',
-                  () => {
-                    setCreating(null)
-                    back()
-                  },
-                )
-                return
-              }
-              run(
-                'board',
-                createBoard(me.csrfToken, workspaceId, name, place),
-                'Das Board konnte nicht angelegt werden.',
-                (result) => {
-                  setCreating(null)
-                  // Das Anlegen endet dort, wo gearbeitet wird: im Editor des neuen Boards.
-                  const board = result as BoardView
-                  navigate({ kind: 'board', workspaceId, boardId: board.id, version: null, panel: null })
-                },
-              )
-            }}
-          />
-        </div>
-      )}
-
-      {error !== null && <Notice text={error} />}
+      {/* Eine Ablehnung aus einem offenen Dialog steht in diesem Dialog und nicht verdeckt dahinter. */}
+      {error !== null && moving === null && removing === null && <Notice text={error} />}
       {info !== null && <Notice kind="success" text={info} />}
 
       <div className="board-filters">
@@ -617,17 +502,20 @@ export function Boards({
             }}
           />
         </div>
-        <p className="actions">
-          <Button
-            icon={archive ? ArchiveRestore : Archive}
+        {/* Umschaltbare Filter sind Pillen: ihr Zustand steht in `aria-pressed` und ist sichtbar gewaehlt. */}
+        <div className="pills" role="group" aria-label="Filter">
+          <button
+            type="button"
+            className="pill"
             aria-pressed={archive}
             onClick={() => {
               setArchive((was) => !was)
             }}
           >
-            {archive ? 'Aktive Boards zeigen' : 'Archivierte Boards zeigen'}
-          </Button>
-        </p>
+            <Archive size={16} aria-hidden="true" />
+            Archivierte Boards anzeigen
+          </button>
+        </div>
       </div>
 
       {explorer.error !== null && (
@@ -645,134 +533,68 @@ export function Boards({
 
       {!leer && boards !== null && (
         <ul className="rows" aria-busy={explorer.busy || undefined}>
-          {subfolders.map((entry) =>
-              renaming !== null && renaming.kind === 'folder' && renaming.folder.id === entry.id ? (
-                <li className="row" key={entry.id}>
-                  <InlineName
-                    id={`umbenennen-${entry.id}`}
-                    label={`Neuer Name fuer ${entry.name}`}
-                    value={entry.name}
-                    maxLength={MAX_FOLDER_NAME_LENGTH}
-                    busy={busy}
-                    onCancel={() => {
-                      setRenaming(null)
-                      back()
-                    }}
-                    onSubmit={(name) => {
-                      run(
-                        'folder',
-                        renameFolder(me.csrfToken, { folderId: entry.id, name }),
-                        'Der Ordner konnte nicht umbenannt werden.',
-                        () => {
-                          setRenaming(null)
-                          back()
-                        },
-                      )
-                    }}
-                  />
-                </li>
-              ) : (
-                <li className="row" key={entry.id}>
-                  <Link
-                    className="row__label"
-                    route={{ kind: 'arbeitsbereich', workspaceId, folder: entry.id }}
-                  >
-                    <Folder size={18} aria-hidden="true" />
-                    <span>{entry.name}</span>
-                  </Link>
-                  <span className="row__meta">Ordner</span>
-                  <div className="row__actions">
-                    <QuickActions
-                      target={{ kind: 'folder', folder: entry }}
-                      editable={manageFolders}
-                      shareable={false}
-                      workspaceId={workspaceId}
-                      onRename={(target) => {
-                        remember(menuId(targetId(target)))
-                        setRenaming(target)
-                      }}
-                    />
-                    <EntryMenu
-                      target={{ kind: 'folder', folder: entry }}
-                      editable={manageFolders}
-                      workspaceId={workspaceId}
-                      onRename={(target) => {
-                        remember(menuId(targetId(target)))
-                        setRenaming(target)
-                      }}
-                      onMove={setMoving}
-                      onRemove={setRemoving}
-                    />
-                  </div>
-                </li>
-            ),
-          )}
-          {(boards ?? []).map((board) =>
-            renaming !== null && renaming.kind === 'board' && renaming.board.id === board.id ? (
-              <li className="row" key={board.id}>
-                <InlineName
-                  id={`umbenennen-${board.id}`}
-                  label={`Neuer Titel fuer ${board.title}`}
-                  value={board.title}
-                  maxLength={MAX_BOARD_TITLE_LENGTH}
-                  busy={busy}
-                  onCancel={() => {
-                    setRenaming(null)
-                    back()
-                  }}
-                  onSubmit={(title) => {
-                    run(
-                      'board',
-                      renameBoard(me.csrfToken, board.id, title),
-                      'Das Board konnte nicht umbenannt werden.',
-                      () => {
-                        setRenaming(null)
-                        back()
-                      },
-                    )
-                  }}
+          {subfolders.map((entry) => (
+            <li {...rowProps(`ordner-${entry.id}`)} key={entry.id}>
+              <Link
+                className="row__label"
+                route={{ kind: 'arbeitsbereich', workspaceId, folder: entry.id }}
+              >
+                <Folder size={18} aria-hidden="true" />
+                <span>{entry.name}</span>
+              </Link>
+              <span className="row__meta">Ordner</span>
+              <div className="row__actions">
+                <QuickActions
+                  target={{ kind: 'folder', folder: entry }}
+                  editable={manageFolders}
+                  shareable={false}
+                  workspaceId={workspaceId}
+                  onRename={setRenaming}
                 />
-              </li>
-            ) : (
-              <li className="row" key={board.id}>
-                <Link
-                  className="row__label"
-                  route={{ kind: 'board', workspaceId, boardId: board.id, version: null, panel: null }}
-                >
-                  <SquarePen size={18} aria-hidden="true" />
-                  <span>{board.title}</span>
-                </Link>
-                <span className="row__meta">
-                  {board.ownerDisplayName} · {new Date(board.updatedAt).toLocaleDateString('de-DE')}
-                </span>
-                <div className="row__actions">
-                  <QuickActions
-                    target={{ kind: 'board', board }}
-                    editable={editableBoard(board)}
-                    shareable={shareableBoard(board)}
-                    workspaceId={workspaceId}
-                    onRename={(target) => {
-                      remember(menuId(targetId(target)))
-                      setRenaming(target)
-                    }}
-                  />
-                  <EntryMenu
-                    target={{ kind: 'board', board }}
-                    editable={editableBoard(board)}
-                    duplicable={duplicableBoard(board)}
-                    workspaceId={workspaceId}
-                    onRename={(target) => {
-                      remember(menuId(targetId(target)))
-                      setRenaming(target)
-                    }}
-                    onMove={setMoving}
-                    onDuplicate={setDuplicating}
-                    onRemove={setRemoving}
-                  />
-                </div>
-              </li>
-            ),
-          )}
+                <EntryMenu
+                  target={{ kind: 'folder', folder: entry }}
+                  editable={manageFolders}
+                  workspaceId={workspaceId}
+                  onRename={setRenaming}
+                  onMove={setMoving}
+                  onRemove={setRemoving}
+                />
+              </div>
+            </li>
+          ))}
+          {(boards ?? []).map((board) => (
+            <li {...rowProps(board.id)} key={board.id}>
+              <Link
+                className="row__label"
+                route={{ kind: 'board', workspaceId, boardId: board.id, version: null, panel: null }}
+              >
+                <SquarePen size={18} aria-hidden="true" />
+                <span>{board.title}</span>
+              </Link>
+              <span className="row__meta">
+                {board.ownerDisplayName} · {new Date(board.updatedAt).toLocaleDateString('de-DE')}
+              </span>
+              <div className="row__actions">
+                <QuickActions
+                  target={{ kind: 'board', board }}
+                  editable={editableBoard(board)}
+                  shareable={shareableBoard(board)}
+                  workspaceId={workspaceId}
+                  onRename={setRenaming}
+                />
+                <EntryMenu
+                  target={{ kind: 'board', board }}
+                  editable={editableBoard(board)}
+                  duplicable={duplicableBoard(board)}
+                  workspaceId={workspaceId}
+                  onRename={setRenaming}
+                  onMove={setMoving}
+                  onDuplicate={setDuplicating}
+                  onRemove={setRemoving}
+                />
+              </div>
+            </li>
+          ))}
         </ul>
       )}
 
@@ -792,12 +614,72 @@ export function Boards({
         />
       )}
 
+      <NameDialog
+        open={creating !== null}
+        title={creating === 'folder' ? 'Ordner anlegen' : 'Board anlegen'}
+        label={creating === 'folder' ? `Name des neuen Ordners in ${heading}` : `Titel des neuen Boards in ${heading}`}
+        maxLength={creating === 'folder' ? MAX_FOLDER_NAME_LENGTH : MAX_BOARD_TITLE_LENGTH}
+        submitLabel={creating === 'folder' ? 'Ordner anlegen' : 'Board anlegen'}
+        errorOf={(cause) =>
+          creating === 'folder'
+            ? folderMessageOf(cause, 'Der Ordner konnte nicht angelegt werden.')
+            : messageOf(cause, 'Das Board konnte nicht angelegt werden.')
+        }
+        onSubmit={(name) =>
+          creating === 'folder'
+            ? createFolder(me.csrfToken, { workspaceId, name, parentId: place }).then(() => {
+                setCreating(null)
+                onChanged()
+              })
+            : createBoard(me.csrfToken, workspaceId, name, place).then((board) => {
+                setCreating(null)
+                onChanged()
+                // Das Anlegen endet dort, wo gearbeitet wird: im Editor des neuen Boards.
+                navigate({ kind: 'board', workspaceId, boardId: board.id, version: null, panel: null })
+              })
+        }
+        onClose={() => {
+          setCreating(null)
+        }}
+      />
+
+      <NameDialog
+        open={renaming !== null}
+        title={renaming === null ? 'Umbenennen' : `${targetName(renaming)} umbenennen`}
+        label={renaming?.kind === 'folder' ? 'Neuer Name des Ordners' : 'Neuer Titel des Boards'}
+        value={renaming === null ? '' : targetName(renaming)}
+        maxLength={renaming?.kind === 'folder' ? MAX_FOLDER_NAME_LENGTH : MAX_BOARD_TITLE_LENGTH}
+        submitLabel="Umbenennen"
+        errorOf={(cause) =>
+          renaming?.kind === 'folder'
+            ? folderMessageOf(cause, 'Der Ordner konnte nicht umbenannt werden.')
+            : messageOf(cause, 'Das Board konnte nicht umbenannt werden.')
+        }
+        onSubmit={(name) => {
+          const action =
+            renaming?.kind === 'folder'
+              ? renameFolder(me.csrfToken, { folderId: renaming.folder.id, name })
+              : renaming?.kind === 'board'
+                ? renameBoard(me.csrfToken, renaming.board.id, name)
+                : Promise.resolve()
+          return action.then(() => {
+            setRenaming(null)
+            onChanged()
+          })
+        }}
+        onClose={() => {
+          setRenaming(null)
+        }}
+      />
+
       <MoveDialog
         target={moving}
         folders={folders}
         busy={busy}
+        error={error}
         onClose={() => {
           setMoving(null)
+          setError(null)
         }}
         onSubmit={(target, parentId) => {
           run(
@@ -838,10 +720,12 @@ export function Boards({
         title={removing === null ? 'Ordner entfernen' : `${removing.name} entfernen`}
         onClose={() => {
           setRemoving(null)
+          setError(null)
         }}
       >
         {removing !== null && (
           <div className="stack">
+            {error !== null && <Notice text={error} />}
             <p>
               Unterordner und Boards aus <strong>{removing.name}</strong> ruecken an seinen Platz:{' '}
               {folders.find((entry) => entry.id === removing.parentId)?.name ?? workspace.name}. Kein Board geht
@@ -876,6 +760,7 @@ export function Boards({
                 variant="quiet"
                 onClick={() => {
                   setRemoving(null)
+                  setError(null)
                 }}
               >
                 Abbrechen
@@ -898,12 +783,15 @@ function MoveDialog({
   target,
   folders,
   busy,
+  error,
   onClose,
   onSubmit,
 }: {
   readonly target: Target | null
   readonly folders: readonly FolderView[]
   readonly busy: boolean
+  /** Eine Ablehnung bleibt im Dialog stehen, samt der gewaehlten Zielauswahl. */
+  readonly error: string | null
   readonly onClose: () => void
   readonly onSubmit: (target: Target, parentId: string | null) => void
 }) {
@@ -937,6 +825,7 @@ function MoveDialog({
             disabled={busy}
             onChange={setParentId}
           />
+          {error !== null && <Notice text={error} />}
           <p className="actions">
             <Button variant="primary" icon={FolderInput} type="submit" busy={busy}>
               Verschieben
