@@ -172,3 +172,42 @@ export function boardStatus(input: {
       return connectionStatus(input.connection, input.attempt, input.resyncedAt)
   }
 }
+
+/** Eine Aktion der schwebenden Gruppe, die hervorgehoben werden kann. */
+export type BoardAction = 'current' | 'reload' | 'save' | 'share'
+
+/**
+ * Welche Aktion die schwebende Gruppe hervorhebt - und ob "Jetzt speichern" ueberhaupt erscheint.
+ *
+ * Hervorgehoben ist **hoechstens eine** Aktion. Verlangt die Lage eine Handlung - zurueck zum aktuellen
+ * Stand, nach einem Konflikt neu laden, ungesicherte Arbeit speichern -, ist sie es; die Freigabe bleibt
+ * dann erreichbar, tritt aber zurueck. Ohne eine solche Handlung ist die Freigabe die Hauptaktion.
+ *
+ * "Jetzt speichern" erscheint nur, wo der Nutzer tatsaechlich handeln muss: nach einem Fehlschlag und mit
+ * Aenderungen bei getrennter Strecke. Waehrend des Verbindungsaufbaus und eines laufenden
+ * Wiederverbindungsversuchs nicht - dann traegt gleich wieder der Raum, und der Zustand steht ohnehin da.
+ */
+export function boardActions(input: {
+  readonly save: SaveKind
+  readonly connection: RealtimeStatus
+  /** Diese Ansicht aendert das Board nicht - Vorschau, Archiv oder fehlendes Schreibrecht. */
+  readonly viewOnly: boolean
+  /** Wahr, wenn "Zum aktuellen Stand" angeboten wird. */
+  readonly preview: boolean
+  /** Wahr, wenn die Freigabe angeboten wird. */
+  readonly shareable: boolean
+}): { readonly saveNow: boolean; readonly primary: BoardAction | null } {
+  const saveNow =
+    !input.viewOnly &&
+    (input.save === 'failed' || (input.save === 'dirty' && input.connection === 'getrennt'))
+  const primary: BoardAction | null = input.preview
+    ? 'current'
+    : input.save === 'conflict'
+      ? 'reload'
+      : saveNow
+        ? 'save'
+        : input.shareable
+          ? 'share'
+          : null
+  return { saveNow, primary }
+}

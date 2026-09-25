@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { boardStatus, readOnlyReason } from '../../src/web/board/board-status.js'
+import { boardActions, boardStatus, readOnlyReason } from '../../src/web/board/board-status.js'
 
 const BASIS = {
   save: 'idle',
@@ -53,6 +53,41 @@ describe('Verdichteter Boardzustand', () => {
 
   it('zeigt einer nur lesenden Ansicht ihre Verbindung und keinen Speicherzustand', () => {
     expect(boardStatus({ ...BASIS, viewOnly: true, save: 'dirty' }).text).toBe('Live')
+  })
+})
+
+describe('Hervorgehobene Aktion der schwebenden Gruppe', () => {
+  const basis = {
+    save: 'idle',
+    connection: 'verbunden',
+    viewOnly: false,
+    preview: false,
+    shareable: true,
+  } as const
+
+  it('hebt hoechstens eine Aktion hervor und zeigt "Jetzt speichern" nur, wo gehandelt werden muss', () => {
+    expect(boardActions(basis)).toEqual({ saveNow: false, primary: 'share' })
+    expect(boardActions({ ...basis, save: 'dirty', connection: 'getrennt' })).toEqual({
+      saveNow: true,
+      primary: 'save',
+    })
+    expect(boardActions({ ...basis, save: 'failed' })).toEqual({ saveNow: true, primary: 'save' })
+    expect(boardActions({ ...basis, save: 'conflict', connection: 'getrennt' })).toEqual({
+      saveNow: false,
+      primary: 'reload',
+    })
+    expect(boardActions({ ...basis, preview: true, viewOnly: true, shareable: false })).toEqual({
+      saveNow: false,
+      primary: 'current',
+    })
+    expect(boardActions({ ...basis, save: 'dirty', connection: 'verbindet' })).toEqual({
+      saveNow: false,
+      primary: 'share',
+    })
+    expect(boardActions({ ...basis, save: 'dirty', connection: 'wiederverbinden' })).toEqual({
+      saveNow: false,
+      primary: 'share',
+    })
   })
 })
 

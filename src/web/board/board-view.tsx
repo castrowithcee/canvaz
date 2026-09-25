@@ -28,6 +28,9 @@
  * Rueckweg, Titel mit Inline-Umbenennung und Boardmenue, oben rechts Presence, **ein** verdichteter Zustand
  * (`board-status.ts`), die Freigabe und der Ausloeser der Board-Sidebar. Sie wiederholen nicht, was schon
  * dasteht - ausformuliert wird nur, was Aufmerksamkeit verlangt, und nur das wird Hilfsmitteln angekuendigt.
+ * Hervorgehoben ist hoechstens **eine** Aktion (`boardActions`): verlangt die Lage eine Handlung - zurueck
+ * zum aktuellen Stand, neu laden, jetzt speichern -, ist sie es, und die Freigabe tritt zurueck; sonst ist
+ * die Freigabe die Hauptaktion.
  * Ihre Hoehe halten die Bedienelemente der Zeichenflaeche frei; die Zeichnung selbst laeuft darunter weiter.
  *
  * Alles Umfangreichere - Ablage, Arbeitsbereichswechsel, Freigaben, Versionen, Import/Export, Archiv und
@@ -111,7 +114,7 @@ import { BoardPanel } from '../board-panel.js'
 import { Drawer, Menu, MenuItem } from '../overlays.js'
 import type { BoardPanelView } from '../router.js'
 import { Badge, Button, ConfirmDialog, IconButton, Loading, Notice } from '../ui.js'
-import { boardStatus, readOnlyReason } from './board-status.js'
+import { boardActions, boardStatus, readOnlyReason } from './board-status.js'
 import type { BoardEditorPort, EditorPeer } from './board-editor-port.js'
 import { BoardCanvas, samePersistedAppState } from './excalidraw-adapter.js'
 import { connectBoardRealtime } from './realtime-client.js'
@@ -852,8 +855,16 @@ export function BoardEditor({
    * verschwindet damit auch diese Aktion, statt eine Ablehnung anzubieten.
    */
   const titleEditable = member !== null && !viewOnly && mayChangeBoard(state.loaded.role)
-  /** Freigeben ist die hervorgehobene Boardaktion - aber nur fuer den, der sie auch ausfuehren darf. */
+  /** Freigeben darf nur, wer sie auch ausfuehren darf. Hervorgehoben ist sie nur ohne dringendere Handlung. */
   const shareable = member !== null && state.loaded.previewOf === null && mayManageBoard(state.loaded.role)
+  /** Hoechstens eine hervorgehobene Aktion; "Jetzt speichern" nur, wo der Nutzer handeln muss. */
+  const actions = boardActions({
+    save: save.kind,
+    connection,
+    viewOnly,
+    preview: state.loaded.previewOf !== null && member !== null,
+    shareable,
+  })
   const panelOpen = member !== null && member.panel !== null
 
   function closePanel(): void {
@@ -1038,7 +1049,7 @@ export function BoardEditor({
           </p>
           {state.loaded.previewOf !== null && member !== null && (
             <Button
-              variant="primary"
+              variant={actions.primary === 'current' ? 'primary' : 'normal'}
               icon={Undo2}
               onClick={() => {
                 member.onPreview(null)
@@ -1048,17 +1059,17 @@ export function BoardEditor({
             </Button>
           )}
           {save.kind === 'conflict' && (
-            <Button variant="primary" icon={RotateCcw} onClick={load}>
+            <Button variant={actions.primary === 'reload' ? 'primary' : 'normal'} icon={RotateCcw} onClick={load}>
               Neu laden
             </Button>
           )}
           {/*
-            * Manuell gespeichert wird nur, wo es fachlich noetig ist: ohne lebende Strecke oder nach einem
-            * Fehlschlag. Solange der Boardraum traegt, ist die Zeichnung schon dort.
+            * Manuell gespeichert wird nur, wo der Nutzer handeln muss: nach einem Fehlschlag oder mit Aenderungen
+            * bei getrennter Strecke. Waehrend Aufbau und Wiederverbindung nicht - der Zustand steht ohnehin da.
             */}
-          {!viewOnly && (save.kind === 'failed' || (save.kind === 'dirty' && !live)) && (
+          {actions.saveNow && (
             <Button
-              variant="primary"
+              variant={actions.primary === 'save' ? 'primary' : 'normal'}
               icon={Save}
               onClick={persist}
               disabled={adapter === null}
@@ -1068,7 +1079,7 @@ export function BoardEditor({
           )}
           {shareable && member !== null && (
             <Button
-              variant="primary"
+              variant={actions.primary === 'share' ? 'primary' : 'normal'}
               icon={Share2}
               title="Freigeben"
               extraClass="board__share"
