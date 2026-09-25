@@ -30,7 +30,7 @@
     "@excalidraw/excalidraw": "0.18.1",
     "jose": "^6.2.9",
     "lucide-react": "^1.37.0",
-    "nodemailer": "^7.0.13",
+    "nodemailer": "^10.0.10",
     "openid-client": "^6.8.5",
     "pg": "^8.16.3",
     "react": "^19.2.0",
@@ -41,7 +41,6 @@
     "@eslint/js": "^10.0.1",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^24.10.1",
-    "@types/nodemailer": "^8.0.1",
     "@types/pg": "^8.15.6",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
@@ -54,7 +53,7 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.48.0",
     "vite": "^8.2.1",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   },
   "overrides": {
     "nanoid": "^5.1.16",
