@@ -48,6 +48,11 @@
  * Strecke -, fragt der Rueckweg nach, und ein Neuladen des Tabs geht nicht ohne Rueckfrage des Browsers.
  * Live verbunden ist eine Aenderung dagegen bereits beim Server; dann wird nicht gewarnt.
  *
+ * Eigene Aenderungen bleiben gemerkt, bis ein `saved` des Raums sie bestaetigt (`unconfirmed-changes.ts`).
+ * Nach jedem Beitritt geht genau das erneut hinaus, was der Raum davon noch nicht traegt - Arbeit vor dem
+ * ersten Beitritt, waehrend einer Trennung und im Abbruch verlorene Nachrichten. Ein unveraendert geoeffnetes
+ * Board schickt dagegen nichts und bekommt keine neue Version.
+ *
  * ## Nur Lesen
  *
  * Das Schreibrecht behauptet diese Ansicht nicht selbst. Es steht schon in der Szenenantwort: sie nennt die
@@ -108,9 +113,10 @@ import type { BoardPanelView } from '../router.js'
 import { Badge, Button, ConfirmDialog, IconButton, Loading, Notice } from '../ui.js'
 import { boardStatus, readOnlyReason } from './board-status.js'
 import type { BoardEditorPort, EditorPeer } from './board-editor-port.js'
-import { BoardCanvas } from './excalidraw-adapter.js'
+import { BoardCanvas, samePersistedAppState } from './excalidraw-adapter.js'
 import { connectBoardRealtime } from './realtime-client.js'
 import type { BoardRealtime, RealtimeStatus } from './realtime-client.js'
+import { UnconfirmedChanges } from './unconfirmed-changes.js'
 
 /** Ab hier steht die Board-Sidebar als Spalte neben der Zeichenflaeche. Derselbe Wert steht in `styles.css`. */
 const PANEL_DOCKED = '(min-width: 64rem)'
@@ -258,6 +264,11 @@ export function BoardEditor({
   const uploadsRef = useRef(0)
   /** Lokale Realtime-Kennung des letzten zum Server vorgemerkten Standes. */
   const lastSentChangeSequenceRef = useRef(0)
+  /**
+   * Eigene Aenderungen, die der Raum noch nicht als gespeichert bestaetigt hat. Nur sie gehen nach einem
+   * Beitritt erneut hinaus - nie der ganze Stand, der beim Laden von Excalidraw normalisiert wurde.
+   */
+  const unconfirmedRef = useRef(new UnconfirmedChanges())
   const clientRef = useRef<BoardRealtime | null>(null)
   /** Eigene fluechtige Kennung im Raum; sie trennt die anderen Teilnehmer vom eigenen Eintrag. */
   const selfRef = useRef<string | null>(null)
@@ -291,6 +302,7 @@ export function BoardEditor({
     blockedRef.current = false
     uploadsRef.current = 0
     lastSentChangeSequenceRef.current = 0
+    unconfirmedRef.current = new UnconfirmedChanges()
     // Zwei Endpunkte, zwei Bedeutungen: der aktuelle Stand des Boards oder genau eine aufbewahrte Version.
     // Die Vorschau kommt ueber einen nur lesenden Weg und traegt deshalb nie eine Ausgangsversion fuer eine
     // Speicherung; `versionRef` bleibt auf `0` und wird von nichts gelesen, was schreiben koennte.
@@ -532,11 +544,16 @@ export function BoardEditor({
           .then((response) => {
             filesRef.current = { ...filesRef.current, [response.file.id]: response.file }
             // Erst jetzt darf der Raum die Datei kennen: vorher gaebe es zu der Kennung keinen Datensatz.
+            // Ohne Verbindung haelt der Client sie bis zum Beitritt; die Merkliste sorgt dafuer, dass sie
+            // auch dann noch hinausgeht, wenn sie verschickt wurde und mit einem Abbruch verloren ging.
             const client = clientRef.current
-            client?.sendChange([], null, [response.file.id])
+            let sequence = 0
             if (client !== null) {
-              lastSentChangeSequenceRef.current = client.lastChangeSequence()
+              client.sendChange([], null, [response.file.id])
+              sequence = client.lastChangeSequence()
+              lastSentChangeSequenceRef.current = sequence
             }
+            unconfirmedRef.current.note([], false, [response.file.id], sequence)
           })
           .catch((cause: unknown) => {
             setAssetProblem(
@@ -550,13 +567,21 @@ export function BoardEditor({
             setSave((current) => (current.kind === 'conflict' ? current : { kind: 'dirty' }))
           })
       }
-      if (liveRef.current) {
-        const client = clientRef.current
-        client?.sendChange(change.changedElements, change.appState, [])
-        if (client !== null) {
-          lastSentChangeSequenceRef.current = client.lastChangeSequence()
-        }
+      // Live geht die Aenderung sofort an den Raum. Sonst bleibt sie in der Merkliste und geht mit dem
+      // naechsten Beitritt hinaus; bis dahin sichert ohne Strecke die HTTP-Speicherung.
+      const client = liveRef.current ? clientRef.current : null
+      let sequence = 0
+      if (client !== null) {
+        client.sendChange(change.changedElements, change.appState, [])
+        sequence = client.lastChangeSequence()
+        lastSentChangeSequenceRef.current = sequence
       }
+      unconfirmedRef.current.note(
+        change.changedElements.map((element) => element.id),
+        change.appState !== null,
+        [],
+        sequence,
+      )
       setSave((current) => (current.kind === 'conflict' ? current : { kind: 'dirty' }))
     })
     // Der Zeigezustand ist fluechtig und loest weder Speicherung noch Aenderungsmeldung aus.
@@ -591,6 +616,21 @@ export function BoardEditor({
       adapter?.showPeers(fremde)
     }
 
+    /** Schickt, was von den eigenen Aenderungen auf dieser Verbindung noch nicht hinausging. */
+    function sendeUngesendete(): void {
+      if (adapter === null) {
+        return
+      }
+      const offen = unconfirmedRef.current.unsent()
+      const elements = adapter.getElements().filter((element) => offen.elementIds.has(element.id))
+      if (elements.length === 0 && !offen.appState && offen.fileIds.length === 0) {
+        return
+      }
+      client.sendChange(elements, offen.appState ? adapter.getAppState() : null, offen.fileIds)
+      lastSentChangeSequenceRef.current = client.lastChangeSequence()
+      unconfirmedRef.current.markSent(lastSentChangeSequenceRef.current)
+    }
+
     const client = connectBoardRealtime(boardId, {
       onStatus(status, versuch): void {
         setConnection(status)
@@ -611,14 +651,35 @@ export function BoardEditor({
         setCanWrite(message.canWrite)
         canWriteRef.current = message.canWrite
         selfRef.current = message.clientId
-        adapter?.applyRemoteElements(message.scene.elements)
-        adapter?.applyRemoteAppState(message.scene.appState)
         zeigePeers(fremdePeers(message.peers, message.clientId))
-        // Was vor dem Beitritt gezeichnet wurde, geht als eigener Stand hinaus. Die Reconciliation
-        // entscheidet danach je Element; ein aelterer Stand kann keinen neueren verdraengen.
-        if (message.canWrite && adapter !== null) {
-          client.sendChange(adapter.getElements(), adapter.getAppState(), [])
-          lastSentChangeSequenceRef.current = client.lastChangeSequence()
+        if (adapter === null) {
+          return
+        }
+        const unconfirmed = unconfirmedRef.current
+        adapter.applyRemoteElements(message.scene.elements)
+        const appStateInRoom = samePersistedAppState(message.scene.appState, adapter.getAppState())
+        unconfirmed.rejoin(
+          message.scene.elements,
+          new Set(Object.keys(message.scene.files)),
+          appStateInRoom,
+          adapter.getElements(),
+        )
+        // Ein eigener AppState, den der Raum noch nicht kennt, wird nicht vom Raumstand ueberschrieben,
+        // sondern geht gleich hinaus - wie ein eigenes Element mit hoeherer Version. Ohne Schreibrecht gilt
+        // der Raumstand.
+        if (!message.canWrite || !unconfirmed.unsent().appState) {
+          adapter.applyRemoteAppState(message.scene.appState)
+        }
+        // Nur was der Raum noch nicht traegt, geht hinaus: Aenderungen vor dem ersten Beitritt, waehrend der
+        // Trennung und solche, die verschickt, aber vor der Bestaetigung verloren gingen. Der unveraenderte
+        // Rest des eigenen Stands bleibt zu Hause - er ist nach dem Laden nur normalisiert, nicht geaendert.
+        if (message.canWrite) {
+          sendeUngesendete()
+        }
+        if (unconfirmed.empty && uploadsRef.current === 0) {
+          // Alles Eigene liegt bereits im Raum, etwa weil es vor dem Abbruch noch ankam. Es gibt nichts
+          // mehr zu sichern, und ein `saved` kaeme dafuer nicht.
+          setSave((current) => (current.kind === 'dirty' ? { kind: 'idle' } : current))
         }
       },
       onSnapshot(message): void {
@@ -667,6 +728,10 @@ export function BoardEditor({
         }
         canWriteRef.current = erlaubt
         setCanWrite(erlaubt)
+        if (erlaubt) {
+          // Wer beim Beitritt nicht schreiben durfte, hat seine offenen Aenderungen noch nicht geschickt.
+          sendeUngesendete()
+        }
         if (!erlaubt) {
           // `saving` kann hier nur der Checkpoint eines Mitbearbeiters sein; eigene Aenderungen stehen als
           // `dirty` da und bleiben deshalb sichtbar, wenn das Schreibrecht entzogen wird.
@@ -676,6 +741,7 @@ export function BoardEditor({
       onSaved(message): void {
         versionRef.current = message.version
         const savedSequence = message.clientChangeSequence ?? 0
+        unconfirmedRef.current.confirm(savedSequence)
         setSave((current) => {
           if (savedSequence < lastSentChangeSequenceRef.current) {
             return current.kind === 'conflict' ? current : { kind: 'dirty' }

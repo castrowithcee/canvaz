@@ -33,7 +33,8 @@ export type LocalPresence = {
 export type LocalChange = {
   /** Nur die seit der letzten Meldung tatsaechlich veraenderten Elemente. */
   readonly changedElements: readonly SyncElement[]
-  readonly appState: PersistedAppState
+  /** Der neue AppState, wenn er sich seit der letzten Meldung geaendert hat; sonst `null`. */
+  readonly appState: PersistedAppState | null
   /**
    * Kennungen der Dateien, die seit der letzten Meldung neu im Editor liegen. Bewusst nur die Kennungen:
    * Groesse und Speicherschluessel denkt sich der Client nicht aus, sie kommen mit der Antwort des Uploads.

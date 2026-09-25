@@ -28,6 +28,7 @@ import {
   addMember,
   signedInAs,
   storedScene,
+  storedVersions,
   teamMitBoard,
   warteAufElement,
   warteAufVersion,
@@ -170,8 +171,9 @@ describe('Wiederaufnahme nach einem Abbruch', () => {
     const beigetreten = await wieder.join(board.id)
     expect(ids(beigetreten.scene.elements).sort()).toEqual(['ada-1', 'ada-2', 'bob-1'])
 
-    // ... und danach schickt der Client seine eigenen Elemente erneut, statt auf verpasste Teilstuecke zu
-    // hoffen. Genau so verhaelt sich `board-view.tsx` in `onJoined`.
+    // ... und danach schickt der Client seine eigenen, noch unbestaetigten Aenderungen erneut, statt auf
+    // verpasste Teilstuecke zu hoffen (`board-view.tsx`, `onJoined`). Ein Element, das der Raum schon genau
+    // so traegt, aendert dabei nichts.
     wieder.send(change(board.id, [element('bob-1', 1, 10), element('bob-offline', 1, 11)]))
     await bleibt.next('scene-change', (message) => ids(message.elements).includes('bob-offline'))
 
@@ -241,6 +243,24 @@ describe('Wiederaufnahme nach einem Abbruch', () => {
     ])
     const gespeichert = await warteAufElement(pool, board.id, 'runde-4')
     expect(gespeichert.elements).toHaveLength(5)
+  })
+
+  it('erzeugt aus einem inhaltsgleichen Nachsenden nach dem Beitritt keine Version', async () => {
+    const { ada, board } = await teamMitBoard(app)
+    const erste = await connect(app, ada)
+    await erste.join(board.id)
+    erste.send(change(board.id, [element('x', 2, 7)]))
+    await warteAufVersion(pool, board.id, 1)
+    erste.close()
+    await erste.closeCode
+
+    const wieder = await connect(app, ada)
+    const beigetreten = await wieder.join(board.id)
+    wieder.send(change(board.id, beigetreten.scene.elements))
+
+    await ruhe()
+    expect(wieder.log.filter((message) => message.type === 'saved')).toEqual([])
+    expect(await storedVersions(pool, board.id)).toBe(1)
   })
 
   it('laesst eine verspaetete Nachricht nach der Wiederaufnahme keinen neueren Stand ueberschreiben', async () => {

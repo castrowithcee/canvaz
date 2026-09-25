@@ -18,10 +18,16 @@
  * Serverneustart alle Browser gleichzeitig wieder ein.
  *
  * Nach dem erneuten Beitritt liefert der Server den **vollstaendigen** Raumzustand (`joined`), und der
- * Aufrufer schickt danach seine eigenen Elemente erneut. Verpasste Teilstuecke werden bewusst nicht
- * nachgefordert: waehrend der Trennung entstandene Aenderungen kennt nur diese Seite, und die
- * Reconciliation entscheidet je Element ueber `version` - ein aelterer Stand kann keinen neueren
- * verdraengen, egal in welcher Reihenfolge er ankommt.
+ * Aufrufer schickt danach seine eigenen Aenderungen, die der Raum noch nicht als gespeichert bestaetigt hat
+ * - nicht den ganzen eigenen Stand. Verpasste Teilstuecke werden bewusst nicht nachgefordert: waehrend der
+ * Trennung entstandene Aenderungen kennt nur diese Seite, und die Reconciliation entscheidet je Element
+ * ueber `version` - ein aelterer Stand kann keinen neueren verdraengen, egal in welcher Reihenfolge er
+ * ankommt.
+ *
+ * Was schon im Buendel lag, als die Verbindung abbrach, bleibt dort und geht nach dem Beitritt hinaus. Was
+ * bereits abgeschickt war, kann dagegen mit der Verbindung verloren sein; dieser Client weiss das nicht. Die
+ * Bestaetigung dafuer ist die Aenderungskennung im `saved` des Raums, und die Merkliste des Aufrufers
+ * schickt alles Unbestaetigte beim naechsten Beitritt erneut.
  *
  * Nach einigen Schliessgruenden hilft kein neuer Versuch (`TERMINAL_CLOSE_CODES`): abgelaufene Sitzung,
  * entzogener Boardzugriff, zu viele Verbindungen, zu grosser Rahmen. Dann bleibt es beim Zustand
@@ -46,8 +52,8 @@ const FLUSH_INTERVAL_MS = 50
 /**
  * Hoechstzahl Elemente je ausgehender Nachricht.
  *
- * Im laufenden Betrieb faellt ein Element nach dem anderen an; viele auf einmal gibt es nur beim erneuten
- * Senden des eigenen Stands nach einer Wiederaufnahme. Aufgeteilt statt in einem Stueck: eine Nachricht
+ * Im laufenden Betrieb faellt ein Element nach dem anderen an; viele auf einmal gibt es nur beim Nachsenden
+ * nach einem Beitritt oder bei einer grossen Einfuegung. Aufgeteilt statt in einem Stueck: eine Nachricht
  * ueber der Rahmengrenze des Servers wuerde die frisch aufgebaute Verbindung sofort wieder beenden. Der
  * Wert liegt eine Groessenordnung unter der Elementgrenze des Servers.
  */
@@ -172,7 +178,9 @@ export function connectBoardRealtime(boardId: string, handlers: RealtimeHandlers
         elements,
         appState: pendingAppState,
         fileIds: [...pendingFileIds],
-        clientChangeSequence: pendingChangeSequence,
+        // Die Kennung traegt erst das letzte Teilstueck. Ein Checkpoint zwischen zwei Teilstuecken bestaetigte
+        // sonst Elemente, die noch im Buendel liegen.
+        ...(pendingElements.size > 0 ? {} : { clientChangeSequence: pendingChangeSequence }),
       })
       pendingAppState = null
       pendingFileIds.clear()

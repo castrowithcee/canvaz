@@ -49,7 +49,7 @@ export function toPersistedAppState(appState: Pick<AppState, 'viewBackgroundColo
 }
 
 /** Gleichheit der persistierten Teilmenge. Vier Felder, deshalb ein Vergleich statt einer Bibliothek. */
-function samePersistedAppState(left: PersistedAppState, right: PersistedAppState): boolean {
+export function samePersistedAppState(left: PersistedAppState, right: PersistedAppState): boolean {
   return (
     left.viewBackgroundColor === right.viewBackgroundColor &&
     left.gridSize === right.gridSize &&
@@ -67,19 +67,36 @@ export class ExcalidrawBoardAdapter implements BoardEditorPort {
   #unsubscribe: (() => void) | null = null
   #applyingRemote = false
   #readOnly = false
+  /**
+   * Ob der Ausgangsstand der Elemente schon uebernommen ist.
+   *
+   * In der Regel nicht im Konstruktor: Excalidraw reicht die Schnittstelle heraus, bevor es `initialData`
+   * geladen hat, und normalisiert die Szene beim Laden noch (fehlender `index` erhoeht `version`, fehlende
+   * Werte bekommen Standards). Das erste Editorereignis kommt erst nach abgeschlossenem Laden - Excalidraw
+   * meldet waehrend `isLoading` nichts - und traegt genau diesen normalisierten Stand. Er ist keine lokale
+   * Aenderung.
+   */
+  #baselineTaken = false
   /** Zuletzt gemeldeter AppState. `null` heisst: noch kein Ausgangsstand uebernommen. */
   #lastAppState: PersistedAppState | null = null
 
   constructor(api: ExcalidrawImperativeAPI) {
     this.#api = api
-    // Der Ausgangsstand des Editors ist bereits bekannt und keine lokale Aenderung. Ohne diese Uebernahme
-    // meldete das erste Editorereignis die geladene Szene als frisch gezeichnet.
-    for (const element of this.getElements()) {
+    // Nur fuer den Fall, dass der Editor schon fertig geladen hat, wenn er die Schnittstelle herausreicht.
+    if (!api.getAppState().isLoading) {
+      this.#takeBaseline(api.getSceneElementsIncludingDeleted(), api.getAppState(), api.getFiles())
+    }
+  }
+
+  #takeBaseline(elements: readonly ExcalidrawElement[], appState: AppState, files: BinaryFiles): void {
+    this.#baselineTaken = true
+    for (const element of toSyncElements(elements)) {
       this.#sentVersions.set(element.id, element.version)
     }
-    for (const fileId of Object.keys(this.#api.getFiles())) {
+    for (const fileId of Object.keys(files)) {
       this.#knownFileIds.add(fileId)
     }
+    this.#lastAppState = toPersistedAppState(appState)
   }
 
   start(): void {
@@ -108,6 +125,11 @@ export class ExcalidrawBoardAdapter implements BoardEditorPort {
   }
 
   #handleChange(elements: readonly ExcalidrawElement[], appState: AppState, files: BinaryFiles): void {
+    if (!this.#baselineTaken) {
+      // Still uebernommen, wie beim AppState: der geladene Stand ist bekannt und wird nicht gemeldet.
+      this.#takeBaseline(elements, appState, files)
+      return
+    }
     if (this.#applyingRemote || this.#readOnly) {
       return
     }
@@ -131,7 +153,11 @@ export class ExcalidrawBoardAdapter implements BoardEditorPort {
     if (changed.length === 0 && newFileIds.length === 0 && !appStateChanged) {
       return
     }
-    const change: LocalChange = { changedElements: changed, appState: persistedAppState, newFileIds }
+    const change: LocalChange = {
+      changedElements: changed,
+      appState: appStateChanged ? persistedAppState : null,
+      newFileIds,
+    }
     for (const listener of this.#listeners) {
       listener(change)
     }
@@ -142,9 +168,6 @@ export class ExcalidrawBoardAdapter implements BoardEditorPort {
     if (appliedIds.size === 0) {
       return
     }
-    for (const element of elements) {
-      this.#sentVersions.set(element.id, element.version)
-    }
     this.#applyingRemote = true
     try {
       this.#api.updateScene({
@@ -154,6 +177,14 @@ export class ExcalidrawBoardAdapter implements BoardEditorPort {
       })
     } finally {
       this.#applyingRemote = false
+    }
+    // Das eigentliche Schutzmittel gegen ein Echo: der uebernommene Stand gilt als bekannt, bevor der
+    // Editor ihn meldet. `#applyingRemote` allein traegt nicht, denn Excalidraw meldet Aenderungen erst in
+    // `componentDidUpdate` und damit nach dem Ende dieses Aufrufs. Gelesen wird erst nach `updateScene`:
+    // Excalidraw ersetzt die Szene dort synchron und normalisiert sie dabei wie beim Laden (etwa ein
+    // fehlender `index` bei einem importierten Stand erhoeht `version`). Auch das ist keine lokale Aenderung.
+    for (const element of this.getElements()) {
+      this.#sentVersions.set(element.id, element.version)
     }
   }
 

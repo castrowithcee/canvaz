@@ -1079,13 +1079,20 @@ Serverneustart alle Browser im selben Augenblick wieder ein.
 Der Abgleich laeuft in genau zwei Schritten und braucht kein Nachfordern verpasster Teilstuecke:
 
 1. Der Server liefert beim Wiederbeitritt den **vollstaendigen** Raumzustand (`joined`).
-2. Der Client schickt danach **seine eigenen Elemente erneut**. Was waehrend der Trennung lokal entstanden
-   ist, kennt nur er.
+2. Der Client schickt danach **seine eigenen, noch nicht bestaetigten Aenderungen erneut** - nicht den
+   ganzen eigenen Stand. Was vor dem ersten Beitritt oder waehrend der Trennung lokal entstanden ist, kennt
+   nur er. Er merkt sich jede eigene Aenderung, bis ein `saved` des Raums sie ueber die Aenderungskennung
+   bestaetigt; damit geht auch eine Nachricht, die abgeschickt war und mit dem Abbruch verloren ging, beim
+   naechsten Beitritt noch einmal hinaus, ebenso ein Bild, dessen Upload ohne Verbindung fertig wurde. Was
+   der Raum beim Beitritt schon genau so traegt, entfaellt. Ein unveraendert geoeffnetes Board schickt
+   deshalb nichts und bekommt keine neue Version - auch dann nicht, wenn Excalidraw die geladene Szene beim
+   Oeffnen normalisiert hat (fehlender `index`, fehlende Standardwerte).
 
 Beide Richtungen laufen durch dieselbe Reconciliation. Ein aelterer Stand kann deshalb keinen neueren
 verdraengen, egal in welcher Reihenfolge er eintrifft - eine verspaetete Nachricht nach dem Reconnect
 aendert nichts und loest auch keinen Fanout aus. Ausgehende Nachrichten werden auf 200 Elemente aufgeteilt,
-damit der Nachsendeschub nie die Rahmengrenze reisst.
+damit der Nachsendeschub nie die Rahmengrenze reisst; die Aenderungskennung traegt erst das letzte
+Teilstueck, damit ein Checkpoint dazwischen nichts bestaetigt, was noch unterwegs ist.
 
 Faellt der Abbruch genau in einen laufenden Abschluss-Checkpoint, wartet der Wiederbeitritt auf dessen
 Ende, statt den Raum neben ihm aus einem aelteren Stand zu laden.
@@ -1201,8 +1208,9 @@ zurueck, und `'self'` deckt die gleichnamige WebSocket-Herkunft ab.
 - **Genau eine Instanz.** Raeume leben im Prozessspeicher; zwei Anwendungsserver haetten zwei getrennte
   Raeume fuer dasselbe Board. Horizontale Skalierung braucht eine eigene Entscheidung.
 - **Kein garantierter Offlinemodus.** Der Browser haelt waehrend einer Trennung seinen lokalen Stand und
-  schickt ihn nach der Wiederaufnahme erneut; wer den Tab dabei schliesst, verliert die Zeichnung, sofern
-  die HTTP-Speicherung sie nicht bereits uebernommen hat. Ein Zwischenspeicher im Browser ist bewusst nicht
+  schickt die unbestaetigten Aenderungen nach der Wiederaufnahme erneut; wer den Tab dabei schliesst,
+  verliert die Zeichnung, sofern die HTTP-Speicherung sie nicht bereits uebernommen hat. Ein
+  Zwischenspeicher im Browser ist bewusst nicht
   gebaut.
 - **Volles Board bleibt voll.** Ist die Obergrenze des Raumzustands erreicht, wird Wachstum benannt
   abgelehnt. Loeschen hilft nur begrenzt, weil ein Tombstone ungefaehr so gross ist wie das Element selbst.
