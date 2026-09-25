@@ -11,7 +11,12 @@
  *
  * `critical` entscheidet, ob der Zustand angekuendigt wird. Ein gelungener Checkpoint ist sichtbar, wird
  * aber **nicht** vorgelesen: sonst spraeche eine Sprachausgabe waehrend des Zeichnens im Sekundentakt.
- * Konflikt, Fehlschlag und Verbindungsverlust sind das Gegenteil davon und werden gemeldet.
+ * Konflikt, Fehlschlag, Verbindungsverlust und ungesicherte Aenderungen sind das Gegenteil davon und werden
+ * gemeldet.
+ *
+ * `symbol` trennt beides auch sichtbar: was in Ordnung ist - live verbunden, wird gesichert, gespeichert -,
+ * steht in der Gruppe nur als Symbol mit Namen und Kurzhinweis; Uhrzeit und Einzelheiten stehen unter
+ * "Informationen" (`sessionDetails`). Alles andere bleibt ausgeschriebener Text.
  */
 
 import type { RealtimeStatus } from './realtime-client.js'
@@ -27,6 +32,8 @@ export type BoardStatus = {
   readonly tone: 'neutral' | 'accent' | 'success' | 'danger'
   /** Wahr, wenn dieser Zustand Aufmerksamkeit verlangt und deshalb angekuendigt wird. */
   readonly critical: boolean
+  /** Gesetzt heisst: ein unkritischer Zustand, den die Gruppe nur als dieses Symbol zeigt. */
+  readonly symbol: 'live' | 'saving' | 'saved' | null
 }
 
 /**
@@ -85,13 +92,19 @@ function connectionStatus(
   const detail = connectionMessage(status, attempt, resyncedAt)
   switch (status) {
     case 'verbindet':
-      return { text: 'Verbindet …', detail, tone: 'neutral', critical: false }
+      return { text: 'Verbindet …', detail, tone: 'neutral', critical: false, symbol: null }
     case 'verbunden':
-      return { text: 'Live', detail, tone: 'success', critical: false }
+      return { text: 'Live', detail, tone: 'success', critical: false, symbol: 'live' }
     case 'wiederverbinden':
-      return { text: `Verbindung verloren (Versuch ${String(attempt)})`, detail, tone: 'danger', critical: true }
+      return {
+        text: `Verbindung verloren (Versuch ${String(attempt)})`,
+        detail,
+        tone: 'danger',
+        critical: true,
+        symbol: null,
+      }
     case 'getrennt':
-      return { text: 'Nicht live verbunden', detail, tone: 'danger', critical: true }
+      return { text: 'Nicht live verbunden', detail, tone: 'danger', critical: true, symbol: null }
   }
 }
 
@@ -124,6 +137,7 @@ export function boardStatus(input: {
         'aber nicht uebernommen und hat nichts ueberschrieben.',
       tone: 'danger',
       critical: true,
+      symbol: null,
     }
   }
   if (input.save === 'failed') {
@@ -132,6 +146,7 @@ export function boardStatus(input: {
       detail: `Speichern fehlgeschlagen. ${input.failure ?? ''}`.trim(),
       tone: 'danger',
       critical: true,
+      symbol: null,
     }
   }
   if (input.preview) {
@@ -140,6 +155,7 @@ export function boardStatus(input: {
       detail: 'Eine Vorschau zeigt einen festen Stand, ist nicht live verbunden und nimmt keine Aenderungen auf.',
       tone: 'neutral',
       critical: false,
+      symbol: null,
     }
   }
   if (input.viewOnly) {
@@ -150,26 +166,70 @@ export function boardStatus(input: {
   }
   switch (input.save) {
     case 'dirty':
-      return {
-        text: 'Nicht gespeichert',
-        detail: 'Nicht gespeicherte Aenderungen.',
-        tone: 'accent',
-        critical: false,
-      }
+      // Live liegt die Aenderung bereits beim Raum; es fehlt nur sein naechster Checkpoint. Das ist kein
+      // ungesicherter Zustand und wechselt beim Zeichnen im Sekundentakt - er bleibt ein stilles Symbol.
+      return input.connection === 'verbunden'
+        ? {
+            text: 'Wird gesichert',
+            detail: 'Aenderungen sind beim Server; der naechste gespeicherte Stand folgt gleich.',
+            tone: 'neutral',
+            critical: false,
+            symbol: 'saving',
+          }
+        : {
+            text: 'Nicht gespeichert',
+            detail: 'Nicht gespeicherte Aenderungen.',
+            tone: 'accent',
+            critical: true,
+            symbol: null,
+          }
     case 'saving':
-      return { text: 'Speichert …', detail: 'Wird gespeichert …', tone: 'neutral', critical: false }
+      return {
+        text: 'Speichert …',
+        detail: 'Wird gespeichert …',
+        tone: 'neutral',
+        critical: false,
+        symbol: 'saving',
+      }
     case 'saved':
       return {
-        text: input.savedAt === null ? 'Gespeichert' : `Gespeichert ${input.savedAt.toLocaleTimeString('de-DE')}`,
+        text: 'Gespeichert',
         detail:
           input.savedAt === null
             ? 'Gespeichert.'
             : `Gespeichert um ${input.savedAt.toLocaleTimeString('de-DE')}.`,
         tone: 'success',
         critical: false,
+        symbol: 'saved',
       }
     case 'idle':
       return connectionStatus(input.connection, input.attempt, input.resyncedAt)
+  }
+}
+
+/**
+ * Speicher- und Verbindungsdetails fuer "Informationen".
+ *
+ * Was die Gruppe nur als Symbol zeigt, steht hier ausgeschrieben: der letzte gespeicherte Stand dieser
+ * Sitzung - er bleibt auch dann stehen, wenn danach wieder gezeichnet wird - und die Verbindung.
+ */
+export function sessionDetails(input: {
+  /** Zeitpunkt der letzten Speicherung dieser Sitzung; `null`, wenn es keine gab. */
+  readonly lastSavedAt: Date | null
+  readonly connection: RealtimeStatus
+  readonly attempt: number
+  readonly resyncedAt: Date | null
+  /** Wahr, wenn eine aufbewahrte Version gezeigt wird. Sie tritt keinem Raum bei. */
+  readonly preview: boolean
+}): { readonly saved: string; readonly connection: string } {
+  return {
+    saved:
+      input.lastSavedAt === null
+        ? 'In dieser Sitzung noch nicht gespeichert.'
+        : `Zuletzt gespeichert um ${input.lastSavedAt.toLocaleTimeString('de-DE')}.`,
+    connection: input.preview
+      ? 'Vorschau: nicht live verbunden.'
+      : connectionMessage(input.connection, input.attempt, input.resyncedAt),
   }
 }
 

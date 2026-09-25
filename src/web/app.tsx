@@ -27,7 +27,7 @@
  *
  * Die Boardroute zeigt den Editor im Vollbild; Kopfzeile und Haupt-Seitenleiste treten dafuer ab. Was ein
  * Board braucht, traegt er selbst: seine schwebende Gruppe den Rueckweg in den zuletzt gezeigten
- * Bibliothekskontext, seine Board-Sidebar die Boardaufgaben. Eine eigene Detailseite gibt es dafuer nicht
+ * Bibliothekskontext, seine Informationsleiste die Boardaufgaben. Eine eigene Detailseite gibt es dafuer nicht
  * mehr - fuer dieselbe Handlung soll es genau einen Ort geben.
  *
  * Der Anwendungsserver liefert fuer jeden unbekannten GET-Pfad dieselbe `index.html` (siehe
@@ -52,7 +52,7 @@ import { ExplorerTree, useExplorer } from './explorer.js'
 import { GuestApp } from './guest.js'
 import { Drawer, Menu, MenuItem, MenuLinkItem } from './overlays.js'
 import type { AppRoute, BoardPanelView } from './router.js'
-import { Link, navigate, navigateBack, routeHref, useRoute } from './router.js'
+import { closeLayer, Link, navigate, navigateBack, routeHref, useRoute } from './router.js'
 import { actionClass, Button, IconButton, Loading, Notice, PageState } from './ui.js'
 import { WorkspaceMembers, WorkspaceOverview, WorkspaceSettings } from './workspaces.js'
 
@@ -499,7 +499,7 @@ function Shell({
   }
 
   // Der Editor braucht die ganze Flaeche; Kopfzeile und Haupt-Seitenleiste treten dafuer ab. Seine eigene
-  // schwebende Gruppe traegt den Rueckweg, die Board-Sidebar die Boardaufgaben (`board/board-view.tsx`).
+  // schwebende Gruppe traegt den Rueckweg, die Informationsleiste die Boardaufgaben (`board/board-view.tsx`).
   if (route.kind === 'board' && routeWorkspace !== null) {
     const back: AppRoute = {
       kind: 'arbeitsbereich',
@@ -507,12 +507,13 @@ function Shell({
       folder: library !== null && library.workspaceId === routeWorkspace.id ? library.folder : null,
     }
     /**
-     * Der offene Bereich der Board-Sidebar steht in der Adresse.
+     * Der offene Bereich der Informationsleiste steht in der Adresse.
      *
-     * Oeffnen legt einen Historieneintrag an - `Zurueck` schliesst die Sidebar damit sinnvoll. Ein
-     * Bereichswechsel darin ersetzt ihn, sonst muesste man sich durch die Bereiche zurueckklicken.
-     * Geschlossen wird ueber genau diesen Eintrag; fehlt er (geteilter Link direkt auf einen Bereich),
-     * tritt die Boardadresse ohne Bereich an seine Stelle.
+     * Oeffnen im Board legt einen Historieneintrag als Ebene an - `Zurueck` schliesst die Leiste damit
+     * sinnvoll. Ein Bereichswechsel darin ersetzt ihn, sonst muesste man sich durch die Bereiche
+     * zurueckklicken. Geschlossen wird ueber genau diesen Eintrag; kam die Adresse schon mit Bereich
+     * (geteilter Link, Eintrag einer Liste), tritt die Boardadresse ohne Bereich an seine Stelle - das Board
+     * bleibt offen.
      */
     const openPanel = (panel: BoardPanelView | null): void => {
       const target: AppRoute = {
@@ -523,10 +524,10 @@ function Shell({
         panel,
       }
       if (panel === null) {
-        navigateBack(target)
+        closeLayer(target)
         return
       }
-      navigate(target, { replace: route.panel !== null })
+      navigate(target, { replace: route.panel !== null, layer: true })
     }
     return (
       <Suspense

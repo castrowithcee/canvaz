@@ -37,7 +37,7 @@ function useModal(open: boolean) {
    *
    * Das Ereignis kommt bei **jedem** Schliessweg - auch bei dem, den die Ansicht gerade selbst angestossen
    * hat, weil sich ihr Zustand geaendert hat. Ohne diese Unterscheidung meldete die Ebene ein Schliessen
-   * zurueck, das niemand verlangt hat: eine Board-Sidebar, die beim Verbreitern des Fensters vom Sheet zur
+   * zurueck, das niemand verlangt hat: eine Informationsleiste, die beim Verbreitern vom Sheet zur
    * angedockten Spalte wird, verschwaende auf diesem Weg vollstaendig.
    */
   const selbstGeschlossen = useRef(false)

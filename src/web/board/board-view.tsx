@@ -22,19 +22,22 @@
  * weiter gesichert. Sichtbar sind ausserdem der laufende Versuch, der erfolgreiche Abgleich nach der
  * Wiederaufnahme und jede benannt abgelehnte Nachricht.
  *
- * ## Schwebende Gruppen und Board-Sidebar
+ * ## Schwebende Gruppen und Informationen
  *
  * Ueber der Zeichenflaeche ist keine Zeile reserviert. Zwei kompakte Gruppen schweben darueber: oben links
- * Rueckweg, Titel mit Inline-Umbenennung und Boardmenue, oben rechts Presence, **ein** verdichteter Zustand
- * (`board-status.ts`), die Freigabe und der Ausloeser der Board-Sidebar. Sie wiederholen nicht, was schon
- * dasteht - ausformuliert wird nur, was Aufmerksamkeit verlangt, und nur das wird Hilfsmitteln angekuendigt.
+ * Rueckweg, Titel und Boardmenue (darin "Umbenennen" mit einem kurzen Dialog), oben rechts Presence, **ein**
+ * verdichteter Zustand (`board-status.ts`), die Freigabe als Symbolaktion und der Ausloeser der
+ * Informationen. Sie wiederholen nicht, was schon dasteht - was in Ordnung ist, steht nur als Symbol mit
+ * Namen und Kurzhinweis da; ausformuliert wird nur, was Aufmerksamkeit verlangt, und nur das wird
+ * Hilfsmitteln angekuendigt. Uhrzeit und Verbindung stehen ausgeschrieben unter "Informationen".
  * Hervorgehoben ist hoechstens **eine** Aktion (`boardActions`): verlangt die Lage eine Handlung - zurueck
  * zum aktuellen Stand, neu laden, jetzt speichern -, ist sie es, und die Freigabe tritt zurueck; sonst ist
  * die Freigabe die Hauptaktion.
  * Ihre Hoehe halten die Bedienelemente der Zeichenflaeche frei; die Zeichnung selbst laeuft darunter weiter.
  *
  * Alles Umfangreichere - Ablage, Arbeitsbereichswechsel, Freigaben, Versionen, Import/Export, Archiv und
- * Papierkorb - steht in der Board-Sidebar (`board-panel.tsx`) neben der Zeichenflaeche. Sie ist auf jeder
+ * Papierkorb, dazu Speicher- und Verbindungsdetails - steht in der Informationsleiste (`board-panel.tsx`,
+ * sichtbar benannt "Informationen") neben der Zeichenflaeche. Sie ist auf jeder
  * Breite derselbe Knoten: breit eine angedockte Spalte, schmal ein modales Sheet mit Fokusfang, Escape und
  * Fokusrueckgabe von der Plattform. Welcher Bereich offen ist, steht in der Adresse; `Zurueck` schliesst.
  *
@@ -42,7 +45,7 @@
  *
  * Dieselbe Ansicht traegt beide Wege. Sie kennt vom Board nur Titel und Status - genau das, was in beiden
  * Antwortformen von `GET /api/boards/scene` steht - und verzweigt auf `viewer`, statt aus einer Gastantwort
- * Felder zu lesen, die es dort nicht gibt. Ein Gast bekommt keinen Weg zurueck und keine Board-Sidebar: es
+ * Felder zu lesen, die es dort nicht gibt. Ein Gast bekommt keinen Weg zurueck und keine Informationen: es
  * gibt fuer ihn weder eine Boardliste noch einen Arbeitsbereich, und `member` bleibt fuer ihn `null`.
  *
  * ## Kein stiller Datenverlust
@@ -79,18 +82,20 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import {
   ArrowLeft,
+  CloudCheck,
+  CloudUpload,
+  EllipsisVertical,
   History,
   Info,
-  MoreHorizontal,
-  PanelRight,
   Pencil,
+  Radio,
   RotateCcw,
   Save,
   Share2,
   Undo2,
   Users,
-  X,
 } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 
 import '@excalidraw/excalidraw/index.css'
 
@@ -111,21 +116,29 @@ import {
   uploadBoardAsset,
 } from '../api.js'
 import { BoardPanel } from '../board-panel.js'
-import { Drawer, Menu, MenuItem } from '../overlays.js'
+import { Dialog, Drawer, Menu, MenuItem } from '../overlays.js'
 import type { BoardPanelView } from '../router.js'
-import { Badge, Button, ConfirmDialog, IconButton, Loading, Notice } from '../ui.js'
-import { boardActions, boardStatus, readOnlyReason } from './board-status.js'
+import { Badge, Button, ConfirmDialog, describedBy, Field, IconButton, Loading, Notice } from '../ui.js'
+import type { BoardStatus } from './board-status.js'
+import { boardActions, boardStatus, readOnlyReason, sessionDetails } from './board-status.js'
 import type { BoardEditorPort, EditorPeer } from './board-editor-port.js'
 import { BoardCanvas, samePersistedAppState } from './excalidraw-adapter.js'
 import { connectBoardRealtime } from './realtime-client.js'
 import type { BoardRealtime, RealtimeStatus } from './realtime-client.js'
 import { UnconfirmedChanges } from './unconfirmed-changes.js'
 
-/** Ab hier steht die Board-Sidebar als Spalte neben der Zeichenflaeche. Derselbe Wert steht in `styles.css`. */
+/** Ab hier steht die Informationsleiste als Spalte neben der Zeichenflaeche. Derselbe Wert in `styles.css`. */
 const PANEL_DOCKED = '(min-width: 64rem)'
 
-/** Die Board-Sidebar ist derselbe Knoten, auf den ihr Ausloeser in der schwebenden Gruppe wirkt. */
+/** Die Informationsleiste ist derselbe Knoten, auf den ihr Ausloeser in der schwebenden Gruppe wirkt. */
 const PANEL_ID = 'board-sidebar'
+
+/** Das Symbol eines unkritischen Zustands. Kritische Zustaende stehen als Text da. */
+const STATUS_SYMBOLS: Readonly<Record<NonNullable<BoardStatus['symbol']>, LucideIcon>> = {
+  live: Radio,
+  saving: CloudUpload,
+  saved: CloudCheck,
+}
 
 /** Ruhezeit nach der letzten Aenderung, bevor gespeichert wird. */
 const AUTOSAVE_DELAY_MS = 1_500
@@ -177,7 +190,7 @@ function fremdePeers(peers: readonly PresenceView[], selbst: string | null): rea
 /**
  * Der Mitgliedskontext eines Boards.
  *
- * `null` heisst Gast: kein Rueckweg in eine Bibliothek, keine Board-Sidebar, kein Umbenennen. Ein Gast
+ * `null` heisst Gast: kein Rueckweg in eine Bibliothek, keine Informationsleiste, kein Umbenennen. Ein Gast
  * kennt genau ein Board und keinen Arbeitsbereich - und die Endpunkte dahinter verlangen ohnehin eine
  * interne Sitzung.
  */
@@ -185,7 +198,7 @@ export type BoardMemberContext = {
   readonly me: MeResponse
   readonly workspace: WorkspaceView
   readonly workspaces: readonly WorkspaceView[]
-  /** Offener Bereich der Board-Sidebar; `null` heisst geschlossen. Er steht in der Adresse. */
+  /** Offener Bereich der Informationsleiste; `null` heisst geschlossen. Er steht in der Adresse. */
   readonly panel: BoardPanelView | null
   readonly onPanel: (panel: BoardPanelView | null) => void
   /** Meldet der Huelle, dass sich an den Boards etwas geaendert hat. */
@@ -245,19 +258,21 @@ export function BoardEditor({
   const [assetProblem, setAssetProblem] = useState<string | null>(null)
   /** Erzwingt eine frische Zeichenflaeche beim Neuladen; sonst blieben verworfene Elemente stehen. */
   const [mountKey, setMountKey] = useState(0)
-  /** Angedockt heisst: die Board-Sidebar ist eine Spalte und kein modales Sheet. */
+  /** Angedockt heisst: die Informationsleiste ist eine Spalte und kein modales Sheet. */
   const [docked, setDocked] = useState(() => window.matchMedia(PANEL_DOCKED).matches)
-  /** Inline-Umbenennung des Titels in der schwebenden Gruppe. */
+  /** Umbenennen im kurzen Dialog, geoeffnet aus dem Boardmenue. */
   const [renaming, setRenaming] = useState(false)
   const [titleDraft, setTitleDraft] = useState('')
   const [renameBusy, setRenameBusy] = useState(false)
   const [renameError, setRenameError] = useState<string | null>(null)
-  /** Zaehler fuer die Board-Sidebar: er steigt, wenn hier etwas am Board geaendert wurde. */
+  /** Zaehler fuer die Informationsleiste: er steigt, wenn hier etwas am Board geaendert wurde. */
   const [panelRevision, setPanelRevision] = useState(0)
   /** Rueckfrage vor dem Verlassen, solange ungesicherte Arbeit im Editor steht. */
   const [confirmLeave, setConfirmLeave] = useState(false)
   /** Hoehe der schwebenden Gruppen samt Meldungen; `null`, solange sie noch nicht vermessen sind. */
   const [floatHeight, setFloatHeight] = useState<number | null>(null)
+  /** Letzter gespeicherter Stand dieser Sitzung - fuer "Informationen", auch wenn danach gezeichnet wird. */
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null)
 
   // Refs statt State: der Speichervorgang liest den jeweils aktuellen Stand, ohne neu aufgebaut zu werden.
   const versionRef = useRef(0)
@@ -279,12 +294,10 @@ export function BoardEditor({
   const liveRef = useRef(false)
   /** Zuletzt vom Server genanntes Schreibrecht. Er unterscheidet die erste Aussage von einer Aenderung. */
   const canWriteRef = useRef<boolean | null>(null)
-  /** Der Ausloeser der Board-Sidebar. Angedockt gibt ihm die Ansicht den Fokus selbst zurueck. */
+  /** Der Ausloeser der Informationsleiste. Angedockt gibt ihm die Ansicht den Fokus selbst zurueck. */
   const panelTriggerRef = useRef<HTMLButtonElement>(null)
-  /** Der Ausloeser der Inline-Umbenennung. Er bekommt den Fokus zurueck, sobald die Eingabe endet. */
-  const renameTriggerRef = useRef<HTMLButtonElement>(null)
-  /** Ob die Eingabe im vorigen Rendern offen war - sonst waere jedes Rendern eine Fokusrueckgabe. */
-  const wasRenamingRef = useRef(false)
+  /** Das Titelfeld des Umbenennen-Dialogs. Es bekommt beim Oeffnen und nach einer Ablehnung den Fokus. */
+  const renameInputRef = useRef<HTMLInputElement>(null)
   /** Die schwebenden Gruppen. Ihre Hoehe ist der obere Rand, den die Bedienelemente der Zeichenflaeche freihalten. */
   const floatRef = useRef<HTMLDivElement>(null)
 
@@ -402,17 +415,22 @@ export function BoardEditor({
     }
   }, [unsaved])
 
-  // Die Inline-Eingabe ersetzt ihren eigenen Ausloeser; endet sie, gibt es sonst nichts mehr, worauf der
-  // Fokus stehen koennte, und er faellt auf den Dokumentkoerper. Gespeichert wie abgebrochen kehrt er
-  // deshalb dorthin zurueck, wo die Eingabe begonnen hat.
+  // Der Dialog beginnt im Titelfeld. `showModal()` (im Effekt des Dialogs, der vor diesem laeuft) setzte den
+  // Fokus sonst auf seine erste Schaltflaeche; die Rueckgabe an das Boardmenue uebernimmt die Plattform.
   useEffect(() => {
-    if (wasRenamingRef.current && !renaming) {
-      renameTriggerRef.current?.focus()
+    if (renaming) {
+      renameInputRef.current?.focus()
+      renameInputRef.current?.select()
     }
-    wasRenamingRef.current = renaming
   }, [renaming])
 
-  // Breit ist die Board-Sidebar eine Spalte, schmal ein modales Sheet. Umgeschaltet wird per CSS; hier
+  useEffect(() => {
+    if (save.kind === 'saved') {
+      setLastSavedAt(save.at)
+    }
+  }, [save])
+
+  // Breit ist die Informationsleiste eine Spalte, schmal ein modales Sheet. Umgeschaltet wird per CSS; hier
   // steht nur, welche der beiden Formen die Plattform bedienen soll.
   useEffect(() => {
     const query = window.matchMedia(PANEL_DOCKED)
@@ -866,6 +884,15 @@ export function BoardEditor({
     shareable,
   })
   const panelOpen = member !== null && member.panel !== null
+  const StatusSymbol = status.symbol === null ? null : STATUS_SYMBOLS[status.symbol]
+  /** Was die Gruppe nur als Symbol zeigt, steht in den Informationen ausgeschrieben. */
+  const details = sessionDetails({
+    lastSavedAt,
+    connection,
+    attempt,
+    resyncedAt,
+    preview: state.loaded.previewOf !== null,
+  })
 
   function closePanel(): void {
     member?.onPanel(null)
@@ -889,9 +916,11 @@ export function BoardEditor({
         member.onChanged()
       })
       .catch((cause: unknown) => {
+        // Die Eingabe bleibt stehen; der Fokus kehrt in das Feld zurueck, das die Meldung beschreibt.
         setRenameError(
           cause instanceof ApiError ? cause.message : 'Der Titel konnte nicht geaendert werden.',
         )
+        renameInputRef.current?.focus()
       })
       .finally(() => {
         setRenameBusy(false)
@@ -909,7 +938,7 @@ export function BoardEditor({
     >
       {/*
         * Die schwebenden Gruppen liegen ueber der Zeichenflaeche und reservieren keine Zeile. Sie stehen im
-        * Dokument vor der Board-Sidebar: so folgt auf ihren Ausloeser unmittelbar das, was er oeffnet.
+        * Dokument vor der Informationsleiste: so folgt auf ihren Ausloeser unmittelbar das, was er oeffnet.
         */}
       <div className="board__float" ref={floatRef}>
         <div className="board__group board__group--lead">
@@ -927,73 +956,29 @@ export function BoardEditor({
               }}
             />
           )}
-          {renaming ? (
-            <form
-              className="inline-name"
-              onSubmit={(event) => {
-                event.preventDefault()
-                submitRename(titleDraft.trim())
-              }}
-            >
-              <label className="visually-hidden" htmlFor="board-title">
-                Titel von {title}
-              </label>
-              <input
-                id="board-title"
-                value={titleDraft}
-                maxLength={MAX_BOARD_TITLE_LENGTH}
-                required
-                autoFocus
-                disabled={renameBusy}
-                onChange={(event) => {
-                  setTitleDraft(event.target.value)
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === 'Escape') {
-                    event.preventDefault()
-                    setRenaming(false)
-                  }
-                }}
-              />
-              <Button variant="primary" type="submit" busy={renameBusy} disabled={titleDraft.trim().length === 0}>
-                Speichern
-              </Button>
-              <IconButton
-                label="Umbenennen abbrechen"
-                icon={X}
-                variant="quiet"
-                onClick={() => {
-                  setRenaming(false)
-                }}
-              />
-            </form>
-          ) : (
-            <>
-              {/* Gekuerzt wird nur die Anzeige; der volle Titel steht als Kurzhinweis daran. */}
-              <h1 className="board__title" title={title}>
-                {title}
-              </h1>
+          {/* Gekuerzt wird nur die Anzeige; der volle Titel steht als Kurzhinweis daran. */}
+          <h1 className="board__title" title={title}>
+            {title}
+          </h1>
+          {/*
+            * Das Boardmenue haelt das Seltene: Umbenennen - sein einziger Ort - und die Wege in die Bereiche
+            * der Informationen. Diese sind kein zweiter Ort: jeder Eintrag oeffnet genau den Bereich, in dem
+            * die Handlung ohnehin steht.
+            */}
+          {member !== null && (
+            <Menu label={`Boardmenue fuer ${title}`} icon={EllipsisVertical}>
               {titleEditable && (
-                <IconButton
-                  ref={renameTriggerRef}
-                  label={`${title} umbenennen`}
+                <MenuItem
                   icon={Pencil}
-                  variant="quiet"
-                  onClick={() => {
+                  onSelect={() => {
                     setTitleDraft(title)
                     setRenameError(null)
                     setRenaming(true)
                   }}
-                />
+                >
+                  Umbenennen
+                </MenuItem>
               )}
-            </>
-          )}
-          {/*
-            * Das Boardmenue fuehrt zu den selteneren Bereichen der Board-Sidebar. Es ist kein zweiter Ort:
-            * jeder Eintrag oeffnet genau den Bereich, in dem die Handlung ohnehin steht.
-            */}
-          {member !== null && !renaming && (
-            <Menu label={`Boardmenue fuer ${title}`} icon={MoreHorizontal}>
               <MenuItem
                 icon={Info}
                 onSelect={() => {
@@ -1036,10 +1021,23 @@ export function BoardEditor({
             </Badge>
           )}
           {guestName !== null && <Badge>Gast: {guestName}</Badge>}
-          <p className={`board__status board__status--${status.tone}`} title={status.detail}>
-            {status.text}
-            <span className="visually-hidden">. {status.detail}</span>
-          </p>
+          {StatusSymbol === null ? (
+            <p className={`board__status board__status--${status.tone}`} title={status.detail}>
+              {status.text}
+              <span className="visually-hidden">. {status.detail}</span>
+            </p>
+          ) : (
+            // In Ordnung: nur das Symbol. Name und Satz bleiben fuer Hilfsmittel und als Kurzhinweis.
+            <p
+              className={`board__status board__status--symbol board__status--${status.tone}`}
+              title={status.detail}
+            >
+              <StatusSymbol size={18} aria-hidden="true" />
+              <span className="visually-hidden">
+                {status.text}. {status.detail}
+              </span>
+            </p>
+          )}
           {/*
             * Angekuendigt wird nur, was Aufmerksamkeit verlangt. Ein gelungener Checkpoint ist sichtbar,
             * bleibt aber stumm - sonst spraeche eine Sprachausgabe waehrend des Zeichnens im Sekundentakt.
@@ -1077,25 +1075,22 @@ export function BoardEditor({
               Jetzt speichern
             </Button>
           )}
+          {/* Auf jeder Breite nur das Symbol; der Name bleibt fuer Hilfsmittel und als Kurzhinweis. */}
           {shareable && member !== null && (
-            <Button
-              variant={actions.primary === 'share' ? 'primary' : 'normal'}
+            <IconButton
+              label="Freigeben"
               icon={Share2}
-              title="Freigeben"
-              extraClass="board__share"
+              variant={actions.primary === 'share' ? 'primary' : 'normal'}
               onClick={() => {
                 member.onPanel('freigaben')
               }}
-            >
-              {/* Sehr schmal steht nur das Symbol da; der Name bleibt fuer Hilfsmittel und als Kurzhinweis. */}
-              <span className="board__share-label">Freigeben</span>
-            </Button>
+            />
           )}
           {member !== null && (
             <IconButton
               ref={panelTriggerRef}
-              label={panelOpen ? 'Board-Sidebar schliessen' : 'Board-Sidebar oeffnen'}
-              icon={PanelRight}
+              label={panelOpen ? 'Informationen schliessen' : 'Informationen oeffnen'}
+              icon={Info}
               variant="quiet"
               aria-expanded={panelOpen}
               aria-controls={PANEL_ID}
@@ -1132,7 +1127,6 @@ export function BoardEditor({
               </p>
             </ConfirmDialog>
           )}
-          {renameError !== null && <Notice text={renameError} />}
           {accessNote !== null && (
             <Notice kind="info">
               <p>{accessNote}</p>
@@ -1182,7 +1176,7 @@ export function BoardEditor({
           <Drawer
             id={PANEL_ID}
             open={panelOpen && !docked}
-            title="Board-Sidebar"
+            title="Informationen"
             className="board__panel"
             onClose={closePanel}
           >
@@ -1198,6 +1192,7 @@ export function BoardEditor({
                 onChanged={member.onChanged}
                 onBoard={applyBoard}
                 onPreview={member.onPreview}
+                session={{ state: status.detail, ...details }}
               />
             )}
           </Drawer>
@@ -1211,6 +1206,66 @@ export function BoardEditor({
           />
         </div>
       </div>
+
+      {/*
+        * Umbenennen als kurzer Dialog. Er steht ausserhalb der schwebenden Ebene, die keine Zeigerereignisse
+        * annimmt. Der Fokus beginnt im Titelfeld und kehrt beim Schliessen zum Boardmenue zurueck; eine
+        * Ablehnung steht am Feld, und die Eingabe bleibt erhalten.
+        */}
+      {member !== null && (
+        <Dialog
+          open={renaming && titleEditable}
+          title="Board umbenennen"
+          onClose={() => {
+            setRenaming(false)
+          }}
+        >
+          <form
+            className="stack"
+            onSubmit={(event) => {
+              event.preventDefault()
+              if (!renameBusy) {
+                submitRename(titleDraft.trim())
+              }
+            }}
+          >
+            <Field id="board-title" label="Titel" {...(renameError === null ? {} : { error: renameError })}>
+              <input
+                ref={renameInputRef}
+                id="board-title"
+                value={titleDraft}
+                maxLength={MAX_BOARD_TITLE_LENGTH}
+                required
+                readOnly={renameBusy}
+                aria-invalid={renameError !== null || undefined}
+                aria-describedby={describedBy('board-title', false, renameError !== null)}
+                onChange={(event) => {
+                  setTitleDraft(event.target.value)
+                }}
+              />
+            </Field>
+            <p className="actions">
+              <Button
+                variant="primary"
+                type="submit"
+                busy={renameBusy}
+                disabled={titleDraft.trim().length === 0}
+              >
+                Umbenennen
+              </Button>
+              <Button
+                variant="quiet"
+                disabled={renameBusy}
+                onClick={() => {
+                  setRenaming(false)
+                }}
+              >
+                Abbrechen
+              </Button>
+            </p>
+          </form>
+        </Dialog>
+      )}
     </div>
   )
 }

@@ -3,7 +3,7 @@
  *
  * Ein Abschnitt im Fluss seiner Umgebung und kein eigener Dialog: die Ueberschriften bleiben in der
  * Dokumentstruktur, und weder Fokuskaefig noch Escape werden hier nachgebaut. Der Abschnitt steht heute im
- * Bereich "Freigaben" der Board-Sidebar (`board-panel.tsx`); sie traegt Name und Schliessweg.
+ * Bereich "Freigaben" der Informationsleiste (`board-panel.tsx`); sie traegt Name und Schliessweg.
  *
  * Die Oberflaeche entscheidet nichts. Sie bietet an, was der Server laut seiner Antwort ohnehin traegt, und
  * zeigt jede Ablehnung als Text - der Owner steht in `board.ownerUserId`, die Freigaben kommen aus

@@ -3,8 +3,8 @@
  *
  * Ein klassisches, blockierendes Skript aus eigener Herkunft: die Content-Security-Policy verbietet Inline-
  * Skripte, und ein Modul liefe erst nach der ersten Darstellung - ein Neuladen im Dunkelmodus blitzte dann
- * hell auf. Es setzt nur die beiden Attribute, die `src/web/appearance.ts` sonst setzt; die massgebliche Wahl
- * kommt danach mit dem Profil vom Server und ersetzt diesen Komfortwert.
+ * hell auf. Es setzt nur die beiden Attribute und die `theme-color`, die `src/web/appearance.ts` sonst
+ * setzt; die massgebliche Wahl kommt danach mit dem Profil vom Server und ersetzt diesen Komfortwert.
  *
  * Die Gastansicht (`GUEST_APP_PATH`) folgt immer der Systemvorgabe: ein Gast hat keine Wahl.
  */
@@ -20,6 +20,11 @@
     var root = document.documentElement
     if (gemerkt.colorScheme === 'light' || gemerkt.colorScheme === 'dark') {
       root.setAttribute('data-theme', gemerkt.colorScheme)
+      // Die Browserleiste folgt der Wahl; dieselben Farben stehen in `index.html` und `appearance.ts`.
+      var farbe = gemerkt.colorScheme === 'dark' ? '#121212' : '#f4f4f6'
+      document.querySelectorAll('meta[name="theme-color"]').forEach(function (meta) {
+        meta.setAttribute('content', farbe)
+      })
     }
     // Ein unbekannter Name hat in `styles.css` keine Regel und bleibt damit wirkungslos.
     if (typeof gemerkt.accent === 'string' && /^[a-z]{1,20}$/.test(gemerkt.accent) && gemerkt.accent !== 'violett') {

@@ -19,7 +19,7 @@ import { DASHBOARD_FILTER_PARAM } from '../contracts/api.js'
 import { parseDashboardFilter } from '../domain/board/model.js'
 
 /**
- * Bereiche der Board-Sidebar.
+ * Bereiche der Informationsleiste.
  *
  * Drei statt einer langen Rolle: die Uebersicht traegt Ablage und Lebenszyklus, die Freigaben das interne
  * und oeffentliche Teilen, die Versionen Verlauf, Vorschau, Import und Export.
@@ -51,9 +51,9 @@ export type AppRoute =
   /**
    * Boardeditor im Vollbild. `version` gesetzt heisst: Read-only-Vorschau genau dieser Version.
    *
-   * `panel` ist der offene Bereich der Board-Sidebar und steht damit in der Adresse: er ist teilbar,
-   * uebersteht ein Neuladen, und ein `history.back()` schliesst die Sidebar wieder. `null` heisst
-   * geschlossen.
+   * `panel` ist der offene Bereich der Informationsleiste und steht damit in der Adresse: er ist teilbar
+   * und uebersteht ein Neuladen. Geschlossen wird sie mit `closeLayer`, das nur dann zurueckgeht, wenn sie
+   * im Board geoeffnet wurde. `null` heisst geschlossen.
    */
   | {
       readonly kind: 'board'
@@ -106,7 +106,7 @@ function parseVersion(search: string): number | null {
   return Number.isInteger(version) && version > 0 ? version : null
 }
 
-/** Offener Bereich der Board-Sidebar aus der Adresse. Ein unbekannter Wert ist kein Fehler, sondern zu. */
+/** Offener Bereich der Informationsleiste aus der Adresse. Ein unbekannter Wert heisst: zu. */
 function parseBoardPanel(search: string): BoardPanelView | null {
   const raw = new URLSearchParams(search).get(PANEL_PARAM)
   return BOARD_PANELS.find((panel) => panel === raw) ?? null
@@ -155,7 +155,7 @@ export function parseRoute(href: string): AppRoute {
         panel: parseBoardPanel(search),
       }
     }
-    // Die fruehere Detailseite gibt es nicht mehr; ihre Handlungen stehen in der Board-Sidebar. Ein
+    // Die fruehere Detailseite gibt es nicht mehr; ihre Handlungen stehen in der Informationsleiste. Ein
     // geteilter alter Link fuehrt deshalb auf dasselbe Board mit geoeffneter Uebersicht.
     if (third === BOARDS_SEGMENT && fourth !== undefined && fifth === DETAILS_SEGMENT && segments.length === 5) {
       return { kind: 'board', workspaceId: second, boardId: fourth, version: null, panel: 'uebersicht' }
@@ -221,12 +221,31 @@ function historyDepth(): number {
   return 0
 }
 
-export function navigate(route: AppRoute, options?: { readonly replace?: boolean }): void {
+/** Wahr, wenn der aktuelle Eintrag eine Ebene ist, die ueber dem vorigen Eintrag geoeffnet wurde. */
+function isLayer(): boolean {
+  const state: unknown = window.history.state
+  return typeof state === 'object' && state !== null && 'canvazEbene' in state && state.canvazEbene === true
+}
+
+/**
+ * Wechselt die Ansicht.
+ *
+ * `layer` heisst: der neue Eintrag ist eine Ebene ueber dem aktuellen - etwa die Informationsleiste ueber
+ * ihrem Board - und `closeLayer` darf ihn mit `history.back()` wieder verlassen. Ersetzt ein Eintrag eine
+ * Ebene, bleibt er eine; ein ersetzter gewoehnlicher Eintrag wird keine.
+ */
+export function navigate(
+  route: AppRoute,
+  options?: { readonly replace?: boolean; readonly layer?: boolean },
+): void {
   const href = routeHref(route)
-  if (options?.replace === true) {
-    window.history.replaceState({ canvazTiefe: historyDepth() }, '', href)
+  const replace = options?.replace === true
+  const layer = options?.layer === true && (!replace || isLayer())
+  const state = { canvazTiefe: historyDepth() + (replace ? 0 : 1), ...(layer ? { canvazEbene: true } : {}) }
+  if (replace) {
+    window.history.replaceState(state, '', href)
   } else {
-    window.history.pushState({ canvazTiefe: historyDepth() + 1 }, '', href)
+    window.history.pushState(state, '', href)
   }
   // `pushState` loest kein `popstate` aus; ohne dieses Ereignis erfuehre die Oberflaeche nichts davon.
   window.dispatchEvent(new Event(NAVIGATION_EVENT))
@@ -238,6 +257,21 @@ export function navigate(route: AppRoute, options?: { readonly replace?: boolean
  */
 export function navigateBack(fallback: AppRoute): void {
   if (historyDepth() > 0) {
+    window.history.back()
+    return
+  }
+  navigate(fallback, { replace: true })
+}
+
+/**
+ * Schliesst eine Ebene.
+ *
+ * Wurde sie ueber dem vorigen Eintrag geoeffnet, fuehrt `history.back()` genau dorthin zurueck. Sonst - ein
+ * geteilter oder aus einer Liste kommender Link direkt auf die Ebene - wuerde `back()` die Ansicht darunter
+ * verlassen; dann ersetzt `fallback` den Eintrag, und `Zurueck` fuehrt weiter dorthin, woher man kam.
+ */
+export function closeLayer(fallback: AppRoute): void {
+  if (isLayer()) {
     window.history.back()
     return
   }

@@ -3,7 +3,7 @@
  *
  * Ein Abschnitt im Fluss seiner Umgebung und kein eigener Dialog - dieselbe Entscheidung wie bei den
  * Freigaben: kein Fokuskaefig, keine eigene Escape-Behandlung, jede Ueberschrift bleibt in der
- * Dokumentstruktur. Der Abschnitt steht im Bereich "Versionen" der Board-Sidebar (`board-panel.tsx`).
+ * Dokumentstruktur. Der Abschnitt steht im Bereich "Versionen" der Informationsleiste (`board-panel.tsx`).
  *
  * Die Ansicht entscheidet nichts. Ob wiederhergestellt werden darf, sagt die Serverantwort (`mayRestore`);
  * ob importiert werden darf, sagt die Rolle des Boards ueber `mayChangeBoard` - dieselbe Funktion, mit der

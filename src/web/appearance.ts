@@ -12,6 +12,12 @@
  * sie vor der ersten Darstellung, damit ein Neuladen im Dunkelmodus nicht erst hell aufblitzt. Der Wert ist
  * nicht geheim, nicht massgeblich und darf fehlen; ohne Speicher gibt es nur den Blitz zurueck.
  *
+ * ## Die Browseroberflaeche folgt der Wahl
+ *
+ * `index.html` traegt je Schema eine `theme-color`, ausgewaehlt ueber `prefers-color-scheme`. Ist ein Schema
+ * fest gewaehlt, bekommen beide Eintraege dessen Farbe - die Browserleiste folgt damit der Wahl und nicht
+ * dem System. Ohne Wahl steht wieder je Schema die eigene Farbe da.
+ *
  * ## Excalidraw bekommt das aufgeloeste Schema
  *
  * Die Zeichenflaeche kennt kein "System"; sie bekommt ueber `useColorScheme` immer `light` oder `dark` -
@@ -27,6 +33,20 @@ import { DEFAULT_APPEARANCE } from '../contracts/api.js'
 const STORAGE_KEY = 'canvaz:erscheinungsbild'
 
 const DARK_QUERY = '(prefers-color-scheme: dark)'
+
+/**
+ * Farbe der Browseroberflaeche je Schema: der Hintergrund `--color-canvas` aus `styles.css`. Dieselben Werte
+ * stehen in `index.html` und `public/erscheinungsbild.js`.
+ */
+const THEME_COLORS = { light: '#f4f4f6', dark: '#121212' } as const
+
+/** Setzt die `theme-color`-Eintraege: fest gewaehlt beide auf dieselbe Farbe, sonst je Schema die eigene. */
+function applyThemeColor(colorScheme: AppearanceView['colorScheme']): void {
+  for (const meta of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) {
+    const own = meta.media.includes('dark') ? THEME_COLORS.dark : THEME_COLORS.light
+    meta.content = colorScheme === 'system' ? own : THEME_COLORS[colorScheme]
+  }
+}
 
 const listeners = new Set<() => void>()
 
@@ -62,6 +82,7 @@ export function applyAppearance(appearance: AppearanceView | null): void {
   } else {
     root.dataset['theme'] = colorScheme
   }
+  applyThemeColor(colorScheme)
   if (accent === DEFAULT_APPEARANCE.accent) {
     delete root.dataset['accent']
   } else {

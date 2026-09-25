@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { boardActions, boardStatus, readOnlyReason } from '../../src/web/board/board-status.js'
+import { boardActions, boardStatus, readOnlyReason, sessionDetails } from '../../src/web/board/board-status.js'
 
 const BASIS = {
   save: 'idle',
@@ -38,10 +38,19 @@ describe('Verdichteter Boardzustand', () => {
     expect(status.critical).toBe(true)
   })
 
-  it('kuendigt einen gelungenen Checkpoint nicht an', () => {
+  it('zeigt einen gelungenen Checkpoint nur als Symbol und kuendigt ihn nicht an', () => {
     const status = boardStatus({ ...BASIS, save: 'saved', savedAt: new Date(0) })
-    expect(status.text).toMatch(/^Gespeichert /)
-    expect(status.critical).toBe(false)
+    expect(status).toMatchObject({ text: 'Gespeichert', symbol: 'saved', critical: false })
+    expect(status.detail).toMatch(/^Gespeichert um /)
+  })
+
+  it('schreibt ungesicherte Aenderungen aus, live ausstehende nicht', () => {
+    expect(boardStatus({ ...BASIS, save: 'dirty' })).toMatchObject({ symbol: 'saving', critical: false })
+    expect(boardStatus({ ...BASIS, save: 'dirty', connection: 'verbindet' })).toMatchObject({
+      text: 'Nicht gespeichert',
+      symbol: null,
+      critical: true,
+    })
   })
 
   it('zeigt einer Vorschau ihren festen Stand statt eines Speicherzustands', () => {
@@ -53,6 +62,31 @@ describe('Verdichteter Boardzustand', () => {
 
   it('zeigt einer nur lesenden Ansicht ihre Verbindung und keinen Speicherzustand', () => {
     expect(boardStatus({ ...BASIS, viewOnly: true, save: 'dirty' }).text).toBe('Live')
+  })
+})
+
+describe('Speicher- und Verbindungsdetails', () => {
+  it('behaelt den letzten gespeicherten Stand und nennt einer Vorschau keine Verbindung', () => {
+    const details = sessionDetails({
+      lastSavedAt: new Date(0),
+      connection: 'verbunden',
+      attempt: 0,
+      resyncedAt: null,
+      preview: false,
+    })
+    expect(details.saved).toMatch(/^Zuletzt gespeichert um /)
+    expect(details.connection).toBe('Live verbunden.')
+    const vorschau = sessionDetails({
+      lastSavedAt: null,
+      connection: 'getrennt',
+      attempt: 0,
+      resyncedAt: null,
+      preview: true,
+    })
+    expect(vorschau).toEqual({
+      saved: 'In dieser Sitzung noch nicht gespeichert.',
+      connection: 'Vorschau: nicht live verbunden.',
+    })
   })
 })
 

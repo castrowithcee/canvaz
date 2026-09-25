@@ -258,7 +258,7 @@ function EntryMenu({
  *
  * Sie erscheinen bei Hover und Fokus, damit die Liste ruhig bleibt; ohne Hover (Beruehrung) stehen sie
  * immer da (`styles.css`). Keine davon gibt es **nur** hier: Umbenennen steht ebenso im Kontextmenue, und
- * die Freigabe fuehrt in denselben Bereich der Board-Sidebar wie die Freigabe im Editor. Das Kontextmenue
+ * die Freigabe fuehrt in denselben Bereich der Informationsleiste wie die Freigabe im Editor. Das Kontextmenue
  * daneben bleibt der sichtbare Ausloeser fuer alles.
  */
 function QuickActions({

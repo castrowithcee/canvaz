@@ -1,5 +1,6 @@
 /**
- * Die Board-Sidebar: alle umfangreicheren Aufgaben genau eines Boards, neben seiner Zeichenflaeche.
+ * Die Informationsleiste (sichtbar "Informationen"): alle umfangreicheren Aufgaben genau eines Boards, neben
+ * seiner Zeichenflaeche.
  *
  * Sie loest die fruehere Detailseite ab. Ablage, Arbeitsbereichswechsel, Freigaben, Versionen,
  * Import/Export, Archiv und Papierkorb standen dort weit weg vom Board; jetzt stehen sie daneben, und der
@@ -7,8 +8,9 @@
  * die alte Adresse fuehrt hierher (siehe `router.tsx`).
  *
  * Drei Bereiche, weil sie drei verschiedene Fragen beantworten: **Uebersicht** (wo liegt das Board, wem
- * gehoert es, wie geht es weg), **Freigaben** (wer darf es) und **Versionen** (was war frueher, was geht
- * rein und raus). Der offene Bereich steht in der Adresse; ein `history.back()` schliesst die Sidebar.
+ * gehoert es, wie steht es um Speicherung und Verbindung, wie geht es weg), **Freigaben** (wer darf es) und
+ * **Versionen** (was war frueher, was geht rein und raus). Der offene Bereich steht in der Adresse;
+ * geschlossen wird ueber `closeLayer` (`router.tsx`), das Board bleibt dabei offen.
  *
  * Die Ansicht entscheidet nichts. Was sie anbietet, leitet sie aus der vom Server genannten Rolle mit
  * **denselben** Funktionen ab, mit denen der Server entscheidet (`mayChangeBoard`, `mayManageBoard`,
@@ -270,12 +272,23 @@ function TrashBoard({
   )
 }
 
+/**
+ * Was der Editor ueber diese Sitzung weiss: der ausgeschriebene Zustand, der letzte gespeicherte Stand und
+ * die Verbindung. Die schwebende Gruppe zeigt davon nur ein Symbol.
+ */
+export type BoardSessionDetails = {
+  readonly state: string
+  readonly saved: string
+  readonly connection: string
+}
+
 /** Uebersicht und Ablage: wo das Board liegt, wem es gehoert und wie es den Arbeitsbereich verlaesst. */
 function Overview({
   me,
   workspace,
   workspaces,
   board,
+  session,
   folders,
   busy,
   onRun,
@@ -287,6 +300,7 @@ function Overview({
   readonly workspace: WorkspaceView
   readonly workspaces: readonly WorkspaceView[]
   readonly board: BoardView
+  readonly session: BoardSessionDetails
   readonly folders: readonly FolderView[]
   readonly busy: boolean
   readonly onRun: (action: Promise<BoardView>, fallback: string) => void
@@ -326,6 +340,12 @@ function Overview({
         <dd>{board.sceneVersion === 0 ? 'noch leer' : `Version ${String(board.sceneVersion)}`}</dd>
         <dt>Geaendert</dt>
         <dd>{new Date(board.updatedAt).toLocaleString('de-DE')}</dd>
+        <dt>Speicherung</dt>
+        <dd>
+          {session.state} {session.saved}
+        </dd>
+        <dt>Verbindung</dt>
+        <dd>{session.connection}</dd>
       </dl>
 
       {!workspaceActive && (
@@ -429,6 +449,7 @@ export function BoardPanel({
   onChanged,
   onBoard,
   onPreview,
+  session,
 }: {
   readonly me: MeResponse
   /** Der Arbeitsbereich der Adresse. */
@@ -445,6 +466,8 @@ export function BoardPanel({
   readonly onBoard: (board: BoardView) => void
   /** Oeffnet die Read-only-Vorschau genau einer Version. */
   readonly onPreview: (version: number) => void
+  /** Speicher- und Verbindungsdetails des Editors. */
+  readonly session: BoardSessionDetails
 }) {
   const [state, setState] = useState<
     | { readonly kind: 'loading' }
@@ -482,7 +505,7 @@ export function BoardPanel({
   }, [workspaceId])
 
   const tabs = (
-    <div className="board__sections" role="group" aria-label="Bereich der Board-Sidebar">
+    <div className="board__sections" role="group" aria-label="Bereich der Informationen">
       {SECTIONS.map((entry) => (
         <button
           key={entry.id}
@@ -555,6 +578,7 @@ export function BoardPanel({
           workspace={workspace}
           workspaces={workspaces}
           board={board}
+          session={session}
           folders={folders}
           busy={busy}
           onRun={run}

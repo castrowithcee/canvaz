@@ -42,8 +42,8 @@
  */
 @theme static {
   /*
-   * Farbe - hell und dunkel in einem Wert. Die Werte sind unveraendert gegenueber der bisherigen Fassung, die
-   * das dunkle Erscheinungsbild ueber `prefers-color-scheme` neu belegte.
+   * Farbe - hell und dunkel in einem Wert. Der helle Standardakzent ist dunkler als frueher (`#6965db`): der
+   * erreichte als Linkfarbe auf Hintergrund, gedaempfter und weicher Flaeche nur rund 4:1.
    */
   --color-canvas: light-dark(#f4f4f6, #121212);
   --color-surface: light-dark(#ffffff, #1e1e22);
@@ -52,8 +52,8 @@
   --color-text-muted: light-dark(#5b5b66, #a5a5b0);
   --color-border: light-dark(#d9d9e0, #37373f);
   --color-border-strong: light-dark(#8a8a99, #6c6c7a);
-  --color-accent: light-dark(#6965db, #a8a5ff);
-  --color-accent-hover: light-dark(#5a56c4, #bdbbff);
+  --color-accent: light-dark(#5b57d1, #a8a5ff);
+  --color-accent-hover: light-dark(#4a47b1, #bdbbff);
   --color-accent-text: light-dark(#ffffff, #14141a);
   --color-accent-soft: light-dark(#edecfc, #262440);
   --color-danger: light-dark(#c92a2a, #ff8785);
@@ -62,7 +62,7 @@
   --color-danger-soft: light-dark(#fdecec, #3a2124);
   --color-success: light-dark(#2b7a3d, #7bd88f);
   --color-success-soft: light-dark(#eaf5ec, #16291b);
-  --color-focus: light-dark(#6965db, #a8a5ff);
+  --color-focus: light-dark(#5b57d1, #a8a5ff);
 
   /* Typografie. */
   --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
@@ -123,10 +123,10 @@
  * gerade gueltigen Schema. `violett` wiederholt deshalb die Standardwerte.
  */
 [data-accent='violett'] {
-  --color-accent: light-dark(#6965db, #a8a5ff);
-  --color-accent-hover: light-dark(#5a56c4, #bdbbff);
+  --color-accent: light-dark(#5b57d1, #a8a5ff);
+  --color-accent-hover: light-dark(#4a47b1, #bdbbff);
   --color-accent-soft: light-dark(#edecfc, #262440);
-  --color-focus: light-dark(#6965db, #a8a5ff);
+  --color-focus: light-dark(#5b57d1, #a8a5ff);
 }
 
 [data-accent='blau'] {
@@ -155,6 +155,26 @@
   --color-accent-hover: light-dark(#3d424d, #d8dbe1);
   --color-accent-soft: light-dark(#ebecef, #2c2e34);
   --color-focus: light-dark(#4f5563, #c3c7cf);
+}
+
+/*
+ * Excalidraws Bedienelemente im Canvaz-Akzent.
+ *
+ * Ausschliesslich ueber die dokumentierten Variablen (`--color-primary*`, siehe "Customizing styles" der
+ * Excalidraw-Dokumentation) und auf den dort genannten Selektoren `.excalidraw` und `.excalidraw.theme--dark`.
+ * `.board` davor hebt die Spezifitaet ueber die des Pakets; ungeschichtet wie dessen Stylesheet. Jeder Wert
+ * traegt ueber `light-dark()` hell und dunkel, dieselbe Regel gilt deshalb fuer beide Schemata.
+ *
+ * Das betrifft nur Hervorhebungen der Oberflaeche (Auswahlrahmen, aktive Eintraege, Primaerknoepfe). Die
+ * Zeichenfarben, die Farbpalette und jede gespeicherte Szene bleiben unberuehrt - sie stehen nicht in diesen
+ * Variablen.
+ */
+.board .excalidraw,
+.board .excalidraw.theme--dark {
+  --color-primary: var(--color-accent);
+  --color-primary-darker: var(--color-accent-hover);
+  --color-primary-darkest: color-mix(in srgb, var(--color-accent-hover) 80%, var(--color-text));
+  --color-primary-light: var(--color-accent-soft);
 }
 
 /* ------------------------------------------------------------ Grundlagen */
@@ -1217,22 +1237,27 @@
   }
 
   /*
-   * Boardeditor: die Zeichenflaeche nimmt die ganze Hoehe, daneben die Board-Sidebar.
+   * Boardeditor: die Zeichenflaeche nimmt die ganze Hoehe, daneben die Informationsleiste.
    *
    * Ueber der Zeichenflaeche ist keine Zeile reserviert. Zwei kompakte Gruppen schweben darueber - links
-   * Rueckweg, Titel und Boardmenue, rechts Presence, Zustand, Freigabe und Sidebar-Ausloeser. Passen beide
-   * nicht in eine Reihe, bricht die rechte Gruppe um; der Titel wird vorher gekuerzt.
+   * Rueckweg, Titel und Boardmenue, rechts Presence, Zustand, Freigabe und Ausloeser der Informationen.
+   * Passen beide nicht in eine Reihe, bricht die rechte Gruppe um; der Titel wird vorher gekuerzt.
    *
    * ## Nichts wird ueberdeckt
    *
    * Excalidraw haelt seine eigenen Bedienelemente von einem oberen Sicherheitsabstand frei, den es aus
-   * `--sat` liest (sonst `env(safe-area-inset-top)`). Genau diesen Wert setzt der Editor auf die gemessene
-   * Hoehe der schwebenden Gruppen (`--board-float`, `board/board-view.tsx`). Werkzeugleiste, Menue,
-   * Bibliothek und Eigenschaften beginnen damit darunter; gestaltet wird an Excalidraw nichts, und die
-   * Zeichnung selbst laeuft unter den Gruppen weiter. Vor der ersten Messung gilt eine Reihe als Vorgabe.
+   * `--sat` liest (sonst `env(safe-area-inset-top)`), und setzt seine obere Reihe noch einmal 1rem darunter
+   * (`--editor-container-padding`). Der Editor misst die Hoehe der schwebenden Gruppen (`--board-float`,
+   * `board/board-view.tsx`); `--sat` ist diese Hoehe abzueglich 0.5rem. Werkzeugleiste, Menue, Bibliothek und
+   * Eigenschaften beginnen damit 0.5rem unter der Unterkante der Gruppen - so nah wie moeglich, ohne dass
+   * etwas ueberdeckt wird. Gestaltet wird an Excalidraw nichts, und die Zeichnung selbst laeuft unter den
+   * Gruppen weiter. Vor der ersten Messung gilt eine Reihe als Vorgabe (0.5rem Rand + 54px Gruppe).
    */
   .board {
-    --sat: var(--board-float, calc(var(--safe-area-top) + 3.75rem));
+    --sat: max(
+      var(--safe-area-top),
+      calc(var(--board-float, calc(var(--safe-area-top) + 3.875rem)) - 0.5rem)
+    );
     background: var(--color-canvas);
     display: flex;
     flex-direction: column;
@@ -1310,14 +1335,14 @@
    * In der Gruppe tragen Symbolschaltflaechen keinen eigenen Rahmen - die Gruppe ist schon die Flaeche.
    * Geoeffnet (`aria-expanded`) bleiben sie markiert; die Hauptaktion behaelt ihr Gewicht.
    */
-  .board__group .icon-button:not([aria-expanded='true']) {
+  .board__group .icon-button:not([aria-expanded='true'], .button--primary) {
     background: transparent;
     border-color: transparent;
     box-shadow: none;
     color: var(--color-text);
   }
 
-  .board__group .icon-button:not([aria-expanded='true']):hover {
+  .board__group .icon-button:not([aria-expanded='true'], .button--primary):hover {
     background: var(--color-surface-muted);
   }
 
@@ -1329,16 +1354,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .board__group .inline-name {
-    flex: 1;
-    flex-wrap: nowrap;
-    min-width: 0;
-  }
-
-  .board__group .inline-name input {
-    min-width: 6rem;
   }
 
   /*
@@ -1374,6 +1389,22 @@
     color: var(--color-text);
   }
 
+  /* Was in Ordnung ist, steht nur als Symbol da - ohne Flaeche, damit es neben den Aktionen zuruecktritt. */
+  .board__status--symbol {
+    align-items: center;
+    background: transparent;
+    color: var(--color-text-muted);
+    display: inline-flex;
+    height: var(--spacing-touch);
+    justify-content: center;
+    padding: 0;
+    width: 2.25rem;
+  }
+
+  .board__status--symbol.board__status--success {
+    color: var(--color-success);
+  }
+
   .board__peers {
     align-items: center;
     color: var(--color-text-muted);
@@ -1384,7 +1415,7 @@
     padding-inline: --spacing(2);
   }
 
-  /* Meldungen des Editors schweben unter den Gruppen; die der Board-Sidebar stehen in deren Polsterung. */
+  /* Meldungen des Editors schweben unter den Gruppen; die der Informationsleiste in deren Polsterung. */
   .board__notices {
     display: grid;
     flex: 1 1 100%;
@@ -1401,7 +1432,7 @@
     margin: 0;
   }
 
-  /* Zeichenflaeche und Board-Sidebar teilen sich die ganze Hoehe. */
+  /* Zeichenflaeche und Informationsleiste teilen sich die ganze Hoehe. */
   .board__body {
     display: flex;
     flex: 1;
@@ -1415,7 +1446,7 @@
   }
 
   /*
-   * Die Board-Sidebar ist derselbe Knoten wie ihr Sheet: ein natives `dialog`.
+   * Die Informationsleiste ist derselbe Knoten wie ihr Sheet: ein natives `dialog`.
    *
    * Schmal bleibt sie geschlossen und wird ueber `showModal()` zur temporaeren Ebene - Fokusfang, Escape,
    * Fokusrueckgabe und der `inert` gestellte Hintergrund kommen dann von der Plattform, und die
@@ -1937,15 +1968,9 @@
     }
 
     /*
-     * Die rechte Gruppe bleibt eine Reihe: die Freigabe zeigt nur ihr Symbol (Name und Kurzhinweis bleiben),
-     * und "Allein" verdichtet sich auf das Personensymbol. Eine Zahl Mitwirkender bleibt stehen.
+     * Die rechte Gruppe bleibt eine Reihe: "Allein" verdichtet sich auf das Personensymbol. Eine Zahl
+     * Mitwirkender bleibt stehen.
      */
-    .board__share {
-      padding-inline: --spacing(2);
-      width: var(--spacing-touch);
-    }
-
-    .board__share-label,
     .board__peers--allein .board__peers-count {
       clip-path: inset(50%);
       height: 1px;
@@ -1961,7 +1986,7 @@
   }
 
   /*
-   * Ab hier ist die Board-Sidebar eine angedockte Spalte statt eines Sheets.
+   * Ab hier ist die Informationsleiste eine angedockte Spalte statt eines Sheets.
    *
    * Die Schwelle liegt hoeher als die der Haupt-Seitenleiste: erst ab dieser Breite bleibt neben 22rem
    * Sidebar noch genug Zeichenflaeche uebrig. Angedockt verdraengt sie nichts, sondern nimmt eigenen Platz
