@@ -15,6 +15,7 @@
  * `localStorage` noch in der Adresse. Wer die Ansicht verlaesst, bekommt es nicht zurueck.
  */
 
+import type { ReactNode } from 'react'
 import { useCallback, useEffect, useState } from 'react'
 
 import type {
@@ -447,24 +448,86 @@ function linkStatus(link: BoardShareLinkView, now: Date): string {
   return 'gueltig'
 }
 
+/**
+ * Der Einmal-Hinweis mit dem Klartextlink der letzten Anlage. Er haelt selbst keinen Zustand: Link und
+ * Kopierrueckmeldung liegen in `BoardShare`, damit ein Neuladen der Liste ihn nicht aushaengt.
+ */
+function CreatedLinkNotice({
+  url,
+  copied,
+  onCopied,
+  onHide,
+}: {
+  readonly url: string
+  readonly copied: string | null
+  readonly onCopied: (message: string) => void
+  readonly onHide: () => void
+}) {
+  return (
+    <Notice kind="success">
+      <p>
+        <strong>Dieser Link erscheint genau einmal.</strong> Er laesst sich danach nicht erneut abrufen - auch
+        nicht ueber diese Liste. Kopiere ihn jetzt; ist er verloren, widerrufe ihn und lege einen neuen an.
+      </p>
+      <div className="field">
+        <label htmlFor="share-link-url">Freigabelink</label>
+        <input
+          id="share-link-url"
+          readOnly
+          value={url}
+          onFocus={(event) => {
+            event.target.select()
+          }}
+        />
+      </div>
+      <p className="actions">
+        <button
+          className="button--primary"
+          type="button"
+          onClick={() => {
+            navigator.clipboard
+              .writeText(url)
+              .then(() => {
+                onCopied('Der Link steht in der Zwischenablage.')
+              })
+              .catch(() => {
+                onCopied('Kopieren war nicht moeglich. Bitte den Link von Hand auswaehlen und kopieren.')
+              })
+          }}
+        >
+          Link kopieren
+        </button>
+        <button type="button" onClick={onHide}>
+          Link ausblenden
+        </button>
+      </p>
+      {/* Kein eigener Live-Bereich: die Rueckmeldung steht bereits im `role="status"` dieses Blocks. */}
+      <p className="hint">{copied ?? ''}</p>
+    </Notice>
+  )
+}
+
 function ShareLinks({
   me,
   board,
   links,
+  notice,
+  onCreated,
   onChanged,
 }: {
   readonly me: MeResponse
   readonly board: BoardView
   readonly links: readonly BoardShareLinkView[]
+  /** Der Einmal-Hinweis der letzten Anlage, falls einer steht - zwischen Formular und Liste. */
+  readonly notice: ReactNode
+  /** Uebergibt den Klartextlink einer Anlage genau einmal an `BoardShare`. */
+  readonly onCreated: (url: string) => void
   readonly onChanged: () => void
 }) {
   const [role, setRole] = useState<GuestRoleView>('guest-viewer')
   const [hours, setHours] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  /** Das Klartexttoken der letzten Anlage. Es lebt nur hier und wird nirgends gespeichert. */
-  const [created, setCreated] = useState<string | null>(null)
-  const [copied, setCopied] = useState<string | null>(null)
 
   const now = new Date()
   const trimmedHours = hours.trim()
@@ -477,7 +540,6 @@ function ShareLinks({
           event.preventDefault()
           setBusy(true)
           setError(null)
-          setCopied(null)
           const expiresInHours = trimmedHours === '' ? undefined : Number(trimmedHours)
           createBoardShareLink(me.csrfToken, {
             boardId: board.id,
@@ -485,7 +547,7 @@ function ShareLinks({
             ...(expiresInHours === undefined ? {} : { expiresInHours }),
           })
             .then((response) => {
-              setCreated(response.url)
+              onCreated(response.url)
               setHours('')
               onChanged()
             })
@@ -543,55 +605,7 @@ function ShareLinks({
         {error !== null && <Notice text={error} />}
       </form>
 
-      {created !== null && (
-        <Notice kind="success">
-          <p>
-            <strong>Dieser Link erscheint genau einmal.</strong> Er laesst sich danach nicht erneut abrufen -
-            auch nicht ueber diese Liste. Kopiere ihn jetzt; ist er verloren, widerrufe ihn und lege einen
-            neuen an.
-          </p>
-          <div className="field">
-            <label htmlFor="share-link-url">Freigabelink</label>
-            <input
-              id="share-link-url"
-              readOnly
-              value={created}
-              onFocus={(event) => {
-                event.target.select()
-              }}
-            />
-          </div>
-          <p className="actions">
-            <button
-              className="button--primary"
-              type="button"
-              onClick={() => {
-                navigator.clipboard
-                  .writeText(created)
-                  .then(() => {
-                    setCopied('Der Link steht in der Zwischenablage.')
-                  })
-                  .catch(() => {
-                    setCopied('Kopieren war nicht moeglich. Bitte den Link von Hand auswaehlen und kopieren.')
-                  })
-              }}
-            >
-              Link kopieren
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setCreated(null)
-                setCopied(null)
-              }}
-            >
-              Link ausblenden
-            </button>
-          </p>
-          {/* Kein eigener Live-Bereich: die Rueckmeldung steht bereits im `role="status"` dieses Blocks. */}
-          <p className="hint">{copied ?? ''}</p>
-        </Notice>
-      )}
+      {notice}
 
       {links.length === 0 ? (
         <Empty text="Fuer dieses Board gibt es noch keinen Gastlink." />
@@ -702,10 +716,23 @@ export function BoardShare({
   >({ kind: 'loading' })
   const [links, setLinks] = useState<LinkState>({ kind: 'loading' })
   const [actionError, setActionError] = useState<string | null>(null)
+  /**
+   * Das Klartexttoken der letzten Anlage und die Rueckmeldung zum Kopieren. Beides lebt nur hier - oberhalb
+   * der Liste, damit ihr Neuladen den Hinweis nicht aushaengt - und wird nirgends gespeichert.
+   */
+  const [created, setCreated] = useState<string | null>(null)
+  const [copied, setCopied] = useState<string | null>(null)
 
+  // Ein anderes Board beginnt ohne die Liste und ohne den Link des vorigen.
+  useEffect(() => {
+    setLinks({ kind: 'loading' })
+    setCreated(null)
+    setCopied(null)
+  }, [boardId])
+
+  // Ein Neuladen setzt die Gastlinks nicht zurueck: die bisherige Liste bleibt bis zum Ergebnis stehen.
   const load = useCallback(() => {
     setActionError(null)
-    setLinks({ kind: 'loading' })
     fetchBoardGrants(boardId)
       .then(async (response) => {
         // Die Empfaengerauswahl steht in der Mitgliederliste des Arbeitsbereichs; ein eigenes Verzeichnis
@@ -769,6 +796,18 @@ export function BoardShare({
   )
   /** Uebernehmen kann jedes andere Mitglied - auch eines, das bereits eine Freigabe haelt. */
   const transferable = members.filter((member) => member.userId !== board.ownerUserId)
+  const createdNotice =
+    created === null ? null : (
+      <CreatedLinkNotice
+        url={created}
+        copied={copied}
+        onCopied={setCopied}
+        onHide={() => {
+          setCreated(null)
+          setCopied(null)
+        }}
+      />
+    )
 
   return (
     <section aria-labelledby="board-share-heading">
@@ -839,8 +878,19 @@ export function BoardShare({
       {links.kind === 'unavailable' && <Empty text="Gastlinks sieht und verwaltet der Owner dieses Boards." />}
       {links.kind === 'failed' && <Notice text={links.message} />}
       {links.kind === 'ready' && (
-        <ShareLinks me={me} board={board} links={links.links} onChanged={reload} />
+        <ShareLinks
+          me={me}
+          board={board}
+          links={links.links}
+          notice={createdNotice}
+          onCreated={(url) => {
+            setCreated(url)
+            setCopied(null)
+          }}
+          onChanged={reload}
+        />
       )}
+      {links.kind !== 'ready' && createdNotice}
     </section>
   )
 }
