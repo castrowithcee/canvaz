@@ -10,7 +10,12 @@ import type { Pool, PoolClient } from 'pg'
 import type { AppearanceView } from '../contracts/api.js'
 import { parseAppearance } from '../contracts/api.js'
 
-import type { LocalCredential, UserInvitation, UserInvitationId } from '../domain/identity/local-auth.js'
+import type {
+  InvitationPurpose,
+  LocalCredential,
+  UserInvitation,
+  UserInvitationId,
+} from '../domain/identity/local-auth.js'
 import type {
   AuthenticatedSession,
   ExternalIdentity,
@@ -87,6 +92,7 @@ type CredentialRow = {
 type InvitationRow = {
   id: string
   user_id: string
+  purpose: string
   created_by_user_id: string | null
   created_at: Date
   expires_at: Date
@@ -98,7 +104,7 @@ const USER_COLUMNS = 'id, display_name, email, status, is_system_admin, created_
 const IDENTITY_COLUMNS = 'id, user_id, issuer, subject, created_at, last_seen_at'
 const SESSION_COLUMNS = 'id, user_id, created_at, expires_at, revoked_at'
 const CREDENTIAL_COLUMNS = 'user_id, password_hash, must_change_password, updated_at'
-const INVITATION_COLUMNS = 'id, user_id, created_by_user_id, created_at, expires_at, redeemed_at, revoked_at'
+const INVITATION_COLUMNS = 'id, user_id, purpose, created_by_user_id, created_at, expires_at, redeemed_at, revoked_at'
 
 function toUser(row: UserRow): User {
   return {
@@ -137,6 +143,8 @@ function toInvitation(row: InvitationRow): UserInvitation {
   return {
     id: row.id,
     userId: row.user_id,
+    // Der Check-Constraint laesst nur diese beiden Werte zu.
+    purpose: row.purpose as InvitationPurpose,
     createdByUserId: row.created_by_user_id,
     createdAt: row.created_at,
     expiresAt: row.expires_at,
@@ -183,18 +191,23 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Identit
       },
 
       async hasSystemAdmin(): Promise<boolean> {
+        return (await store.users.listSystemAdmins()).length > 0
+      },
+
+      async listSystemAdmins(): Promise<readonly User[]> {
         if (!inTransaction) {
           // Ausserhalb einer Transaktion gaebe die Sperre die Serialisierung sofort wieder her und die
           // Antwort waere wertlos. Das ist ein Programmierfehler, kein Betriebszustand.
-          throw new Error('hasSystemAdmin ist nur innerhalb einer Transaktion gueltig')
+          throw new Error('Die Systemadminfrage ist nur innerhalb einer Transaktion gueltig')
         }
         // Die Sperre haelt bis zum Commit: ein gleichzeitiger Bootstrap wartet hier und sieht danach den
         // bereits angelegten Systemadmin. Ohne sie lesen unter READ COMMITTED beide eine leere Tabelle.
+        // Dieselbe Sperre serialisiert die Wiederherstellung - gegen sich selbst und gegen den Bootstrap.
         await db.query('select pg_advisory_xact_lock($1)', [BOOTSTRAP_LOCK_ID])
-        const result = await db.query<{ count: number }>(
-          'select count(*)::int as count from users where is_system_admin',
+        const result = await db.query<UserRow>(
+          `select ${USER_COLUMNS} from users where is_system_admin order by created_at, id`,
         )
-        return requireRow(result.rows[0], 'count lieferte keine Zeile').count > 0
+        return result.rows.map(toUser)
       },
 
       async list(): Promise<readonly User[]> {
@@ -347,10 +360,16 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Identit
       async create(invitation: NewInvitation): Promise<UserInvitation> {
         const result = await conflictAware(() =>
           db.query<InvitationRow>(
-            `insert into user_invitations (user_id, token_hash, created_by_user_id, expires_at)
-             values ($1, $2, $3, $4)
+            `insert into user_invitations (user_id, token_hash, created_by_user_id, expires_at, purpose)
+             values ($1, $2, $3, $4, $5)
              returning ${INVITATION_COLUMNS}`,
-            [invitation.userId, invitation.tokenHash, invitation.createdByUserId, invitation.expiresAt],
+            [
+              invitation.userId,
+              invitation.tokenHash,
+              invitation.createdByUserId,
+              invitation.expiresAt,
+              invitation.purpose ?? 'invitation',
+            ],
           ),
         )
         return toInvitation(requireRow(result.rows[0], 'Einladung konnte nicht angelegt werden'))
@@ -443,6 +462,38 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Identit
           userId,
           revokedAt,
         ])
+      },
+
+      async findLiveIds(ids: readonly SessionId[], now: Date): Promise<ReadonlySet<SessionId>> {
+        if (ids.length === 0) {
+          return new Set()
+        }
+        const result = await db.query<SessionRow & UserRow & { user_created_at: Date; user_updated_at: Date }>(
+          `select s.id, s.user_id, s.created_at, s.expires_at, s.revoked_at,
+                  u.display_name, u.email, u.status, u.is_system_admin,
+                  u.created_at as user_created_at, u.updated_at as user_updated_at
+           from sessions s
+           join users u on u.id = s.user_id
+           where s.id = any($1::uuid[])`,
+          [ids],
+        )
+        const live = new Set<SessionId>()
+        for (const row of result.rows) {
+          const user = toUser({
+            id: row.user_id,
+            display_name: row.display_name,
+            email: row.email,
+            status: row.status,
+            is_system_admin: row.is_system_admin,
+            created_at: row.user_created_at,
+            updated_at: row.user_updated_at,
+          })
+          // Dieselbe Regel wie bei der Aufloesung eines Cookies: eine Definition, ein Ort.
+          if (authenticate(toSession(row), user, now) !== null) {
+            live.add(row.id)
+          }
+        }
+        return live
       },
 
       async deleteExpired(before: Date): Promise<number> {

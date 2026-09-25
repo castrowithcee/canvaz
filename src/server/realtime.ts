@@ -284,11 +284,47 @@ export function createRealtimeGateway(options: RealtimeOptions): RealtimeGateway
     }
   }
 
-  // Widerruf und Deaktivierung schliessen unmittelbar; der Ablauf hat kein Ereignis und braucht deshalb eine
-  // wiederkehrende Pruefung. `unref` haelt weder Prozess noch Tests offen.
+  /**
+   * Nachpruefung der Sitzungen offener Verbindungen.
+   *
+   * Widerruf und Deaktivierung **in diesem Prozess** schliessen unmittelbar (`closeSession`, `closeUser`).
+   * Ein Widerruf aus einem anderen Prozess - etwa der Betreiberbefehl zur Wiederherstellung des
+   * Systemadmins - kommt hier nicht als Ereignis an; ohne diesen Lauf bliebe ein widerrufener Zugang auf
+   * einem langlebigen Socket bis zum Ablauf der Sitzung bestehen. Eine Abfrage je Lauf fuer alle internen
+   * Verbindungen; Gastsessions pruefen ihre Raeume selbst nach.
+   */
+  let revalidating = false
+  async function closeRevokedSessions(now: Date): Promise<void> {
+    const checked = new Set(
+      [...connections].filter((connection) => connection.userId !== null).map((connection) => connection.sessionId),
+    )
+    if (checked.size === 0) {
+      return
+    }
+    const live = await options.identity.sessions.findLiveIds([...checked], now)
+    // Nur, was geprueft wurde: eine waehrend der Abfrage hinzugekommene Verbindung wartet auf den naechsten Lauf.
+    closeMatching(
+      (connection) => connection.userId !== null && checked.has(connection.sessionId) && !live.has(connection.sessionId),
+    )
+  }
+
+  // Der Ablauf hat kein Ereignis und braucht deshalb eine wiederkehrende Pruefung; derselbe Lauf faengt einen
+  // fremden Widerruf auf. `unref` haelt weder Prozess noch Tests offen.
   const expirySweep = setInterval(() => {
-    const now = options.now().getTime()
-    closeMatching((connection) => connection.expiresAt.getTime() <= now)
+    const now = options.now()
+    closeMatching((connection) => connection.expiresAt.getTime() <= now.getTime())
+    if (revalidating) {
+      return
+    }
+    revalidating = true
+    void closeRevokedSessions(now)
+      .catch((error: unknown) => {
+        // Ein Datenbankfehler schliesst keine Verbindung: im Zweifel entscheidet der naechste Lauf.
+        options.logger('warn', 'realtime.session.check.failed', { reason: String(error) })
+      })
+      .finally(() => {
+        revalidating = false
+      })
   }, options.expiryCheckIntervalMs ?? DEFAULT_EXPIRY_CHECK_INTERVAL_MS)
   expirySweep.unref()
 

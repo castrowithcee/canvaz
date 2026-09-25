@@ -12,7 +12,7 @@
 
 import { randomBytes } from 'node:crypto'
 
-import { INVITE_APP_PATH } from '../contracts/api.js'
+import { INVITE_APP_PATH, RECOVERY_APP_PATH } from '../contracts/api.js'
 import { hashSessionToken } from './session.js'
 
 const TOKEN_BYTES = 32
@@ -28,4 +28,9 @@ export function hashInvitationToken(token: string): string {
 
 export function invitationUrl(baseUrl: string, token: string): string {
   return `${new URL(INVITE_APP_PATH, baseUrl).href}#${token}`
+}
+
+/** Adresse des Wiederherstellungswerts; der Wert steht wie bei der Einladung im Fragment. */
+export function recoveryUrl(baseUrl: string, token: string): string {
+  return `${new URL(RECOVERY_APP_PATH, baseUrl).href}#${token}`
 }

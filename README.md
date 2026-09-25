@@ -112,8 +112,35 @@ vergibt keine Rechte mehr.
 
 **Bekannte Grenze:** eine Instanz hat genau **einen** Systemadmin - den aus diesem Vorgang. Es gibt keine
 nachtraegliche Rollenvergabe; in der Systemadministration angelegte Konten sind gewoehnliche Nutzer. Geht
-der Zugang zum Bootstrap-Konto verloren, laesst er sich nur ueber einen direkten Datenbankzugriff wieder
-herstellen (Einladung fuer dieses Konto oder `is_system_admin` auf einem anderen setzen).
+der Zugang zum Bootstrap-Konto verloren, stellt ihn der folgende Betreiberbefehl wieder her.
+
+### Zugang des Systemadmins wiederherstellen
+
+Ausfuehren darf ihn nur, wer **Shellzugang zum Host** hat - es gibt dafuer keinen HTTP-Endpunkt:
+
+```sh
+npm run admin:recover
+# Produktion: docker compose --env-file .env.production -f compose.prod.yml exec app node dist/server/admin-recover-cli.js
+```
+
+Der Befehl nimmt keine Argumente. Er ermittelt den einzigen Systemadmin selbst und verweigert ohne jede
+Aenderung, wenn es keinen, mehrere oder nur einen deaktivierten gibt. Sonst widerruft er in einer
+Transaktion alle Sitzungen und offenen Einladungen des Kontos und gibt einen **Wiederherstellungslink**
+(`/wiederherstellung#<token>`) auf der Standardausgabe aus: gueltig 30 Minuten, genau einmal einloesbar,
+gespeichert nur als SHA-256-Hash. Ein erneuter Aufruf entwertet den vorherigen Link; gleichzeitige Aufrufe
+laufen unter derselben Advisory-Sperre wie der Bootstrap nacheinander. Offene WebSocket-Verbindungen des
+Kontos beendet die Anwendung beim naechsten Pruefungslauf, spaetestens nach einer Minute.
+
+Eingeloest wird wie eine Einladung: der Systemadmin setzt sein Passwort selbst, danach gilt nur noch das
+neue. Rolle, Status und Mitgliedschaften bleiben unveraendert; es entsteht weder ein Konto noch ein Recht.
+
+- **Uebergabe:** der Link gehoert nur dem Inhaber des Kontos und geht ueber einen vertrauenswuerdigen
+  Kanal ausserhalb der Anwendung, nicht in Ticket, Chat-Verlauf oder Protokoll. Die Terminalausgabe danach
+  verwerfen; ein verlorener Link wird durch einen neuen Aufruf ersetzt.
+- **Nachweis:** der Befehl schreibt das Ereignis `admin.recovery.issued` (Konto und Frist) auf die
+  Standardausgabe, die Anwendung beim Einloesen `auth.invitation.redeemed` mit `purpose: recovery` in ihr
+  Protokoll. Dauerhaft belegt den Vorfall die Zeile in `user_invitations` mit `purpose = 'recovery'`
+  (Zeitpunkt, Frist, Einloesung oder Widerruf). Keiner dieser Nachweise enthaelt den Link.
 
 ### Postausgang (optional)
 
@@ -198,7 +225,7 @@ Codeeinloesung, damit es genau einmal gilt.
 | GET | `/api/auth/methods` | oeffentlich; welche Anmeldewege es hier gibt |
 | POST | `/api/auth/local/login` | oeffentlich, eigene Ratengrenze und Herkunftspruefung |
 | POST | `/api/auth/local/password` | oeffentlich, verlangt das bisherige Passwort |
-| POST | `/api/auth/invitation/redeem` | oeffentlich, verlangt einen gueltigen Einladungswert |
+| POST | `/api/auth/invitation/redeem` | oeffentlich, verlangt einen gueltigen Einladungs- oder Wiederherstellungswert |
 | GET | `/api/auth/login` | oeffentlich, leitet zum Identity Provider; **nur mit OIDC-Konfiguration** |
 | GET | `/api/auth/callback` | oeffentlich, Pfad stammt aus `CANVAZ_OIDC_REDIRECT_URI`; **nur mit OIDC-Konfiguration** |
 | POST | `/api/auth/logout` | angemeldet + CSRF-Token |
@@ -217,7 +244,8 @@ Die Endpunkte der Arbeitsbereiche stehen im Abschnitt [Arbeitsbereiche und Rolle
 die der Boards im Abschnitt [Boards und Szenen](#boards-und-szenen).
 
 Logout und Deaktivierung widerrufen Sitzungen serverseitig und schliessen offene WebSocket-Verbindungen
-sofort; ein Upgrade danach wird abgelehnt. Eine Deaktivierung wirkt dabei auf **beide** Anmeldewege und
+sofort; ein Upgrade danach wird abgelehnt. Ein Widerruf ausserhalb des Anwendungsprozesses, etwa durch
+`admin:recover`, schliesst sie beim naechsten Pruefungslauf (hoechstens eine Minute). Eine Deaktivierung wirkt dabei auf **beide** Anmeldewege und
 entwertet zusaetzlich eine noch offene Einladung. Auch der Ablauf der Sitzung schliesst eine offene Verbindung.
 Fuer einen Gast gilt dasselbe, und zusaetzlich beendet der Widerruf seines Freigabelinks jede offene
 Verbindung, die daraus entstanden ist.
@@ -1309,7 +1337,9 @@ docker compose run --rm app node dist/server/bootstrap-cli.js --name "Vorname Na
 
 Danach antwortet `https://<CANVAZ_SITE_ADDRESS>/api/ready` mit `200`. Der letzte Aufruf legt den einzigen
 Systemadmin an und gibt dessen Einladungslink aus; er gilt genau einmal und befristet. Feste Zugangsdaten
-gibt es nicht.
+gibt es nicht. Geht der Zugang dieses Kontos verloren, hilft `docker compose exec app node
+dist/server/admin-recover-cli.js` (siehe
+[Zugang des Systemadmins wiederherstellen](#zugang-des-systemadmins-wiederherstellen)).
 
 Nach aussen offen sind ausschliesslich die beiden Ports des Reverse Proxy. Anwendungsserver, Datenbank und
 ein etwaiges MinIO haben keinen veroeffentlichten Port und sind nur im Compose-Netz erreichbar. Kein

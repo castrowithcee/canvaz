@@ -249,11 +249,11 @@ export function createLocalAuthRoutes(context: AppContext): readonly Route[] {
           }
           await store.localCredentials.set(user.id, passwordHash, { mustChangePassword: false })
           const sessionToken = await replaceSessions(store, user.id, now)
-          return { kind: 'ok', userId: user.id, token: sessionToken } as const
+          return { kind: 'ok', userId: user.id, purpose: invitation.purpose, token: sessionToken } as const
         })
         if (outcome.kind === 'invalid') {
           logger('warn', 'auth.invitation.rejected', { reason: 'not-redeemable' })
-          sendError(response, 400, 'Dieser Einladungslink ist ungueltig, abgelaufen oder bereits verbraucht.')
+          sendError(response, 400, 'Dieser Link ist ungueltig, abgelaufen oder bereits verbraucht.')
           return
         }
         if (outcome.kind === 'deactivated') {
@@ -263,7 +263,8 @@ export function createLocalAuthRoutes(context: AppContext): readonly Route[] {
         }
         context.realtime.closeUser(outcome.userId)
         setSessionCookie(response, config, outcome.token)
-        logger('info', 'auth.invitation.redeemed', { userId: outcome.userId })
+        // Der Zweck unterscheidet im Protokoll eine Wiederherstellung per Betreiberbefehl von einer Einladung.
+        logger('info', 'auth.invitation.redeemed', { userId: outcome.userId, purpose: outcome.purpose })
         const ok: LocalLoginResponse = { status: 'ok' }
         sendJson(response, 200, ok)
       },

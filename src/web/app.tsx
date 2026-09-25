@@ -5,10 +5,11 @@
  * aus - jede geschuetzte Antwort kommt bereits serverseitig geprueft. Bewusst ohne UI-Framework.
  *
  * Die angemeldete Anwendung ist eine dauerhafte Huelle aus Kopfzeile, Explorer und Inhaltsbereich; die
- * gezeigte Ansicht entscheidet die Adresse (siehe `router.ts`). Daneben stehen **genau zwei** weitere
- * Adressen: die Gastansicht unter `GUEST_APP_PATH` und das Einloesen einer Einladung unter
- * `INVITE_APP_PATH`. Beide werden vor jedem Sitzungszustand entschieden, damit weder ein Gast noch ein
- * Eingeladener erst eine Anmeldung oder gar eine Huelle mit Arbeitsbereichen bekommt.
+ * gezeigte Ansicht entscheidet die Adresse (siehe `router.ts`). Daneben stehen **genau drei** weitere
+ * Adressen: die Gastansicht unter `GUEST_APP_PATH`, das Einloesen einer Einladung unter `INVITE_APP_PATH`
+ * und dasselbe fuer eine Wiederherstellung unter `RECOVERY_APP_PATH`. Sie werden vor jedem Sitzungszustand
+ * entschieden, damit weder ein Gast noch ein Eingeladener erst eine Anmeldung oder gar eine Huelle mit
+ * Arbeitsbereichen bekommt.
  *
  * ## Ein Stand fuer Baum und Inhalt
  *
@@ -50,7 +51,7 @@ import {
 } from 'lucide-react'
 
 import type { AppearanceView, LoginErrorCode, MeResponse, WorkspaceView } from '../contracts/api.js'
-import { GUEST_APP_PATH, INVITE_APP_PATH, LOGIN_ERROR_PARAM } from '../contracts/api.js'
+import { GUEST_APP_PATH, INVITE_APP_PATH, LOGIN_ERROR_PARAM, RECOVERY_APP_PATH } from '../contracts/api.js'
 import { MAX_WORKSPACE_NAME_LENGTH } from '../domain/workspace/model.js'
 import { AppearanceSettings, InviteApp, LoginView, PasswordSettings } from './account.js'
 import { AdminUsers } from './admin-users.js'
@@ -808,7 +809,10 @@ export function App() {
     return <GuestApp />
   }
   if (window.location.pathname === INVITE_APP_PATH) {
-    return <InviteApp />
+    return <InviteApp purpose="invitation" />
+  }
+  if (window.location.pathname === RECOVERY_APP_PATH) {
+    return <InviteApp purpose="recovery" />
   }
   return <MemberApp />
 }

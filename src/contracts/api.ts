@@ -125,6 +125,14 @@ export type LoginErrorCode =
  */
 export const INVITE_APP_PATH = '/einladung'
 
+/**
+ * Pfad der Wiederherstellung des Systemadminzugangs (`/wiederherstellung#<token>`).
+ *
+ * Dieselbe Einloesung wie bei einer Einladung und derselbe Endpunkt; eine eigene Adresse bekommt sie nur,
+ * damit die Seite sagt, was geschieht. Der Wert steht aus demselben Grund im Fragment.
+ */
+export const RECOVERY_APP_PATH = '/wiederherstellung'
+
 /** Untergrenze eines Passworts. Sie steht im Vertrag, damit die Oberflaeche sie nennen kann, statt zu raten. */
 export const MIN_PASSWORD_LENGTH = 12
 export const MAX_PASSWORD_LENGTH = 200

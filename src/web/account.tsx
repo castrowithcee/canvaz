@@ -231,7 +231,22 @@ function readInvitationToken(): string | null {
   return token.length === 0 ? null : token
 }
 
-export function InviteApp() {
+/** Texte je Zweck; Einloesung und Endpunkt sind dieselben. */
+const REDEEM_TEXTS = {
+  invitation: {
+    heading: 'Einladung einloesen',
+    incomplete: 'Dieser Einladungslink ist unvollstaendig. Bitte den vollstaendigen Link verwenden.',
+    failed: 'Die Einladung konnte nicht eingeloest werden.',
+  },
+  recovery: {
+    heading: 'Zugang wiederherstellen',
+    incomplete: 'Dieser Wiederherstellungslink ist unvollstaendig. Bitte den vollstaendigen Link verwenden.',
+    failed: 'Der Zugang konnte nicht wiederhergestellt werden.',
+  },
+} as const
+
+export function InviteApp({ purpose }: { readonly purpose: keyof typeof REDEEM_TEXTS }) {
+  const texts = REDEEM_TEXTS[purpose]
   const [token] = useState(readInvitationToken)
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -247,7 +262,7 @@ export function InviteApp() {
     return (
       <main className="shell">
         <h1>Canvaz</h1>
-        <Notice text="Dieser Einladungslink ist unvollstaendig. Bitte den vollstaendigen Link verwenden." />
+        <Notice text={texts.incomplete} />
       </main>
     )
   }
@@ -256,7 +271,7 @@ export function InviteApp() {
     <main className="shell">
       <h1>Canvaz</h1>
       <section aria-labelledby="einladung">
-        <h2 id="einladung">Einladung einloesen</h2>
+        <h2 id="einladung">{texts.heading}</h2>
         <form
           className="stack card"
           onSubmit={(event) => {
@@ -270,7 +285,7 @@ export function InviteApp() {
               })
               .catch((cause: unknown) => {
                 setBusy(false)
-                setError(messageOf(cause, 'Die Einladung konnte nicht eingeloest werden.'))
+                setError(messageOf(cause, texts.failed))
               })
           }}
         >

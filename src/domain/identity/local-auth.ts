@@ -15,6 +15,15 @@ import type { UserId } from './model.js'
 export type UserInvitationId = string
 
 /**
+ * Wozu ein Einladungswert dient.
+ *
+ * `invitation` uebergibt ein Konto, `recovery` stellt den Zugang des Systemadmins per Betreiberbefehl wieder
+ * her. Beide loesen sich auf demselben Weg ein und setzen dasselbe Passwort; der Zweck unterscheidet Frist,
+ * Nachweis und alles, was eine Wiederherstellung kuenftig zusaetzlich zuruecksetzen muss.
+ */
+export type InvitationPurpose = 'invitation' | 'recovery'
+
+/**
  * Lokale Anmeldedaten eines Nutzers.
  *
  * `passwordHash` ist das Ergebnis des Hashverfahrens aus `src/server/password.ts`; ein Klartextpasswort
@@ -37,6 +46,7 @@ export type LocalCredential = {
 export type UserInvitation = {
   readonly id: UserInvitationId
   readonly userId: UserId
+  readonly purpose: InvitationPurpose
   readonly createdByUserId: UserId | null
   readonly createdAt: Date
   readonly expiresAt: Date
@@ -73,6 +83,19 @@ export const INVITATION_TTL_HOURS = 72
 
 export function invitationExpiry(now: Date): Date {
   return new Date(now.getTime() + INVITATION_TTL_HOURS * 3600 * 1000)
+}
+
+/**
+ * Frist eines Wiederherstellungswerts.
+ *
+ * 30 Minuten statt 72 Stunden: der Betreiber erzeugt ihn in dem Moment, in dem er ihn uebergibt, und ein
+ * liegen gebliebener Link auf das einzige Adminkonto soll kein Wochenende ueberleben. Wer ihn verpasst,
+ * ruft den Befehl erneut auf; das entwertet den vorherigen.
+ */
+export const RECOVERY_TTL_MINUTES = 30
+
+export function recoveryExpiry(now: Date): Date {
+  return new Date(now.getTime() + RECOVERY_TTL_MINUTES * 60 * 1000)
 }
 
 /**

@@ -6,7 +6,7 @@
  */
 
 import type { AppearanceView } from '../../contracts/api.js'
-import type { LocalCredential, UserInvitation, UserInvitationId } from './local-auth.js'
+import type { InvitationPurpose, LocalCredential, UserInvitation, UserInvitationId } from './local-auth.js'
 import type {
   AuthenticatedSession,
   ExternalIdentity,
@@ -57,6 +57,13 @@ export interface UserRepository {
    * Transaktion gueltig.
    */
   hasSystemAdmin(): Promise<boolean>
+  /**
+   * Alle Systemadmins, unter derselben Sperre wie `hasSystemAdmin`.
+   *
+   * Grundlage der Wiederherstellung: sie wirkt nur, wenn es genau einen gibt, und zwei gleichzeitige Aufrufe
+   * laufen dadurch nacheinander. Nur innerhalb einer Transaktion gueltig.
+   */
+  listSystemAdmins(): Promise<readonly User[]>
   /** Nutzerliste der Systemadministration, aelteste zuerst. */
   list(): Promise<readonly User[]>
   create(profile: UserProfileDraft, options: { readonly isSystemAdmin: boolean }): Promise<User>
@@ -97,6 +104,8 @@ export type NewInvitation = {
   readonly tokenHash: string
   readonly createdByUserId: UserId | null
   readonly expiresAt: Date
+  /** Ohne Angabe eine gewoehnliche Einladung. */
+  readonly purpose?: InvitationPurpose
 }
 
 export interface InvitationRepository {
@@ -141,6 +150,13 @@ export interface SessionRepository {
   revoke(id: SessionId, revokedAt: Date): Promise<void>
   /** Widerruft alle Sessions eines Nutzers, etwa beim Deaktivieren. */
   revokeAllForUser(userId: UserId, revokedAt: Date): Promise<void>
+  /**
+   * Welche dieser Sessions gelten noch - nach derselben Regel wie `findAuthenticatedByTokenHash`?
+   *
+   * Fuer offene WebSocket-Verbindungen: ein Widerruf aus einem anderen Prozess, etwa dem Betreiberbefehl,
+   * erreicht das Verbindungsregister dieses Prozesses nicht als Ereignis und wird so nachgeprueft.
+   */
+  findLiveIds(ids: readonly SessionId[], now: Date): Promise<ReadonlySet<SessionId>>
   /** Raeumt abgelaufene Zeilen weg. Aufruf entscheidet der Betrieb, nicht die Domain. */
   deleteExpired(before: Date): Promise<number>
 }

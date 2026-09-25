@@ -24,7 +24,8 @@
     "db:up": "docker compose up --detach --wait postgres minio",
     "db:down": "docker compose down",
     "db:migrate": "tsx --env-file-if-exists=.env src/persistence/migrate-cli.ts",
-    "admin:bootstrap": "tsx --env-file-if-exists=.env src/server/bootstrap-cli.ts"
+    "admin:bootstrap": "tsx --env-file-if-exists=.env src/server/bootstrap-cli.ts",
+    "admin:recover": "tsx --env-file-if-exists=.env src/server/admin-recover-cli.ts"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "0.18.1",
