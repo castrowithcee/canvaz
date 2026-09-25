@@ -2,7 +2,9 @@
  * Anwendungshuelle der SPA.
  *
  * Drei Zustaende: laedt, nicht angemeldet, angemeldet. Die Oberflaeche blendet nichts als Sicherheitsgrenze
- * aus - jede geschuetzte Antwort kommt bereits serverseitig geprueft. Bewusst ohne UI-Framework.
+ * aus - jede geschuetzte Antwort kommt bereits serverseitig geprueft. Bewusst ohne UI-Framework. Eine
+ * Sitzung des Systemadmins ohne belegten zweiten Faktor zeigt statt der Huelle Einrichtung oder Abfrage
+ * (`second-factor.tsx`); der Server laesst ihr ohnehin nichts anderes zu.
  *
  * Die angemeldete Anwendung ist eine dauerhafte Huelle aus Kopfzeile, Explorer und Inhaltsbereich; die
  * gezeigte Ansicht entscheidet die Adresse (siehe `router.ts`). Daneben stehen **genau drei** weitere
@@ -64,6 +66,7 @@ import { Dashboard } from './dashboard.js'
 import type { Explorer } from './explorer.js'
 import { ExplorerTree, useExplorer } from './explorer.js'
 import { GuestApp } from './guest.js'
+import { SecondFactorGate, SecondFactorSettings } from './second-factor.js'
 import { Drawer, Menu, MenuItem, MenuLinkItem, NameDialog } from './overlays.js'
 import type { AppRoute, BoardPanelView } from './router.js'
 import { closeLayer, Link, navigate, navigateBack, routeHref, useRoute } from './router.js'
@@ -462,6 +465,7 @@ function Content({
           </p>
           <AppearanceSettings me={me} onChanged={onAppearanceChanged} />
           <PasswordSettings me={me} onChanged={onProfileChanged} />
+          <SecondFactorSettings me={me} onChanged={onProfileChanged} />
         </section>
       )
     case 'konten':
@@ -798,6 +802,12 @@ function MemberApp() {
   }
   if (state.kind === 'anonymous') {
     return <LoginView error={state.error} onSignedIn={load} />
+  }
+  // Ohne belegten zweiten Faktor lehnt der Server alles ausser Profil, Abmeldung und Faktor ab; die Huelle
+  // kaeme gar nicht erst zustande. Also zuerst Einrichtung oder Abfrage.
+  const factor = state.me.secondFactor.state
+  if (factor === 'setup-required' || factor === 'verification-required') {
+    return <SecondFactorGate me={state.me} onDone={load} onSignedOut={load} />
   }
   return <Shell me={state.me} onSignedOut={load} onReload={load} onAppearanceChanged={changeAppearance} />
 }

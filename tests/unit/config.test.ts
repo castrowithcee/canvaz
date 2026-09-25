@@ -6,6 +6,7 @@ const validEnv = {
   CANVAZ_BASE_URL: 'https://canvaz.example.com',
   DATABASE_URL: 'postgres://canvaz:geheim@db:5432/canvaz',
   CANVAZ_SESSION_SECRET: 'a'.repeat(32),
+  CANVAZ_MFA_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString('base64'),
   CANVAZ_OIDC_ISSUER: 'https://idp.example.com/realms/canvaz',
   CANVAZ_OIDC_CLIENT_ID: 'canvaz',
   CANVAZ_OIDC_CLIENT_SECRET: 'client-secret',
@@ -108,6 +109,7 @@ describe('Konfiguration', () => {
     const problems = (caught as ConfigError).problems
     expect(problems).toContain('DATABASE_URL fehlt')
     expect(problems).toContain('CANVAZ_SESSION_SECRET fehlt')
+    expect(problems).toContain('CANVAZ_MFA_ENCRYPTION_KEY fehlt')
     // OIDC ist nicht darunter: ohne jede seiner Variablen ist der Weg schlicht nicht zugeschaltet.
     expect(problems).not.toContain('CANVAZ_OIDC_CLIENT_SECRET fehlt')
   })
@@ -117,6 +119,7 @@ describe('Konfiguration', () => {
       CANVAZ_BASE_URL: validEnv.CANVAZ_BASE_URL,
       DATABASE_URL: validEnv.DATABASE_URL,
       CANVAZ_SESSION_SECRET: validEnv.CANVAZ_SESSION_SECRET,
+      CANVAZ_MFA_ENCRYPTION_KEY: validEnv.CANVAZ_MFA_ENCRYPTION_KEY,
       CANVAZ_STORAGE_FILESYSTEM_ROOT: validEnv.CANVAZ_STORAGE_FILESYSTEM_ROOT,
     }
 
@@ -145,6 +148,9 @@ describe('Konfiguration', () => {
 
   it('weist ein zu kurzes Session-Geheimnis und falsche Werte zurueck', () => {
     expect(() => loadConfig({ ...validEnv, CANVAZ_SESSION_SECRET: 'kurz' })).toThrow(ConfigError)
+    // Ein Schluessel, der nicht genau 32 Byte ergibt, waere still ein schwacher.
+    expect(() => loadConfig({ ...validEnv, CANVAZ_MFA_ENCRYPTION_KEY: Buffer.alloc(16).toString('base64') })).toThrow(ConfigError)
+    expect(() => loadConfig({ ...validEnv, CANVAZ_MFA_ENCRYPTION_KEY: 'kein base64 mit 32 Byte!' })).toThrow(ConfigError)
     expect(() => loadConfig({ ...validEnv, DATABASE_URL: 'mysql://db/canvaz' })).toThrow(ConfigError)
     expect(() => loadConfig({ ...validEnv, CANVAZ_STORAGE_ADAPTER: 'ftp' })).toThrow(ConfigError)
     expect(() => loadConfig({ ...validEnv, CANVAZ_PORT: '0' })).toThrow(ConfigError)

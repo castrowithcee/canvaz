@@ -19,6 +19,9 @@ import type {
   LocalLoginResponse,
   RedeemInvitationRequest,
   ResetPasswordRequest,
+  SecondFactorBackupCodesResponse,
+  SecondFactorEnrollResponse,
+  SecondFactorVerifyResponse,
   BoardGrantChangeResponse,
   BoardGrantRoleView,
   BoardGrantsResponse,
@@ -75,6 +78,10 @@ import {
   AUTH_LOCAL_PASSWORD_PATH,
   AUTH_LOGOUT_PATH,
   AUTH_METHODS_PATH,
+  AUTH_SECOND_FACTOR_BACKUP_CODES_PATH,
+  AUTH_SECOND_FACTOR_CONFIRM_PATH,
+  AUTH_SECOND_FACTOR_ENROLL_PATH,
+  AUTH_SECOND_FACTOR_VERIFY_PATH,
   BOARD_ASSETS_PATH,
   BOARD_DASHBOARD_PATH,
   BOARD_DUPLICATE_PATH,
@@ -207,6 +214,26 @@ export async function changePassword(change: ChangePasswordRequest): Promise<Loc
 
 export async function redeemInvitation(redemption: RedeemInvitationRequest): Promise<LocalLoginResponse> {
   return request<LocalLoginResponse>(AUTH_INVITATION_REDEEM_PATH, anonymousPost(redemption))
+}
+
+/**
+ * Zweiter Faktor. Jeder dieser Aufrufe, der gelingt und einen Code verbraucht, ersetzt die Sitzung: danach
+ * gilt ein neues CSRF-Token, und die Oberflaeche laedt das Profil neu.
+ */
+export async function enrollSecondFactor(csrfToken: string, code?: string): Promise<SecondFactorEnrollResponse> {
+  return request<SecondFactorEnrollResponse>(AUTH_SECOND_FACTOR_ENROLL_PATH, mutation(csrfToken, code === undefined ? {} : { code }))
+}
+
+export async function confirmSecondFactor(csrfToken: string, code: string): Promise<SecondFactorBackupCodesResponse> {
+  return request<SecondFactorBackupCodesResponse>(AUTH_SECOND_FACTOR_CONFIRM_PATH, mutation(csrfToken, { code }))
+}
+
+export async function verifySecondFactor(csrfToken: string, code: string): Promise<SecondFactorVerifyResponse> {
+  return request<SecondFactorVerifyResponse>(AUTH_SECOND_FACTOR_VERIFY_PATH, mutation(csrfToken, { code }))
+}
+
+export async function renewBackupCodes(csrfToken: string, code: string): Promise<SecondFactorBackupCodesResponse> {
+  return request<SecondFactorBackupCodesResponse>(AUTH_SECOND_FACTOR_BACKUP_CODES_PATH, mutation(csrfToken, { code }))
 }
 
 export async function fetchAdminUsers(): Promise<AdminUsersResponse> {

@@ -20,6 +20,18 @@ export const AUTH_LOCAL_LOGIN_PATH = `${API_BASE_PATH}/auth/local/login`
 export const AUTH_LOCAL_PASSWORD_PATH = `${API_BASE_PATH}/auth/local/password`
 /** Einloesen eines Einladungslinks: der Empfaenger setzt sein Passwort selbst. */
 export const AUTH_INVITATION_REDEEM_PATH = `${API_BASE_PATH}/auth/invitation/redeem`
+/**
+ * Zweiter Faktor des Systemadmins. Erreichbar auch mit einer Sitzung, deren zweiter Faktor noch aussteht -
+ * als einzige Endpunkte neben Profil und Abmeldung.
+ */
+/** Einrichtung beginnen: neues Geheimnis, noch nicht aktiv. Bei vorhandenem Faktor mit aktuellem Code. */
+export const AUTH_SECOND_FACTOR_ENROLL_PATH = `${API_BASE_PATH}/auth/second-factor/enroll`
+/** Einrichtung mit einem Code der App bestaetigen; erst dann ist der Faktor aktiv. Liefert die Ersatzcodes. */
+export const AUTH_SECOND_FACTOR_CONFIRM_PATH = `${API_BASE_PATH}/auth/second-factor/confirm`
+/** Abfrage nach der Anmeldung: TOTP-Code oder Ersatzcode. */
+export const AUTH_SECOND_FACTOR_VERIFY_PATH = `${API_BASE_PATH}/auth/second-factor/verify`
+/** Neue Ersatzcodes gegen einen aktuellen Code; die bisherigen verfallen. */
+export const AUTH_SECOND_FACTOR_BACKUP_CODES_PATH = `${API_BASE_PATH}/auth/second-factor/backup-codes`
 export const ME_PATH = `${API_BASE_PATH}/me`
 /** Eigenes Erscheinungsbild aendern. Gelesen wird es mit dem Profil (`MeResponse.appearance`). */
 export const ME_APPEARANCE_PATH = `${API_BASE_PATH}/me/appearance`
@@ -187,12 +199,61 @@ export type UserView = {
   readonly updatedAt: string
 }
 
+/**
+ * Stand des zweiten Faktors dieser Sitzung.
+ *
+ * - `not-required`: das Konto braucht keinen (jeder ausser dem Systemadmin).
+ * - `setup-required`: Systemadmin ohne eingerichteten Faktor; die Sitzung darf nur einrichten.
+ * - `verification-required`: Faktor eingerichtet, in dieser Sitzung noch nicht belegt.
+ * - `verified`: belegt; `backupCodesRemaining` nennt die noch unverbrauchten Ersatzcodes.
+ *
+ * Ausser bei `not-required` und `verified` lehnt der Server jeden weiteren Endpunkt ab. Die Oberflaeche
+ * zeigt nur, was ohnehin gilt.
+ */
+export type SecondFactorView =
+  | { readonly state: 'not-required' }
+  | { readonly state: 'setup-required' }
+  | { readonly state: 'verification-required' }
+  | { readonly state: 'verified'; readonly backupCodesRemaining: number }
+
 export type MeResponse = {
   readonly user: UserView
   /** An die Session gebundenes Token fuer zustandsaendernde Anfragen. */
   readonly csrfToken: string
   /** Das eigene Erscheinungsbild; ohne gespeicherte Wahl `DEFAULT_APPEARANCE`. */
   readonly appearance: AppearanceView
+  readonly secondFactor: SecondFactorView
+}
+
+/** Ein Code des zweiten Faktors: sechs Ziffern aus der App oder ein Ersatzcode (`XXXXX-XXXXX`). */
+export type SecondFactorCodeRequest = {
+  readonly code: string
+}
+
+/**
+ * Beginn einer Einrichtung. `code` ist nur bei vorhandenem Faktor noetig: dann ist er die frische
+ * Bestaetigung des Wechsels.
+ */
+export type SecondFactorEnrollRequest = {
+  readonly code?: string
+}
+
+/**
+ * Das neue Geheimnis zum Eintragen in die App - als Schluessel fuer die Handeingabe und als `otpauth://`-
+ * Adresse. Es steht genau hier einmal und wird danach nie wieder ausgeliefert.
+ */
+export type SecondFactorEnrollResponse = {
+  readonly secret: string
+  readonly otpauthUri: string
+}
+
+/** Die Ersatzcodes einer Ausgabe. Sie stehen genau hier einmal; gespeichert ist nur ein Hash. */
+export type SecondFactorBackupCodesResponse = {
+  readonly backupCodes: readonly string[]
+}
+
+export type SecondFactorVerifyResponse = {
+  readonly backupCodesRemaining: number
 }
 
 /**

@@ -11,7 +11,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { CSRF_HEADER } from '../contracts/api.js'
-import type { AuthenticatedSession, SessionId, UserId } from '../domain/identity/model.js'
+import type { AuthenticatedSession, SessionId, SignedInSession, UserId } from '../domain/identity/model.js'
 import type { IdentityStore } from '../domain/identity/repositories.js'
 import type { AppConfig } from './config.js'
 import { appendSetCookie, clearCookie, parseCookies, serializeCookie } from './cookies.js'
@@ -94,29 +94,38 @@ export async function startSession(
   config: AppConfig,
   userId: UserId,
   now: Date,
+  /**
+   * Nur die Endpunkte des zweiten Faktors setzen ihn, und nur nach einem gerade geprueften Code. Jeder
+   * andere Weg - Anmeldung, OIDC, Passwortwechsel, Einloesung - legt eine Sitzung ohne Nachweis an.
+   */
+  options: { readonly secondFactorVerifiedAt?: Date } = {},
 ): Promise<{ readonly token: string; readonly session: AuthenticatedSession['session'] }> {
   const token = createSessionToken()
   const session = await store.sessions.create({
     userId,
     tokenHash: hashSessionToken(token),
     expiresAt: new Date(now.getTime() + config.sessionTtlSeconds * 1000),
+    secondFactorVerifiedAt: options.secondFactorVerifiedAt ?? null,
   })
   return { token, session }
 }
 
 /**
- * Einziger Weg vom Cookie zur angemeldeten Sitzung. Die Gueltigkeitsregel selbst steht in der Domain
- * (`authenticate`) und wird vom Repository angewandt; hier kommt nur der Transport dazu.
+ * Einziger Weg vom Cookie zur Sitzung. Die Gueltigkeitsregel selbst steht in der Domain (`signedIn`,
+ * `authenticate`) und wird vom Repository angewandt; hier kommt nur der Transport dazu.
+ *
+ * Geliefert wird die Sitzung nach dem ersten Faktor, mit `secondFactorPending`. Die Guards lehnen eine
+ * ausstehende ab; nur die Endpunkte des zweiten Faktors, das Profil und die Abmeldung bedienen sie.
  */
-export async function resolveSession(
+export async function resolveSignedIn(
   store: IdentityStore,
   config: Pick<AppConfig, 'secureCookies'>,
   request: IncomingMessage,
   now: Date,
-): Promise<AuthenticatedSession | null> {
+): Promise<SignedInSession | null> {
   const token = readSessionToken(request, config)
   if (token === null) {
     return null
   }
-  return store.sessions.findAuthenticatedByTokenHash(hashSessionToken(token), now)
+  return store.sessions.findSignedInByTokenHash(hashSessionToken(token), now)
 }

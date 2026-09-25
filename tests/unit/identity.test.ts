@@ -26,6 +26,7 @@ const session: Session = {
   createdAt: now,
   expiresAt: new Date('2026-01-01T18:00:00Z'),
   revokedAt: null,
+  secondFactorVerifiedAt: null,
 }
 
 const identity: ExternalIdentity = {

@@ -174,6 +174,10 @@ Kontos beendet die Anwendung beim naechsten Pruefungslauf, spaetestens nach eine
 
 Eingeloest wird wie eine Einladung: der Systemadmin setzt sein Passwort selbst, danach gilt nur noch das
 neue. Rolle, Status und Mitgliedschaften bleiben unveraendert; es entsteht weder ein Konto noch ein Recht.
+Die Einloesung **entfernt den zweiten Faktor samt Ersatzcodes**; die Sitzung danach ist eingeschraenkt und
+fuehrt zur Neueinrichtung (siehe unten). Das ist der einzige Weg, einen verlorenen Faktor zu ersetzen. Mit
+eingerichtetem Postausgang erfaehrt der Systemadmin per Mail vom Befehl und von der Entfernung des Faktors
+- ohne Link.
 
 - **Uebergabe:** der Link gehoert nur dem Inhaber des Kontos und geht ueber einen vertrauenswuerdigen
   Kanal ausserhalb der Anwendung, nicht in Ticket, Chat-Verlauf oder Protokoll. Die Terminalausgabe danach
@@ -183,16 +187,76 @@ neue. Rolle, Status und Mitgliedschaften bleiben unveraendert; es entsteht weder
   Protokoll. Dauerhaft belegt den Vorfall die Zeile in `user_invitations` mit `purpose = 'recovery'`
   (Zeitpunkt, Frist, Einloesung oder Widerruf). Keiner dieser Nachweise enthaelt den Link.
 
+### Zweiter Faktor des Systemadmins
+
+Jede Anmeldung des Systemadmins - lokal, ueber OIDC, nach einem Passwortwechsel oder einer Einloesung -
+verlangt zusaetzlich einen **TOTP-Code** (Authenticator-App) oder einen **einmaligen Ersatzcode**, bevor
+die Sitzung Rechte bekommt. Gewoehnliche Nutzer und Gaeste haben keinen zweiten Faktor.
+
+- **Durchsetzung am Server.** Jede Anmeldung legt eine Sitzung ohne Nachweis an
+  (`sessions.second_factor_verified_at` ist leer). Fuer den Systemadmin ist sie eingeschraenkt: erreichbar
+  sind nur `/api/me` (Profil, CSRF-Token, Stand des Faktors), `/api/auth/logout` und
+  `/api/auth/second-factor/*`. Jeder andere Endpunkt antwortet `403` (`Zweiter Faktor erforderlich`), ein
+  WebSocket-Upgrade ebenso; auch ein Gastcookie im selben Browser hilft nicht darueber hinweg. Die Regel
+  steht in der Domain (`signedIn`/`authenticate` in `src/domain/identity/model.ts`) und wirkt ueber die
+  vorhandenen Guards. Ein gueltiger Code setzt den Nachweis nicht nachtraeglich, sondern ersetzt die
+  Sitzung durch eine neue mit Nachweis (neues Cookie, neues CSRF-Token).
+- **Einfuehrung.** Hat der Systemadmin noch keinen Faktor, fuehrt die Anmeldung auf die Einrichtung:
+  Schluessel (Base32, zur Handeingabe) und `otpauth://`-Adresse erscheinen einmal; aktiv wird der Faktor
+  erst mit einem gueltigen Code der App (Einrichtung offen fuer 10 Minuten). Bestehende Adminsitzungen von
+  vor dem Update sind danach eingeschraenkt; niemand wird ohne Einrichtungsweg ausgesperrt.
+- **TOTP** nach RFC 6238 ueber `otpauth` (SHA-1, 6 Stellen, 30 Sekunden - was jede App ohne Rueckfrage
+  versteht), Toleranz **ein Schritt** vor und zurueck. Ein bereits angenommener Code und jeder aus einem
+  frueheren Schritt wird abgelehnt; von zwei gleichzeitigen Anmeldungen mit demselben Code gewinnt eine.
+- **Ersatzcodes:** 10 Stueck je Ausgabe, je 10 Zeichen aus 32 (50 Bit), Anzeige `XXXXX-XXXXX`. Sie
+  erscheinen genau einmal, liegen nur als HMAC-SHA-256 vor, gelten je genau einmal (auch gleichzeitig
+  eingeloest) und werden im Konto gegen einen aktuellen Code neu ausgegeben; die alten verfallen.
+- **Drosselung:** jede Pruefung eines TOTP- oder Ersatzcodes bucht vorher einen Versuch auf das Konto -
+  dieselbe Datenbankgrenze wie die Anmeldung (`CANVAZ_AUTH_RATE_LIMIT_PER_ACCOUNT` im Fenster
+  `CANVAZ_AUTH_RATE_LIMIT_WINDOW_MINUTES`), aber ein eigener Zaehler. Sie uebersteht einen Neustart; ein
+  gueltiger Code und `admin:recover` setzen sie zurueck. Gedrosselt antwortet der Endpunkt `429`.
+- **Faktoraenderung** (neue App, neue Ersatzcodes) verlangt einen aktuellen Code aus einer Sitzung mit
+  Nachweis, beendet **alle** Sitzungen und Verbindungen des Kontos und setzt eine neue. Entfernen kann den
+  Faktor allein die Einloesung einer Betreiber-Wiederherstellung; einen oeffentlichen oder per Mail
+  ausloesbaren Weg gibt es nicht.
+- **Mitteilung:** mit eingerichtetem Postausgang geht an den Systemadmin eine Mail bei jeder
+  Faktoraenderung, bei der Entfernung durch eine Wiederherstellung und beim Betreiberbefehl selbst - nie mit
+  Geheimnis, Code oder Link.
+- **Protokoll:** `auth.second-factor.verified|failed|throttled|changed|enrollment.started` und
+  `authorization.denied` mit `required: second-factor`, jeweils mit Nutzerkennung, nie mit Code.
+
+**Schluessel `CANVAZ_MFA_ENCRYPTION_KEY`.** Das TOTP-Geheimnis liegt ausschliesslich mit AES-256-GCM
+versiegelt in `user_totp_factors` (an das Konto gebunden); aus demselben Schluessel wird der Schluessel der
+Ersatzcode-HMACs abgeleitet. Er ist ein Pflichtwert ohne Standard: genau 32 Byte in base64, erzeugt mit
+`openssl rand -base64 32`. Fehlt er oder hat er eine andere Laenge, startet weder der Server noch einer der
+Befehle. Er gehoert in `.env` bzw. `.env.production` und nie ins Repository.
+
+- **Nicht zusammen mit der Datenbank ablegen.** Die Sicherung (`docker/canvaz-ops.sh backup`) enthaelt die
+  Datenbank, nicht die Umgebung; der Schluessel wird getrennt verwahrt (Passwortmanager des Betriebs).
+- **Verlust oder Rotation:** mit einem anderen Schluessel ist der vorhandene Faktor nicht mehr lesbar; die
+  Abfrage meldet dann, dass der Faktor nicht geprueft werden kann (`auth.second-factor.unreadable` im
+  Protokoll). Vorgehen: neuen Schluessel setzen, Anwendung neu starten, `admin:recover` ausfuehren und den
+  Link einloesen - die Einloesung entfernt den alten Faktor, die naechste Anmeldung richtet ihn mit dem
+  neuen Schluessel neu ein. Eine gleitende Rotation mit zwei Schluesseln gibt es bewusst nicht; bei genau
+  einem Konto mit Faktor ist die Neueinrichtung der einfachere und nachpruefbare Weg.
+- **Verlust aller Faktoren** (App und Ersatzcodes): ausschliesslich `admin:recover` durch den Betrieb.
+
+**Bekannte Grenze:** die erste Einrichtung schuetzt nur das Passwort. Wer es vor dem Inhaber kennt und sich
+zuerst anmeldet, richtet den Faktor ein; die Mitteilung per Mail und `admin:recover` sind dann der
+Rueckweg. Deshalb gleich nach dem Update anmelden und einrichten.
+
 ### Postausgang (optional)
 
 Ohne konfigurierten Postausgang verschickt die Instanz **nichts**: ein Einladungslink steht genau einmal in
-der Antwort der Anlage, und wer ihn zustellt, entscheidet der Betrieb. Mit Postausgang kommen genau zwei
-Nachrichten dazu, beide an die Adresse des betroffenen Kontos:
+der Antwort der Anlage, und wer ihn zustellt, entscheidet der Betrieb. Mit Postausgang kommen diese
+Nachrichten dazu, jede an die Adresse des betroffenen Kontos:
 
 | Anlass | Inhalt |
 | --- | --- |
 | Konto angelegt oder Einladung erneuert | der Einladungslink, gueltig 72 Stunden und einmal einloesbar |
 | Passwort administrativ zurueckgesetzt | die Mitteilung, dass es zurueckgesetzt wurde - **ohne** das neue Passwort |
+| Zweiter Faktor des Systemadmins geaendert oder per Wiederherstellung entfernt | die Mitteilung, dass es geschah - **ohne** Geheimnis oder Ersatzcode |
+| `admin:recover` ausgefuehrt | die Mitteilung an den Systemadmin - **ohne** den Wiederherstellungslink |
 
 Ein Passwort steht in keiner Nachricht. Ein Postfach ist kein Ort fuer ein Geheimnis, das ohne zweiten
 Faktor Zugang gibt; das neue Initialpasswort geht den Weg, den die Administration mit dem Konto vereinbart
@@ -1524,6 +1588,14 @@ Anwendungsprozess vollstaendig ersetzen, abrufen, Bytes vergleichen.
 Anwendung: die Einladung traegt denselben Link wie die Antwort, eine erneuerte Einladung nicht mehr den
 alten, und die Mitteilung ueber eine Ruecksetzung nennt das neue Passwort nicht. Der Test kennt keinen
 SMTP-Server - er sammelt am Port der Anwendung, weil dort die Zusage liegt und nicht im Transport.
+
+`tests/integration/second-factor.test.ts` prueft den zweiten Faktor je Zusage mit einem Fall: eingeschraenkte
+Sitzung nach lokaler und OIDC-Anmeldung (HTTP und WebSocket), Einrichtung, falscher, wiederholter und um
+einen Schritt verschobener Code, Ersatzcode bei gleichzeitiger Nutzung, Drosselung ueber eine neue
+App-Instanz hinweg, Widerruf anderer Sitzungen bei einer Aenderung, Entfernung durch die Wiederherstellung,
+kein Klartext in Datenbank, Protokoll und Mail sowie ein unveraenderter normaler Nutzer. Die
+Testunterstuetzung richtet den Faktor des Systemadmins ueber die echten Endpunkte ein
+(`signedInAsSystemAdmin`).
 
 `tests/integration/realtime.test.ts` faehrt die Echtzeitstrecke ueber **echte WebSocket-Verbindungen**:
 Beitritt mit und ohne Berechtigung, Entzug und Archivierung waehrend bestehender Verbindung, manipulierte

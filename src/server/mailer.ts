@@ -1,9 +1,10 @@
 /**
  * Postausgang der Instanz.
  *
- * Genau zwei Nachrichten verlassen Canvaz: die Einladung, die ein Konto uebergibt, und die Mitteilung, dass
- * ein Passwort administrativ zurueckgesetzt wurde. Beide gehen an die Adresse des betroffenen Kontos und an
- * keine andere.
+ * Diese Nachrichten verlassen Canvaz: die Einladung, die ein Konto uebergibt, die Mitteilung, dass ein
+ * Passwort administrativ zurueckgesetzt wurde, und fuer den Systemadmin die Mitteilungen ueber eine
+ * Aenderung seines zweiten Faktors und ueber eine Betreiber-Wiederherstellung. Jede geht an die Adresse des
+ * betroffenen Kontos und an keine andere.
  *
  * ## Was in einer Mail steht und was nicht
  *
@@ -127,6 +128,63 @@ export function passwordResetMail(to: string, displayName: string, baseUrl: stri
       baseUrl,
       '',
       'Haben Sie die Ruecksetzung nicht angefragt, wenden Sie sich an Ihre Administration.',
+      '',
+    ].join('\n'),
+  }
+}
+
+/** Was sich am zweiten Faktor geaendert hat. */
+export type SecondFactorChange = 'enrolled' | 'backup-codes' | 'removed-by-recovery'
+
+const SECOND_FACTOR_CHANGE_TEXTS: Readonly<Record<SecondFactorChange, string>> = {
+  enrolled: 'fuer Ihr Canvaz-Konto wurde ein zweiter Faktor (Authenticator-App) neu eingerichtet.',
+  'backup-codes': 'fuer Ihr Canvaz-Konto wurden neue Ersatzcodes ausgegeben; die bisherigen gelten nicht mehr.',
+  'removed-by-recovery':
+    'der zweite Faktor Ihres Canvaz-Kontos wurde mit einer Betreiber-Wiederherstellung entfernt. Bei der\nnaechsten Anmeldung richten Sie ihn neu ein.',
+}
+
+/**
+ * Mitteilung ueber eine Aenderung des zweiten Faktors. Sie traegt weder Geheimnis noch Ersatzcode - nur,
+ * dass etwas geschehen ist, damit der Inhaber eine fremde Aenderung bemerkt.
+ */
+export function secondFactorChangedMail(to: string, displayName: string, change: SecondFactorChange, baseUrl: string): Mail {
+  return {
+    to,
+    subject: 'Ihr zweiter Faktor fuer Canvaz wurde geaendert',
+    text: [
+      `Hallo ${displayName},`,
+      '',
+      SECOND_FACTOR_CHANGE_TEXTS[change],
+      'Alle anderen Sitzungen dieses Kontos wurden dabei beendet.',
+      '',
+      baseUrl,
+      '',
+      'Waren Sie das nicht, verstaendigen Sie sofort den Betrieb der Instanz: er stellt den Zugang mit',
+      '`admin:recover` wieder her.',
+      '',
+    ].join('\n'),
+  }
+}
+
+/**
+ * Mitteilung ueber eine Betreiber-Wiederherstellung. Der Link steht ausdruecklich **nicht** darin: er geht
+ * ausserhalb der Anwendung an den Inhaber, und ein Postfach soll ihn nie allein tragen.
+ */
+export function adminRecoveryMail(to: string, displayName: string, expiresAt: Date, baseUrl: string): Mail {
+  return {
+    to,
+    subject: 'Wiederherstellung Ihres Canvaz-Adminzugangs',
+    text: [
+      `Hallo ${displayName},`,
+      '',
+      'der Betrieb hat den Zugang Ihres Canvaz-Adminkontos wiederhergestellt. Alle Sitzungen wurden beendet;',
+      `ein einmaliger Wiederherstellungslink gilt bis ${expiresAt.toISOString()} und erreicht Sie auf dem`,
+      'vereinbarten Weg - nicht mit dieser Nachricht. Mit seiner Einloesung wird Ihr zweiter Faktor entfernt',
+      'und bei der naechsten Anmeldung neu eingerichtet.',
+      '',
+      baseUrl,
+      '',
+      'Haben Sie die Wiederherstellung nicht angefragt, verstaendigen Sie sofort den Betrieb.',
       '',
     ].join('\n'),
   }

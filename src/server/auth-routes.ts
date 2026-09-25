@@ -18,6 +18,7 @@ import type {
   LoginErrorCode,
   LogoutResponse,
   MeResponse,
+  SecondFactorView,
 } from '../contracts/api.js'
 import {
   AUTH_LOGIN_PATH,
@@ -29,14 +30,16 @@ import {
   ME_PATH,
   parseAppearance,
 } from '../contracts/api.js'
-import type { UserId } from '../domain/identity/model.js'
+import type { SignedInSession, UserId } from '../domain/identity/model.js'
+import { requiresSecondFactor } from '../domain/identity/model.js'
+import { hasActiveTotp } from '../domain/identity/second-factor.js'
 import type { IdentityClaims, ProvisioningDecision } from '../domain/identity/provisioning.js'
 import { decideProvisioning } from '../domain/identity/provisioning.js'
 import { IdentityConflictError } from '../domain/identity/repositories.js'
 import type { OidcConfig } from './config.js'
 import type { AppContext } from './context.js'
 import { clearFlowCookie, openFlowState, readFlowCookie, sealFlowState, setFlowCookie } from './flow-state.js'
-import { requireCsrfToken, requireSession, toUserView } from './guard.js'
+import { requireCsrfToken, requireSession, requireSignedIn, toUserView } from './guard.js'
 import type { Route } from './http.js'
 import { readJsonBody, sendError, sendJson, sendRedirect } from './http.js'
 import { describeError } from './log.js'
@@ -210,6 +213,21 @@ function createOidcRoutes(context: AppContext, oidc: OidcConfig, client: OidcCli
   ]
 }
 
+/** Stand des zweiten Faktors fuer die Oberflaeche; die Durchsetzung liegt in den Guards. */
+async function secondFactorOf(context: AppContext, auth: SignedInSession): Promise<SecondFactorView> {
+  if (!requiresSecondFactor(auth.user)) {
+    return { state: 'not-required' }
+  }
+  if (auth.secondFactorPending) {
+    const enrolled = hasActiveTotp(await context.identity.secondFactors.findTotp(auth.user.id))
+    return { state: enrolled ? 'verification-required' : 'setup-required' }
+  }
+  return {
+    state: 'verified',
+    backupCodesRemaining: await context.identity.secondFactors.countUnusedBackupCodes(auth.user.id),
+  }
+}
+
 export function createAuthRoutes(context: AppContext): readonly Route[] {
   const { config, logger } = context
   const oidcClient = context.oidc
@@ -238,7 +256,8 @@ export function createAuthRoutes(context: AppContext): readonly Route[] {
       method: 'POST',
       path: AUTH_LOGOUT_PATH,
       handle: async ({ request, response }) => {
-        const auth = await requireSession(context, request, response)
+        // Auch ohne belegten zweiten Faktor: abmelden kann sich jede Sitzung.
+        const auth = await requireSignedIn(context, request, response)
         if (auth === null) {
           return
         }
@@ -268,7 +287,9 @@ export function createAuthRoutes(context: AppContext): readonly Route[] {
       method: 'GET',
       path: ME_PATH,
       handle: async ({ request, response }) => {
-        const auth = await requireSession(context, request, response)
+        // Auch ohne belegten zweiten Faktor: das Profil sind die Minimaldaten, mit denen die Oberflaeche
+        // Einrichtung oder Abfrage zeigt. Es traegt nichts, was die Sitzung nicht ohnehin kennt.
+        const auth = await requireSignedIn(context, request, response)
         if (auth === null) {
           return
         }
@@ -277,6 +298,7 @@ export function createAuthRoutes(context: AppContext): readonly Route[] {
           user: toUserView(auth.user),
           csrfToken: csrfTokenFor(auth.session.id, config.sessionSecret),
           appearance: appearance ?? DEFAULT_APPEARANCE,
+          secondFactor: await secondFactorOf(context, auth),
         }
         sendJson(response, 200, body)
       },

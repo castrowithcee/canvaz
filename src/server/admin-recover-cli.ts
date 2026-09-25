@@ -5,6 +5,9 @@
  * einmaligen, kurz gueltigen Link aus. Der Befehl nimmt **keine Argumente**: das Konto ermittelt er selbst,
  * und ein Geheimnis gehoert nicht in eine Kommandozeile, die in Shellverlauf und Prozessliste landet.
  *
+ * Mit eingerichtetem Postausgang erfaehrt der Systemadmin per Mail, dass eine Wiederherstellung laeuft - der
+ * Link steht nicht darin.
+ *
  * Der Link erscheint **auf der Standardausgabe und nirgends sonst**. Er wird nur als Hash gespeichert und
  * laesst sich danach nicht wieder abrufen; ein verlorener Link wird durch einen erneuten Aufruf ersetzt.
  *
@@ -17,6 +20,7 @@ import { recoverSystemAdmin } from './admin-recovery.js'
 import { loadConfig } from './config.js'
 import { recoveryUrl } from './invitations.js'
 import { consoleLogger } from './log.js'
+import { adminRecoveryMail, createSmtpMailer, deliver } from './mailer.js'
 
 if (process.argv.length > 2) {
   console.error('Aufruf ohne Argumente: npm run admin:recover (im Container: node dist/server/admin-recover-cli.js)')
@@ -50,6 +54,15 @@ try {
     console.log('Wiederherstellungslink (gilt genau einmal, ausserhalb der Anwendung uebergeben):')
     console.log(recoveryUrl(config.baseUrl, result.token))
     console.log(`Gueltig bis: ${result.expiresAt.toISOString()}`)
+    // Mitteilung an den Inhaber, soweit ein Postausgang eingerichtet ist - ausdruecklich ohne den Link.
+    if (config.mail !== null && result.user.email !== null) {
+      await deliver(
+        createSmtpMailer(config.mail),
+        consoleLogger,
+        'admin-recovery',
+        adminRecoveryMail(result.user.email, result.user.displayName, result.expiresAt, config.baseUrl),
+      )
+    }
   }
 } finally {
   await pool.end()

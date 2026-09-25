@@ -191,7 +191,7 @@ describe('Workspaces anlegen und sehen', () => {
   })
 
   it('verweigert jeden Workspaceendpunkt ohne Sitzung', async () => {
-    const anonym: Account = { jar: createJar(), profile: { user: {} as never, csrfToken: 'x', appearance: {} as never } }
+    const anonym: Account = { jar: createJar(), profile: { user: {} as never, csrfToken: 'x', appearance: {} as never, secondFactor: { state: 'not-required' } } }
 
     expect((await get(anonym, WORKSPACES_PATH)).status).toBe(401)
     expect((await get(anonym, WORKSPACE_MEMBERS_PATH, FREMDE_KENNUNG)).status).toBe(401)

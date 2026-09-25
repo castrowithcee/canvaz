@@ -235,11 +235,13 @@ function readInvitationToken(): string | null {
 const REDEEM_TEXTS = {
   invitation: {
     heading: 'Einladung einloesen',
+    note: null,
     incomplete: 'Dieser Einladungslink ist unvollstaendig. Bitte den vollstaendigen Link verwenden.',
     failed: 'Die Einladung konnte nicht eingeloest werden.',
   },
   recovery: {
     heading: 'Zugang wiederherstellen',
+    note: 'Die Wiederherstellung entfernt den bisherigen zweiten Faktor; danach richtest du ihn neu ein.',
     incomplete: 'Dieser Wiederherstellungslink ist unvollstaendig. Bitte den vollstaendigen Link verwenden.',
     failed: 'Der Zugang konnte nicht wiederhergestellt werden.',
   },
@@ -290,6 +292,7 @@ export function InviteApp({ purpose }: { readonly purpose: keyof typeof REDEEM_T
           }}
         >
           <p>Bitte setze dein Passwort. Der Link gilt genau einmal.</p>
+          {texts.note !== null && <p className="hint">{texts.note}</p>}
           <PasswordField
             id="einladung-passwort"
             label={`Passwort (mindestens ${String(MIN_PASSWORD_LENGTH)} Zeichen)`}

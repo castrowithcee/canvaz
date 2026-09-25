@@ -23,11 +23,13 @@ import type {
   ExternalIdentityKey,
   Session,
   SessionId,
+  SignedInSession,
   User,
   UserId,
   UserStatus,
 } from '../domain/identity/model.js'
-import { authenticate } from '../domain/identity/model.js'
+import { authenticate, signedIn } from '../domain/identity/model.js'
+import type { TotpFactor } from '../domain/identity/second-factor.js'
 import type { UserProfileDraft } from '../domain/identity/provisioning.js'
 import type { IdentityStore, LinkedIdentity, NewInvitation, NewSession } from '../domain/identity/repositories.js'
 import { IdentityConflictError } from '../domain/identity/repositories.js'
@@ -80,6 +82,17 @@ type SessionRow = {
   created_at: Date
   expires_at: Date
   revoked_at: Date | null
+  second_factor_verified_at: Date | null
+}
+
+type TotpFactorRow = {
+  user_id: string
+  secret_sealed: string | null
+  confirmed_at: Date | null
+  // `bigint` kommt aus `pg` als Zeichenkette.
+  last_used_step: string | null
+  pending_sealed: string | null
+  pending_created_at: Date | null
 }
 
 type CredentialRow = {
@@ -102,7 +115,40 @@ type InvitationRow = {
 
 const USER_COLUMNS = 'id, display_name, email, status, is_system_admin, created_at, updated_at'
 const IDENTITY_COLUMNS = 'id, user_id, issuer, subject, created_at, last_seen_at'
-const SESSION_COLUMNS = 'id, user_id, created_at, expires_at, revoked_at'
+const SESSION_COLUMNS = 'id, user_id, created_at, expires_at, revoked_at, second_factor_verified_at'
+const TOTP_COLUMNS = 'user_id, secret_sealed, confirmed_at, last_used_step, pending_sealed, pending_created_at'
+
+/** Sitzung samt Nutzer in einer Abfrage; beides entscheidet gemeinsam ueber die Gueltigkeit. */
+const SESSION_WITH_USER = `select s.id, s.user_id, s.created_at, s.expires_at, s.revoked_at, s.second_factor_verified_at,
+                  u.display_name, u.email, u.status, u.is_system_admin,
+                  u.created_at as user_created_at, u.updated_at as user_updated_at
+           from sessions s
+           join users u on u.id = s.user_id`
+
+type SessionWithUserRow = SessionRow & UserRow & { user_created_at: Date; user_updated_at: Date }
+
+function userOfSessionRow(row: SessionWithUserRow): User {
+  return toUser({
+    id: row.user_id,
+    display_name: row.display_name,
+    email: row.email,
+    status: row.status,
+    is_system_admin: row.is_system_admin,
+    created_at: row.user_created_at,
+    updated_at: row.user_updated_at,
+  })
+}
+
+function toTotpFactor(row: TotpFactorRow): TotpFactor {
+  return {
+    userId: row.user_id,
+    secretSealed: row.secret_sealed,
+    confirmedAt: row.confirmed_at,
+    lastUsedStep: row.last_used_step === null ? null : Number(row.last_used_step),
+    pendingSealed: row.pending_sealed,
+    pendingCreatedAt: row.pending_created_at,
+  }
+}
 const CREDENTIAL_COLUMNS = 'user_id, password_hash, must_change_password, updated_at'
 const INVITATION_COLUMNS = 'id, user_id, purpose, created_by_user_id, created_at, expires_at, redeemed_at, revoked_at'
 
@@ -160,6 +206,7 @@ function toSession(row: SessionRow): Session {
     createdAt: row.created_at,
     expiresAt: row.expires_at,
     revokedAt: row.revoked_at,
+    secondFactorVerifiedAt: row.second_factor_verified_at,
   }
 }
 
@@ -447,39 +494,25 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Identit
     sessions: {
       async create(session: NewSession): Promise<Session> {
         const result = await db.query<SessionRow>(
-          `insert into sessions (user_id, token_hash, expires_at)
-           values ($1, $2, $3)
+          `insert into sessions (user_id, token_hash, expires_at, second_factor_verified_at)
+           values ($1, $2, $3, $4)
            returning ${SESSION_COLUMNS}`,
-          [session.userId, session.tokenHash, session.expiresAt],
+          [session.userId, session.tokenHash, session.expiresAt, session.secondFactorVerifiedAt ?? null],
         )
         return toSession(requireRow(result.rows[0], 'Session konnte nicht angelegt werden'))
       },
 
       async findAuthenticatedByTokenHash(tokenHash: string, now: Date): Promise<AuthenticatedSession | null> {
-        const result = await db.query<SessionRow & UserRow & { user_created_at: Date; user_updated_at: Date }>(
-          `select s.id, s.user_id, s.created_at, s.expires_at, s.revoked_at,
-                  u.display_name, u.email, u.status, u.is_system_admin,
-                  u.created_at as user_created_at, u.updated_at as user_updated_at
-           from sessions s
-           join users u on u.id = s.user_id
-           where s.token_hash = $1`,
-          [tokenHash],
-        )
+        const result = await db.query<SessionWithUserRow>(`${SESSION_WITH_USER} where s.token_hash = $1`, [tokenHash])
         const row = result.rows[0]
-        if (row === undefined) {
-          return null
-        }
-        const user = toUser({
-          id: row.user_id,
-          display_name: row.display_name,
-          email: row.email,
-          status: row.status,
-          is_system_admin: row.is_system_admin,
-          created_at: row.user_created_at,
-          updated_at: row.user_updated_at,
-        })
         // Die Gueltigkeitsregel steht in der Domain, nicht in der Where-Klausel: eine Definition, ein Ort.
-        return authenticate(toSession(row), user, now)
+        return row === undefined ? null : authenticate(toSession(row), userOfSessionRow(row), now)
+      },
+
+      async findSignedInByTokenHash(tokenHash: string, now: Date): Promise<SignedInSession | null> {
+        const result = await db.query<SessionWithUserRow>(`${SESSION_WITH_USER} where s.token_hash = $1`, [tokenHash])
+        const row = result.rows[0]
+        return row === undefined ? null : signedIn(toSession(row), userOfSessionRow(row), now)
       },
 
       async revoke(id: SessionId, revokedAt: Date): Promise<void> {
@@ -497,28 +530,11 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Identit
         if (ids.length === 0) {
           return new Set()
         }
-        const result = await db.query<SessionRow & UserRow & { user_created_at: Date; user_updated_at: Date }>(
-          `select s.id, s.user_id, s.created_at, s.expires_at, s.revoked_at,
-                  u.display_name, u.email, u.status, u.is_system_admin,
-                  u.created_at as user_created_at, u.updated_at as user_updated_at
-           from sessions s
-           join users u on u.id = s.user_id
-           where s.id = any($1::uuid[])`,
-          [ids],
-        )
+        const result = await db.query<SessionWithUserRow>(`${SESSION_WITH_USER} where s.id = any($1::uuid[])`, [ids])
         const live = new Set<SessionId>()
         for (const row of result.rows) {
-          const user = toUser({
-            id: row.user_id,
-            display_name: row.display_name,
-            email: row.email,
-            status: row.status,
-            is_system_admin: row.is_system_admin,
-            created_at: row.user_created_at,
-            updated_at: row.user_updated_at,
-          })
           // Dieselbe Regel wie bei der Aufloesung eines Cookies: eine Definition, ein Ort.
-          if (authenticate(toSession(row), user, now) !== null) {
+          if (authenticate(toSession(row), userOfSessionRow(row), now) !== null) {
             live.add(row.id)
           }
         }
@@ -528,6 +544,82 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Identit
       async deleteExpired(before: Date): Promise<number> {
         const result = await db.query('delete from sessions where expires_at < $1', [before])
         return result.rowCount ?? 0
+      },
+    },
+
+    secondFactors: {
+      async findTotp(userId: UserId): Promise<TotpFactor | null> {
+        const result = await db.query<TotpFactorRow>(`select ${TOTP_COLUMNS} from user_totp_factors where user_id = $1`, [
+          userId,
+        ])
+        const row = result.rows[0]
+        return row === undefined ? null : toTotpFactor(row)
+      },
+
+      async beginTotp(userId: UserId, pendingSealed: string, now: Date): Promise<void> {
+        await db.query(
+          `insert into user_totp_factors (user_id, pending_sealed, pending_created_at)
+           values ($1, $2, $3)
+           on conflict (user_id) do update
+             set pending_sealed = excluded.pending_sealed,
+                 pending_created_at = excluded.pending_created_at,
+                 updated_at = now()`,
+          [userId, pendingSealed, now],
+        )
+      },
+
+      async activateTotp(userId: UserId, pendingSealed: string, step: number, now: Date): Promise<boolean> {
+        // Die Bedingung auf den offenen Wert macht die Aktivierung einmalig: ein gleichzeitiger zweiter
+        // Vorgang oder eine inzwischen ersetzte Einrichtung findet keine Zeile mehr.
+        const result = await db.query(
+          `update user_totp_factors
+             set secret_sealed = pending_sealed, confirmed_at = $4, last_used_step = $3,
+                 pending_sealed = null, pending_created_at = null, updated_at = now()
+           where user_id = $1 and pending_sealed = $2`,
+          [userId, pendingSealed, step, now],
+        )
+        return (result.rowCount ?? 0) === 1
+      },
+
+      async useTotpStep(userId: UserId, step: number): Promise<boolean> {
+        // Atomar: von zwei gleichzeitigen Anmeldungen mit demselben Code gewinnt genau eine.
+        const result = await db.query(
+          `update user_totp_factors set last_used_step = $2, updated_at = now()
+           where user_id = $1 and secret_sealed is not null and (last_used_step is null or last_used_step < $2)`,
+          [userId, step],
+        )
+        return (result.rowCount ?? 0) === 1
+      },
+
+      async replaceBackupCodes(userId: UserId, codeHashes: readonly string[]): Promise<void> {
+        await db.query('delete from user_backup_codes where user_id = $1', [userId])
+        await db.query(
+          `insert into user_backup_codes (user_id, code_hash)
+           select $1, unnest($2::text[])`,
+          [userId, codeHashes],
+        )
+      },
+
+      async useBackupCode(userId: UserId, codeHash: string, now: Date): Promise<boolean> {
+        const result = await db.query(
+          `update user_backup_codes set used_at = $3
+           where user_id = $1 and code_hash = $2 and used_at is null`,
+          [userId, codeHash, now],
+        )
+        return (result.rowCount ?? 0) === 1
+      },
+
+      async countUnusedBackupCodes(userId: UserId): Promise<number> {
+        const result = await db.query<{ count: number }>(
+          'select count(*)::int as count from user_backup_codes where user_id = $1 and used_at is null',
+          [userId],
+        )
+        return requireRow(result.rows[0], 'count lieferte keine Zeile').count
+      },
+
+      async removeAll(userId: UserId): Promise<void> {
+        await db.query('delete from user_backup_codes where user_id = $1', [userId])
+        await db.query('delete from user_totp_factors where user_id = $1', [userId])
       },
     },
 

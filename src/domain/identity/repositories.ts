@@ -7,6 +7,7 @@
 
 import type { AppearanceView } from '../../contracts/api.js'
 import type { InvitationPurpose, LocalCredential, UserInvitation, UserInvitationId } from './local-auth.js'
+import type { TotpFactor } from './second-factor.js'
 import type {
   AuthenticatedSession,
   ExternalIdentity,
@@ -14,6 +15,7 @@ import type {
   ExternalIdentityKey,
   Session,
   SessionId,
+  SignedInSession,
   User,
   UserId,
   UserStatus,
@@ -30,6 +32,8 @@ export type NewSession = {
   /** Hash des Session-Geheimnisses. Das Geheimnis selbst verlaesst den Server nur im Cookie. */
   readonly tokenHash: string
   readonly expiresAt: Date
+  /** Ohne Angabe `null`: die Sitzung hat den zweiten Faktor nicht belegt. */
+  readonly secondFactorVerifiedAt?: Date | null
 }
 
 /**
@@ -168,9 +172,16 @@ export interface SessionRepository {
   create(session: NewSession): Promise<Session>
   /**
    * Loest ein Session-Geheimnis auf. Liefert nur, was der Domain-Invariante `authenticate` genuegt:
-   * lebende Session eines aktiven Nutzers. Alles andere ist `null`.
+   * lebende Session eines aktiven Nutzers, bei Faktorpflicht mit belegtem zweitem Faktor. Alles andere ist
+   * `null`.
    */
   findAuthenticatedByTokenHash(tokenHash: string, now: Date): Promise<AuthenticatedSession | null>
+  /**
+   * Dasselbe nach dem ersten Faktor (`signedIn`): liefert auch eine Sitzung, deren zweiter Faktor noch
+   * aussteht, und sagt das in `secondFactorPending`. Fuer die Guards, die eine solche Sitzung gezielt
+   * ablehnen, und fuer die wenigen Endpunkte, die sie bedienen.
+   */
+  findSignedInByTokenHash(tokenHash: string, now: Date): Promise<SignedInSession | null>
   revoke(id: SessionId, revokedAt: Date): Promise<void>
   /** Widerruft alle Sessions eines Nutzers, etwa beim Deaktivieren. */
   revokeAllForUser(userId: UserId, revokedAt: Date): Promise<void>
@@ -186,6 +197,33 @@ export interface SessionRepository {
 }
 
 /**
+ * Zweiter Faktor: TOTP-Geheimnis und Ersatzcodes.
+ *
+ * Die Persistenz kennt nur versiegelte Geheimnisse und Hashes. Jede zustandsaendernde Methode ist so
+ * gebaut, dass zwei gleichzeitige Vorgaenge nicht beide gewinnen: ein Zeitschritt, ein Ersatzcode und eine
+ * angefangene Einrichtung werden je genau einmal angenommen.
+ */
+export interface SecondFactorRepository {
+  findTotp(userId: UserId): Promise<TotpFactor | null>
+  /** Beginnt eine Einrichtung oder ersetzt eine angefangene. Ein aktives Geheimnis bleibt unberuehrt. */
+  beginTotp(userId: UserId, pendingSealed: string, now: Date): Promise<void>
+  /**
+   * Macht die angefangene Einrichtung zum aktiven Faktor - nur, solange noch genau `pendingSealed` offen ist.
+   * `step` ist der Zeitschritt des bestaetigenden Codes und gilt danach als verbraucht.
+   */
+  activateTotp(userId: UserId, pendingSealed: string, step: number, now: Date): Promise<boolean>
+  /** Verbraucht einen Zeitschritt des aktiven Faktors. `false`: derselbe oder ein spaeterer war schon da. */
+  useTotpStep(userId: UserId, step: number): Promise<boolean>
+  /** Ersetzt alle Ersatzcodes des Kontos durch diese Hashes. */
+  replaceBackupCodes(userId: UserId, codeHashes: readonly string[]): Promise<void>
+  /** Loest einen Ersatzcode ein. `false`: unbekannt oder bereits verbraucht - auch gleichzeitig. */
+  useBackupCode(userId: UserId, codeHash: string, now: Date): Promise<boolean>
+  countUnusedBackupCodes(userId: UserId): Promise<number>
+  /** Entfernt Faktor und Ersatzcodes. Einziger Aufrufer ist die Einloesung einer Betreiber-Wiederherstellung. */
+  removeAll(userId: UserId): Promise<void>
+}
+
+/**
  * Gebuendelter Zugang zur Identitaetspersistenz. `transaction` gibt dem Aufrufer Atomaritaet ueber mehrere
  * Repositories, ohne dass der Domain-Core die Datenbank kennt: die Provisionierung legt Nutzer, Verknuepfung
  * und Session entweder gemeinsam an oder gar nicht.
@@ -198,5 +236,6 @@ export interface IdentityStore {
   readonly invitations: InvitationRepository
   readonly sessions: SessionRepository
   readonly loginThrottle: LoginThrottleRepository
+  readonly secondFactors: SecondFactorRepository
   transaction<T>(run: (store: IdentityStore) => Promise<T>): Promise<T>
 }

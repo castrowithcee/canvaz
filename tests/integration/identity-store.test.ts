@@ -230,7 +230,12 @@ describe('Transaktion', () => {
     expect((await store.externalIdentities.findByKey({ issuer: ISSUER, subject: 'sub-1' }))?.identity.id).toBe(
       result.identity.id,
     )
-    expect((await store.sessions.findAuthenticatedByTokenHash('hash-1', new Date()))?.user.id).toBe(result.user.id)
+    // Systemadmin ohne zweiten Faktor: die Sitzung besteht, traegt aber noch keine Rechte.
+    expect(await store.sessions.findSignedInByTokenHash('hash-1', new Date())).toMatchObject({
+      user: { id: result.user.id },
+      secondFactorPending: true,
+    })
+    expect(await store.sessions.findAuthenticatedByTokenHash('hash-1', new Date())).toBeNull()
   })
 })
 

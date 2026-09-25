@@ -18,6 +18,7 @@ import { createFolderRoutes } from './folder-routes.js'
 import type { Route } from './http.js'
 import { sendBytes, sendJson } from './http.js'
 import { createLocalAuthRoutes } from './local-auth-routes.js'
+import { createSecondFactorRoutes } from './second-factor-routes.js'
 import { describeError } from './log.js'
 import { createWorkspaceRoutes } from './workspace-routes.js'
 
@@ -86,6 +87,7 @@ export function createRoutes(context: AppContext): readonly Route[] {
     },
     ...createAuthRoutes(context),
     ...createLocalAuthRoutes(context),
+    ...createSecondFactorRoutes(context),
     ...createAdminRoutes(context),
     ...createWorkspaceRoutes(context),
     ...createFolderRoutes(context),

@@ -47,7 +47,7 @@ import { resolveGuestSession } from './guest-session.js'
 import type { Logger } from './log.js'
 import type { Requester } from './requester.js'
 import { requesterFields, sessionIdOf } from './requester.js'
-import { resolveSession } from './session.js'
+import { resolveSignedIn } from './session.js'
 
 /**
  * Andockpunkt fuer die spaetere Realtime-Strecke.
@@ -175,6 +175,13 @@ export function createRealtimeGateway(options: RealtimeOptions): RealtimeGateway
       return
     }
     const requester = await resolveRequester(request)
+    if (requester === 'second-factor-pending') {
+      // Dieselbe Grenze wie im HTTP-Guard: ohne belegten zweiten Faktor keine Verbindung - auch nicht ueber
+      // ein Gastcookie im selben Browser.
+      options.logger('warn', 'realtime.upgrade.denied', { path: url.pathname, reason: 'zweiter-faktor' })
+      reject(socket, 403, 'Forbidden')
+      return
+    }
     if (requester === null) {
       // Standardmaessig verweigernd: ohne gueltige Sitzung entsteht kein WebSocket. Fuer einen Gast heisst
       // das zusaetzlich: ohne lebenden Link keine Verbindung, auch nicht mit gueltigem Gastcookie.
@@ -252,11 +259,11 @@ export function createRealtimeGateway(options: RealtimeOptions): RealtimeGateway
    * Dieselbe Rangfolge wie im HTTP-Guard: wer angemeldet ist, verbindet sich als er selbst und faellt nicht
    * wegen eines alten Gastcookies im selben Browser auf Gastrechte zurueck.
    */
-  async function resolveRequester(request: IncomingMessage): Promise<Requester | null> {
+  async function resolveRequester(request: IncomingMessage): Promise<Requester | 'second-factor-pending' | null> {
     const now = options.now()
-    const auth = await resolveSession(options.identity, options.config, request, now)
+    const auth = await resolveSignedIn(options.identity, options.config, request, now)
     if (auth !== null) {
-      return { kind: 'user', auth }
+      return auth.secondFactorPending ? 'second-factor-pending' : { kind: 'user', auth }
     }
     const guest = await resolveGuestSession(options.boards, options.config, request, now)
     return guest === null ? null : { kind: 'guest', guest }

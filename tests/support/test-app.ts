@@ -58,6 +58,9 @@ export type TestApp = {
 
 export const TEST_SESSION_SECRET = 'test-session-secret-mit-mehr-als-32-zeichen'
 
+/** Schluessel des zweiten Faktors der Tests: 32 feste Bytes, base64 - wie `openssl rand -base64 32`. */
+export const TEST_MFA_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64')
+
 export async function startTestApp(options: {
   /**
    * Der Test-Provider. **Ohne ihn startet die Anwendung ohne jede OIDC-Konfiguration** - genau so, wie eine
@@ -94,6 +97,7 @@ export async function startTestApp(options: {
     CANVAZ_WEB_ROOT: 'dist/web',
     DATABASE_URL: options.databaseUrl,
     CANVAZ_SESSION_SECRET: TEST_SESSION_SECRET,
+    CANVAZ_MFA_ENCRYPTION_KEY: TEST_MFA_ENCRYPTION_KEY,
     CANVAZ_SESSION_TTL_HOURS: String(options.sessionTtlHours ?? 12),
     ...(options.provider === undefined
       ? {}

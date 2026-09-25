@@ -19,7 +19,13 @@ import { createInvitationToken, hashInvitationToken, recoveryUrl } from '../../s
 import { takeLoginAttempt } from '../../src/server/login-throttle.js'
 import { createJar } from '../support/browser-client.js'
 import type { Jar } from '../support/browser-client.js'
-import { localLogin, profileOf, redeemInvitation, signedInAsSystemAdmin } from '../support/local-accounts.js'
+import {
+  completeSecondFactorSetup,
+  localLogin,
+  profileOf,
+  redeemInvitation,
+  signedInAsSystemAdmin,
+} from '../support/local-accounts.js'
 import { openRealtime } from '../support/realtime-socket.js'
 import { TEST_SESSION_SECRET, startTestApp } from '../support/test-app.js'
 import type { TestApp } from '../support/test-app.js'
@@ -136,6 +142,9 @@ describe('Betreiberbefehl mit genau einem Systemadmin', () => {
 
     const profil = await profileOf(app, jar)
     expect(profil.user).toEqual(admin.profile.user)
+    // Die Einloesung hat den zweiten Faktor entfernt: erst die Neueinrichtung gibt die Sitzung frei.
+    expect(profil.secondFactor).toEqual({ state: 'setup-required' })
+    await completeSecondFactorSetup(app, jar)
     const liste = (await (await jar.fetch(`${app.baseUrl}${WORKSPACES_PATH}`)).json()) as WorkspacesResponse
     expect(liste.workspaces.map((entry) => [entry.id, entry.role])).toEqual([[workspace.id, 'owner']])
     expect((await localLogin(app, createJar(), 'root@example.com', NEUES_PASSWORT)).status).toBe(200)

@@ -12,7 +12,7 @@
  * - Jede Sitzung des Kontos wird widerrufen. HTTP und neue WebSocket-Verbindungen scheitern sofort, offene
  *   Verbindungen beendet die Nachpruefung des Verbindungsregisters (`realtime.ts`).
  * - Jede offene Einladung und jeder offene Wiederherstellungswert des Kontos wird widerrufen.
- * - Eine laufende Drosselung der Anmeldung des Kontos (`login-throttle.ts`) wird aufgehoben.
+ * - Eine laufende Drosselung des Kontos (`login-throttle.ts`, beide Stufen) wird aufgehoben.
  * - Ein neuer, zufaelliger Wert entsteht, gespeichert nur als Hash, genau einmal einloesbar und kurz
  *   befristet (`RECOVERY_TTL_MINUTES`).
  *
@@ -20,8 +20,10 @@
  * nacheinander, und der zweite widerruft den Wert des ersten. Es gibt nie zwei gleichzeitig gueltige Werte.
  *
  * Eingeloest wird ueber den Weg jeder Einladung: der Empfaenger setzt sein Passwort selbst, Rolle,
- * Status und Mitgliedschaften bleiben unveraendert. Was eine Wiederherstellung kuenftig zusaetzlich
- * zuruecksetzen muss, etwa einen zweiten Faktor, haengt am Zweck `recovery` der eingeloesten Zeile.
+ * Status und Mitgliedschaften bleiben unveraendert. Am Zweck `recovery` der eingeloesten Zeile haengt, was
+ * nur eine Wiederherstellung darf: sie entfernt den zweiten Faktor samt Ersatzcodes, und die naechste
+ * Anmeldung fuehrt zu dessen Neueinrichtung. Der Befehl selbst laesst den Faktor stehen - ohne Einloesung
+ * aendert sich daran nichts.
  */
 
 import type { User } from '../domain/identity/model.js'
@@ -29,7 +31,7 @@ import { isUserActive } from '../domain/identity/model.js'
 import { recoveryExpiry } from '../domain/identity/local-auth.js'
 import type { IdentityStore } from '../domain/identity/repositories.js'
 import { createInvitationToken, hashInvitationToken } from './invitations.js'
-import { clearLoginAttempts } from './login-throttle.js'
+import { clearLoginAttempts, clearSecondFactorAttempts } from './login-throttle.js'
 
 export type RecoveryResult =
   /** `token` ist der Wiederherstellungswert und erscheint genau hier ein einziges Mal. */
@@ -63,6 +65,7 @@ export async function recoverSystemAdmin(
     await tx.sessions.revokeAllForUser(admin.id, now)
     await tx.invitations.revokeOpenForUser(admin.id, now)
     await clearLoginAttempts(tx, sessionSecret, admin.email)
+    await clearSecondFactorAttempts(tx, sessionSecret, admin.id)
     const token = createInvitationToken()
     const expiresAt = recoveryExpiry(now)
     await tx.invitations.create({

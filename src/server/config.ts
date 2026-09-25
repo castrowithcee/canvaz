@@ -52,6 +52,11 @@ export type AppConfig = {
   readonly secureCookies: boolean
   readonly databaseUrl: string
   readonly sessionSecret: string
+  /**
+   * 32 Byte fuer AES-256-GCM: versiegelt das TOTP-Geheimnis und leitet den Schluessel der Ersatzcodes ab.
+   * Pflichtwert ohne Ersatz - dieselbe Regel wie beim Sitzungsgeheimnis.
+   */
+  readonly mfaEncryptionKey: Buffer
   readonly sessionTtlSeconds: number
   /** `null` heisst: kein Identity Provider konfiguriert. Die Instanz zeigt und bedient dann nur den lokalen Weg. */
   readonly oidc: OidcConfig | null
@@ -140,6 +145,27 @@ export class ConfigError extends Error {
 type Env = Record<string, string | undefined>
 
 const MIN_SESSION_SECRET_LENGTH = 32
+
+/** Laenge des Schluessels fuer AES-256-GCM in Bytes. */
+const MFA_KEY_BYTES = 32
+
+/**
+ * Schluessel des zweiten Faktors: base64 (oder base64url) fuer genau 32 Byte, etwa aus
+ * `openssl rand -base64 32`. Ein beliebiger Text wuerde still zu einem schwachen Schluessel; deshalb
+ * zaehlt nur ein Wert, der sich vollstaendig und in genau dieser Laenge dekodieren laesst.
+ */
+function readMfaKey(env: Env, problems: string[]): Buffer {
+  const name = 'CANVAZ_MFA_ENCRYPTION_KEY'
+  const raw = readRequired(env, name, problems)
+  if (raw === '') {
+    return Buffer.alloc(0)
+  }
+  const key = /^[A-Za-z0-9+/_-]+={0,2}$/.test(raw) ? Buffer.from(raw, 'base64') : Buffer.alloc(0)
+  if (key.length !== MFA_KEY_BYTES) {
+    problems.push(`${name} muss genau ${String(MFA_KEY_BYTES)} Byte in base64 sein, z. B. aus \`openssl rand -base64 32\``)
+  }
+  return key
+}
 
 function readRequired(env: Env, name: string, problems: string[]): string {
   const value = env[name]?.trim()
@@ -416,6 +442,7 @@ export function loadConfig(env: Env = process.env): AppConfig {
     secureCookies: baseUrl.startsWith('https:'),
     databaseUrl,
     sessionSecret,
+    mfaEncryptionKey: readMfaKey(env, problems),
     sessionTtlSeconds: readInteger(env, 'CANVAZ_SESSION_TTL_HOURS', 12, 1, 720, problems) * SECONDS_PER_HOUR,
     oidc: readOidc(env, problems),
     mail: readMail(env, problems),

@@ -115,6 +115,7 @@ describe('Cookie-Namen', () => {
     CANVAZ_BASE_URL: 'https://canvaz.example.com',
     DATABASE_URL: 'postgres://canvaz:geheim@db:5432/canvaz',
     CANVAZ_SESSION_SECRET: SECRET,
+    CANVAZ_MFA_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString('base64'),
     CANVAZ_OIDC_ISSUER: 'https://idp.example.com',
     CANVAZ_OIDC_CLIENT_ID: 'canvaz',
     CANVAZ_OIDC_CLIENT_SECRET: 'client-secret',

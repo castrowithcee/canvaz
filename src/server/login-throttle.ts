@@ -19,6 +19,7 @@
 
 import { createHmac } from 'node:crypto'
 
+import type { UserId } from '../domain/identity/model.js'
 import type { IdentityStore } from '../domain/identity/repositories.js'
 import type { AppConfig } from './config.js'
 
@@ -50,4 +51,31 @@ export async function clearLoginAttempts(
   if (email !== null) {
     await store.loginThrottle.clear(loginThrottleKey(email, sessionSecret))
   }
+}
+
+/**
+ * Schluessel der zweiten Stufe eines Kontos.
+ *
+ * Dasselbe Verfahren und dasselbe Budget wie die Anmeldung, aber ein eigener Zaehler: wer das Passwort kennt,
+ * soll mit Codeversuchen nicht zugleich den Inhaber von der ersten Stufe aussperren - und umgekehrt. Gezaehlt
+ * wird hier die Nutzerkennung, weil die Sitzung das Konto bereits bestimmt.
+ */
+function secondFactorThrottleKey(userId: UserId, sessionSecret: string): string {
+  return createHmac('sha256', sessionSecret).update(`second-factor-throttle:${userId}`).digest('hex')
+}
+
+/** Bucht einen Versuch auf TOTP-Code oder Ersatzcode des Kontos. `false` heisst: Budget erschoepft. */
+export async function takeSecondFactorAttempt(
+  store: IdentityStore,
+  config: ThrottleConfig,
+  userId: UserId,
+  now: Date,
+): Promise<boolean> {
+  const windowStart = new Date(now.getTime() - config.authAccountWindowMinutes * 60_000)
+  const attempts = await store.loginThrottle.hit(secondFactorThrottleKey(userId, config.sessionSecret), now, windowStart)
+  return attempts <= config.authAccountAttempts
+}
+
+export async function clearSecondFactorAttempts(store: IdentityStore, sessionSecret: string, userId: UserId): Promise<void> {
+  await store.loginThrottle.clear(secondFactorThrottleKey(userId, sessionSecret))
 }

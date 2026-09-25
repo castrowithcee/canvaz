@@ -15,6 +15,10 @@
  *   Konto ergeben dieselbe Antwort, und alle drei kosten dieselbe Rechenzeit - auch ohne Konto und auch
  *   gedrosselt wird ein Hash geprueft.
  *
+ * **Keine dieser Sitzungen belegt einen zweiten Faktor.** Fuer den Systemadmin ist jede davon eingeschraenkt,
+ * bis er ihn einrichtet oder bestaetigt (`second-factor-routes.ts`); ein Passwortwechsel oder eine Einloesung
+ * umgeht ihn damit nicht.
+ *
  * Ein Passwort und ein Einladungswert erscheinen in keiner Antwort, in keiner Protokollzeile und in keinem
  * Auditereignis; gespeichert wird ausschliesslich ein Hash.
  *
@@ -42,7 +46,8 @@ import type { AppContext } from './context.js'
 import type { Route } from './http.js'
 import { readJsonBody, sendError, sendJson } from './http.js'
 import { hashInvitationToken } from './invitations.js'
-import { clearLoginAttempts, takeLoginAttempt } from './login-throttle.js'
+import { clearLoginAttempts, clearSecondFactorAttempts, takeLoginAttempt } from './login-throttle.js'
+import { deliver, secondFactorChangedMail } from './mailer.js'
 import { hashPassword, isSamePassword, verifyPassword } from './password.js'
 import { clientKey, createRateLimiter } from './rate-limit.js'
 import { setSessionCookie, startSession } from './session.js'
@@ -293,8 +298,23 @@ export function createLocalAuthRoutes(context: AppContext): readonly Route[] {
           await store.localCredentials.set(user.id, passwordHash, { mustChangePassword: false })
           // Wer den Wert einloest, hat Zugang: eine laufende Drosselung des Kontos endet damit.
           await clearLoginAttempts(store, config.sessionSecret, user.email)
+          // Der enge Notfallpfad beim Verlust aller Faktoren: nur eine Betreiber-Wiederherstellung entfernt
+          // den zweiten Faktor. Die neue Sitzung hat keinen Nachweis und fuehrt zur Neueinrichtung.
+          const secondFactorRemoved = invitation.purpose === 'recovery'
+          if (secondFactorRemoved) {
+            await store.secondFactors.removeAll(user.id)
+            await clearSecondFactorAttempts(store, config.sessionSecret, user.id)
+          }
           const sessionToken = await replaceSessions(store, user.id, now)
-          return { kind: 'ok', userId: user.id, purpose: invitation.purpose, token: sessionToken } as const
+          return {
+            kind: 'ok',
+            userId: user.id,
+            email: user.email,
+            displayName: user.displayName,
+            purpose: invitation.purpose,
+            secondFactorRemoved,
+            token: sessionToken,
+          } as const
         })
         if (outcome.kind === 'invalid') {
           logger('warn', 'auth.invitation.rejected', { reason: 'not-redeemable' })
@@ -314,6 +334,17 @@ export function createLocalAuthRoutes(context: AppContext): readonly Route[] {
         setSessionCookie(response, config, outcome.token)
         // Der Zweck unterscheidet im Protokoll eine Wiederherstellung per Betreiberbefehl von einer Einladung.
         logger('info', 'auth.invitation.redeemed', { userId: outcome.userId, purpose: outcome.purpose })
+        if (outcome.secondFactorRemoved) {
+          logger('info', 'auth.second-factor.changed', { userId: outcome.userId, change: 'removed-by-recovery' })
+          if (outcome.email !== null) {
+            await deliver(
+              context.mailer,
+              logger,
+              'second-factor-changed',
+              secondFactorChangedMail(outcome.email, outcome.displayName, 'removed-by-recovery', config.baseUrl),
+            )
+          }
+        }
         const ok: LocalLoginResponse = { status: 'ok' }
         sendJson(response, 200, ok)
       },

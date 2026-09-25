@@ -779,6 +779,49 @@
     position: absolute;
   }
 
+  /* Zweiter Faktor: nummerierte Schritte, ein Schluessel zum Abtippen und die Ersatzcodes einer Ausgabe. */
+  .steps {
+    display: flex;
+    flex-direction: column;
+    gap: --spacing(3);
+    list-style: decimal;
+    margin: 0;
+    padding-left: --spacing(6);
+  }
+
+  .secret-key {
+    display: block;
+    font-size: var(--text-base);
+    letter-spacing: 0.08em;
+    margin-block: --spacing(2);
+    max-width: 100%;
+    padding: --spacing(2) --spacing(3);
+    width: fit-content;
+  }
+
+  .code-input {
+    font-family: var(--font-mono);
+    letter-spacing: 0.12em;
+    max-width: 14rem;
+  }
+
+  .backup-codes {
+    display: grid;
+    gap: --spacing(2);
+    grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .backup-codes code {
+    display: block;
+    font-size: var(--text-base);
+    letter-spacing: 0.05em;
+    padding: --spacing(1) --spacing(2);
+    text-align: center;
+  }
+
   .check-control {
     align-items: center;
     cursor: pointer;
