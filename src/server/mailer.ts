@@ -51,6 +51,9 @@ export function createSmtpMailer(config: MailConfig): Mailer {
     host: config.host,
     port: config.port,
     secure: config.secure,
+    // Ohne implizites TLS muss der Server STARTTLS anbieten, sonst bricht der Versand vor der Nachricht ab.
+    // Nur die ausdrueckliche Ausnahme laesst eine Klartextverbindung zu.
+    requireTLS: !config.allowInsecure,
     ...(config.auth === null ? {} : { auth: { user: config.auth.user, pass: config.auth.password } }),
     connectionTimeout: CONNECTION_TIMEOUT_MS,
     greetingTimeout: GREETING_TIMEOUT_MS,
