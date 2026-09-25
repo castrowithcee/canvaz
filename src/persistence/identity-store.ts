@@ -30,8 +30,15 @@ import type {
 } from '../domain/identity/model.js'
 import { authenticate, signedIn } from '../domain/identity/model.js'
 import type { TotpFactor } from '../domain/identity/second-factor.js'
+import type { RecoveryEmailToken, RecoveryEmailTokenPurpose, SelfRecovery } from '../domain/identity/self-recovery.js'
 import type { UserProfileDraft } from '../domain/identity/provisioning.js'
-import type { IdentityStore, LinkedIdentity, NewInvitation, NewSession } from '../domain/identity/repositories.js'
+import type {
+  IdentityStore,
+  LinkedIdentity,
+  NewInvitation,
+  NewRecoveryEmailToken,
+  NewSession,
+} from '../domain/identity/repositories.js'
 import { IdentityConflictError } from '../domain/identity/repositories.js'
 
 type Queryable = Pick<PoolClient, 'query'>
@@ -111,6 +118,45 @@ type InvitationRow = {
   expires_at: Date
   redeemed_at: Date | null
   revoked_at: Date | null
+}
+
+type SelfRecoveryRow = {
+  user_id: string
+  allowed: boolean
+  email: string | null
+  verified_at: Date | null
+}
+
+type RecoveryEmailTokenRow = {
+  id: string
+  user_id: string
+  purpose: string
+  email: string
+  created_at: Date
+  expires_at: Date
+  redeemed_at: Date | null
+  revoked_at: Date | null
+}
+
+const SELF_RECOVERY_COLUMNS = 'user_id, allowed, email, verified_at'
+const RECOVERY_TOKEN_COLUMNS = 'id, user_id, purpose, email, created_at, expires_at, redeemed_at, revoked_at'
+
+function toSelfRecovery(row: SelfRecoveryRow): SelfRecovery {
+  return { userId: row.user_id, allowed: row.allowed, email: row.email, verifiedAt: row.verified_at }
+}
+
+function toRecoveryEmailToken(row: RecoveryEmailTokenRow): RecoveryEmailToken {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    // Der Check-Constraint laesst nur diese beiden Werte zu.
+    purpose: row.purpose as RecoveryEmailTokenPurpose,
+    email: row.email,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+    redeemedAt: row.redeemed_at,
+    revokedAt: row.revoked_at,
+  }
 }
 
 const USER_COLUMNS = 'id, display_name, email, status, is_system_admin, created_at, updated_at'
@@ -620,6 +666,100 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Identit
       async removeAll(userId: UserId): Promise<void> {
         await db.query('delete from user_backup_codes where user_id = $1', [userId])
         await db.query('delete from user_totp_factors where user_id = $1', [userId])
+      },
+    },
+
+    selfRecovery: {
+      async find(userId: UserId): Promise<SelfRecovery | null> {
+        const result = await db.query<SelfRecoveryRow>(
+          `select ${SELF_RECOVERY_COLUMNS} from user_self_recovery where user_id = $1`,
+          [userId],
+        )
+        const row = result.rows[0]
+        return row === undefined ? null : toSelfRecovery(row)
+      },
+
+      async findForUpdate(userId: UserId): Promise<SelfRecovery | null> {
+        const result = await db.query<SelfRecoveryRow>(
+          `select ${SELF_RECOVERY_COLUMNS} from user_self_recovery where user_id = $1 for update`,
+          [userId],
+        )
+        const row = result.rows[0]
+        return row === undefined ? null : toSelfRecovery(row)
+      },
+
+      async list(): Promise<readonly SelfRecovery[]> {
+        const result = await db.query<SelfRecoveryRow>(`select ${SELF_RECOVERY_COLUMNS} from user_self_recovery`)
+        return result.rows.map(toSelfRecovery)
+      },
+
+      async setAllowed(userId: UserId, allowed: boolean): Promise<void> {
+        await db.query(
+          `insert into user_self_recovery (user_id, allowed) values ($1, $2)
+           on conflict (user_id) do update set allowed = excluded.allowed, updated_at = now()`,
+          [userId, allowed],
+        )
+      },
+
+      async setVerifiedEmail(userId: UserId, email: string, verifiedAt: Date): Promise<void> {
+        await db.query(
+          `update user_self_recovery set email = $2, verified_at = $3, updated_at = now() where user_id = $1`,
+          [userId, email, verifiedAt],
+        )
+      },
+
+      async createToken(token: NewRecoveryEmailToken): Promise<RecoveryEmailToken> {
+        const result = await db.query<RecoveryEmailTokenRow>(
+          `insert into recovery_email_tokens (user_id, purpose, email, token_hash, expires_at)
+           values ($1, $2, $3, $4, $5)
+           returning ${RECOVERY_TOKEN_COLUMNS}`,
+          [token.userId, token.purpose, token.email, token.tokenHash, token.expiresAt],
+        )
+        return toRecoveryEmailToken(requireRow(result.rows[0], 'Link konnte nicht angelegt werden'))
+      },
+
+      async findTokenByHash(tokenHash: string): Promise<RecoveryEmailToken | null> {
+        // `for update` wie bei der Einladung: gleichzeitige Einloesungen laufen nacheinander.
+        const result = await db.query<RecoveryEmailTokenRow>(
+          `select ${RECOVERY_TOKEN_COLUMNS} from recovery_email_tokens where token_hash = $1 for update`,
+          [tokenHash],
+        )
+        const row = result.rows[0]
+        return row === undefined ? null : toRecoveryEmailToken(row)
+      },
+
+      async markTokenRedeemed(id: string, redeemedAt: Date): Promise<boolean> {
+        const result = await db.query(
+          `update recovery_email_tokens set redeemed_at = $2
+           where id = $1 and redeemed_at is null and revoked_at is null`,
+          [id, redeemedAt],
+        )
+        return (result.rowCount ?? 0) === 1
+      },
+
+      async findOpenToken(
+        userId: UserId,
+        purpose: RecoveryEmailTokenPurpose,
+        now: Date,
+      ): Promise<RecoveryEmailToken | null> {
+        const result = await db.query<RecoveryEmailTokenRow>(
+          `select ${RECOVERY_TOKEN_COLUMNS} from recovery_email_tokens
+           where user_id = $1 and purpose = $2 and redeemed_at is null and revoked_at is null and expires_at > $3
+           order by created_at desc
+           limit 1`,
+          [userId, purpose, now],
+        )
+        const row = result.rows[0]
+        return row === undefined ? null : toRecoveryEmailToken(row)
+      },
+
+      async revokeOpenTokens(userId: UserId, revokedAt: Date, purpose?: RecoveryEmailTokenPurpose): Promise<number> {
+        const result = await db.query(
+          `update recovery_email_tokens set revoked_at = $2
+           where user_id = $1 and redeemed_at is null and revoked_at is null and ($3::text is null or purpose = $3)`,
+          [userId, revokedAt, purpose ?? null],
+        )
+        return result.rowCount ?? 0
       },
     },
 

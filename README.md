@@ -68,9 +68,9 @@ Mitgliedschaften haengen unveraendert am Profil, und `authenticate()` bleibt die
 
 ### Lokale Benutzerverwaltung
 
-Konten legt **ausschliesslich ein Systemadmin** an; eine Selbstregistrierung gibt es nicht, und die Instanz
-versendet keine Mail. Bei der Anlage waehlt er einen der beiden Wege der Uebergabe - beide werden ausserhalb
-der Anwendung uebermittelt:
+Konten legt **ausschliesslich ein Systemadmin** an; eine Selbstregistrierung gibt es nicht. Bei der Anlage
+waehlt er einen der beiden Wege der Uebergabe - beide werden ausserhalb der Anwendung uebermittelt, mit
+[Postausgang](#postausgang-optional) geht der Einladungslink zusaetzlich per Mail:
 
 - **Initialpasswort**: der Systemadmin vergibt es. Es steht in keiner Antwort und in keinem Protokoll. Die
   erste Anmeldung damit legt **keine Sitzung** an, sondern verlangt den Wechsel; erst der Wechsel meldet an.
@@ -80,7 +80,9 @@ der Anwendung uebermittelt:
   mitsendet. Ein verlorener Link wird widerrufen und neu erzeugt.
 
 Dieselben beiden Wege dienen der **Ruecksetzung** durch den Systemadmin. Eine Ruecksetzung und ein Wechsel
-widerrufen jede bestehende Sitzung des Kontos und schliessen dessen offene Verbindungen.
+widerrufen jede bestehende Sitzung des Kontos und schliessen dessen offene Verbindungen. Mit Postausgang
+kann ein freigeschaltetes Konto sein Passwort zusaetzlich selbst zuruecksetzen (siehe
+[Passwort vergessen](#passwort-vergessen-selbstwiederherstellung-per-mail)).
 
 Passwoerter liegen ausschliesslich als **scrypt**-Hash (`N=2^15`, `r=8`, `p=1`, 16 Byte Salz, `node:crypto`)
 in `local_credentials`; das Format traegt seine Parameter selbst, damit ein gespeicherter Hash pruefbar
@@ -119,8 +121,8 @@ vielen Absendern sie kommen. Einzelheiten:
 - Das Fenster beginnt mit dem ersten Versuch; weitere Versuche verlaengern es nicht. Danach endet die
   Drosselung **von selbst** - eine dauerhafte Sperre, die jeder Fremde ausloesen koennte, gibt es nicht.
 - Eine richtige Anmeldung und ein Passwortwechsel setzen die Zaehlung des Kontos zurueck, ebenso die
-  Einloesung einer Einladung oder eines Wiederherstellungswerts, die administrative Ruecksetzung und
-  `admin:recover`. Das sind zugleich die Wege, ein unter Beschuss stehendes Konto sofort freizugeben.
+  Einloesung einer Einladung, eines Wiederherstellungswerts oder eines Ruecksetzungslinks, die
+  administrative Ruecksetzung und `admin:recover`. Das sind zugleich die Wege, ein unter Beschuss stehendes Konto sofort freizugeben.
 - Eine unbekannte Adresse, ein falsches Passwort und ein gedrosseltes Konto ergeben **dieselbe Antwort**
   (`401`) und kosten dieselbe Rechenzeit; auch gedrosselt wird ein Hash geprueft. Das Protokoll
   unterscheidet die Faelle (`auth.local.login.failed`, `auth.local.login.throttled`) und nennt dabei
@@ -131,6 +133,49 @@ vielen Absendern sie kommen. Einzelheiten:
 ueberwiegend gedrosselt. Die Freigabe durch die Administration hilft dann nur kurz; die eigentliche Abhilfe
 ist, die Absender am Proxy oder in der Firewall zu sperren. Die Grenze je Client liegt weiterhin im Speicher
 des Prozesses und beginnt nach einem Neustart neu.
+
+### Passwort vergessen (Selbstwiederherstellung per Mail)
+
+Ein gewoehnliches Konto mit lokalem Passwort kann sein vergessenes Passwort selbst neu setzen - wenn der
+Systemadmin es **freigeschaltet** hat und der Inhaber eine **bestaetigte Wiederherstellungsadresse** hat.
+Alle anderen, auch der Systemadmin selbst, wenden sich an die Administration bzw. den Betrieb
+(`admin:recover`).
+
+- **Nur mit Postausgang.** `/api/auth/methods` meldet `passwordReset: true` genau dann, wenn einer
+  konfiguriert ist; nur dann zeigt die Anmeldeseite "Passwort vergessen?". Ohne ihn nennt sie den Weg ueber
+  die Administration, und die Endpunkte antworten `404`.
+- **Freischaltung** je Konto in der Systemadministration, Standard aus. Abgelehnt wird sie serverseitig fuer
+  den Systemadmin, ein deaktiviertes Konto und ein Konto ohne lokales Passwort (nur OIDC oder noch offene
+  Einladung). Gaeste haben kein Konto und damit keinen Weg. Abschalten und Deaktivieren widerrufen jeden
+  offenen Bestaetigungs- und Ruecksetzungslink.
+- **Wiederherstellungsadresse** (`user_self_recovery`): ein eigenes Merkmal neben der Anmeldeadresse, gern
+  dieselbe. Setzen und Aendern im Konto verlangen das aktuelle Passwort (auf das Anmeldebudget des Kontos)
+  und gelten erst, wenn der Bestaetigungslink an die neue Adresse (`/adresse-bestaetigen#<token>`, 24
+  Stunden, einmal) eingeloest ist; bis dahin bleibt die bisherige bestaetigte Adresse der Weg. Eine
+  spaetere Aenderung der Anmeldeadresse (etwa ueber OIDC) laesst sie unberuehrt. Hoechstens
+  `CANVAZ_AUTH_RATE_LIMIT_PER_ACCOUNT` Bestaetigungsmails je Konto und Fenster.
+- **Anfrage** mit der Anmeldeadresse: die Antwort (`202`) ist fuer jede Adresse dieselbe und geht **vor**
+  jeder kontoabhaengigen Arbeit hinaus - Kontosuche, Link und Versand laufen danach im Hintergrund. Weder
+  Inhalt noch Antwortzeit unterscheiden unbekannte, deaktivierte, nicht freigeschaltete, nicht bestaetigte,
+  reine OIDC- und Adminkonten von einem zulaessigen. Das Ergebnis steht nur im Protokoll
+  (`auth.password-reset.issued|skipped|throttled`, `mail.sent|failed`), mit Nutzerkennung, nie mit Link.
+- **Flutschutz:** die Ratengrenze je Client der Anmeldestrecken, dazu je eingegebener Adresse ein eigener
+  Zaehler mit dem Budget der Anmeldung (`CANVAZ_AUTH_RATE_LIMIT_PER_ACCOUNT` je
+  `CANVAZ_AUTH_RATE_LIMIT_WINDOW_MINUTES`), und je Konto hoechstens **ein** offener Link: solange er gilt,
+  geht keine weitere Mail. Eine Anfrage aendert weder Passwort noch Sitzungen und verbraucht kein
+  Anmeldebudget; aussperren kann sie niemanden.
+- **Ruecksetzungslink** (`/passwort-zuruecksetzen#<token>`) nur an die bestaetigte Adresse: 32 zufaellige
+  Bytes, gespeichert nur als SHA-256-Hash (`recovery_email_tokens`), **15 Minuten** gueltig, genau einmal
+  einloesbar, auch gleichzeitig. Er traegt weder Rolle noch Sitzung noch Passwort.
+- **Einloesung:** neues Passwort nach der Passwortregel; ein abgelehntes Passwort verbraucht den Link nicht.
+  Danach sind alle Sitzungen, offenen Links und offenen Einladungen des Kontos widerrufen, offene
+  Verbindungen geschlossen und die Anmeldedrosselung aufgehoben. **Es entsteht keine Sitzung** - der Inhaber
+  meldet sich mit dem neuen Passwort an. Kontoidentitaet, Status, Rollen und Mitgliedschaften bleiben
+  unveraendert. Eine Mitteilung ohne Link und Passwort geht an die bestaetigte Adresse.
+
+**Bekannte Grenzen:** die Antwort auf eine Anfrage wartet nicht auf den Versand; ein Neustart in diesem
+Moment verliert die Mail (eine neue Anfrage hilft). Wer Sitzung und Passwort eines Kontos kennt, kann die
+Wiederherstellungsadresse auf eine eigene umstellen; die bisherige Adresse erfaehrt davon nichts.
 
 ### Erster Systemadmin
 
@@ -248,13 +293,16 @@ Rueckweg. Deshalb gleich nach dem Update anmelden und einrichten.
 ### Postausgang (optional)
 
 Ohne konfigurierten Postausgang verschickt die Instanz **nichts**: ein Einladungslink steht genau einmal in
-der Antwort der Anlage, und wer ihn zustellt, entscheidet der Betrieb. Mit Postausgang kommen diese
-Nachrichten dazu, jede an die Adresse des betroffenen Kontos:
+der Antwort der Anlage, und wer ihn zustellt, entscheidet der Betrieb; eine Selbstwiederherstellung gibt es
+dann nicht. Mit Postausgang kommen diese Nachrichten dazu, jede an eine Adresse des betroffenen Kontos:
 
 | Anlass | Inhalt |
 | --- | --- |
 | Konto angelegt oder Einladung erneuert | der Einladungslink, gueltig 72 Stunden und einmal einloesbar |
 | Passwort administrativ zurueckgesetzt | die Mitteilung, dass es zurueckgesetzt wurde - **ohne** das neue Passwort |
+| Wiederherstellungsadresse eingetragen | an die **neue** Adresse: der Bestaetigungslink, 24 Stunden, einmal |
+| Ruecksetzung angefragt (freigeschaltetes Konto) | an die **bestaetigte** Wiederherstellungsadresse: der Ruecksetzungslink, 15 Minuten, einmal |
+| Passwort per Ruecksetzungslink gesetzt | an die bestaetigte Wiederherstellungsadresse: die Mitteilung - **ohne** Link und Passwort |
 | Zweiter Faktor des Systemadmins geaendert oder per Wiederherstellung entfernt | die Mitteilung, dass es geschah - **ohne** Geheimnis oder Ersatzcode |
 | `admin:recover` ausgefuehrt | die Mitteilung an den Systemadmin - **ohne** den Wiederherstellungslink |
 
@@ -331,6 +379,10 @@ Codeeinloesung, damit es genau einmal gilt.
 | POST | `/api/auth/local/login` | oeffentlich, eigene Ratengrenze je Client und je Zielkonto, Herkunftspruefung |
 | POST | `/api/auth/local/password` | oeffentlich, verlangt das bisherige Passwort; dieselben Grenzen |
 | POST | `/api/auth/invitation/redeem` | oeffentlich, verlangt einen gueltigen Einladungs- oder Wiederherstellungswert |
+| POST | `/api/auth/password-reset/request` | oeffentlich, Grenzen je Client und je Adresse; **nur mit Postausgang**, Antwort immer `202` |
+| POST | `/api/auth/password-reset/redeem` | oeffentlich, verlangt einen gueltigen Ruecksetzungslink; meldet nicht an |
+| POST | `/api/auth/recovery-email/confirm` | oeffentlich, verlangt einen gueltigen Bestaetigungslink |
+| POST | `/api/me/recovery-email` | angemeldet + CSRF-Token + aktuelles Passwort; **nur mit Postausgang** |
 | GET | `/api/auth/login` | oeffentlich, leitet zum Identity Provider; **nur mit OIDC-Konfiguration** |
 | GET | `/api/auth/callback` | oeffentlich, Pfad stammt aus `CANVAZ_OIDC_REDIRECT_URI`; **nur mit OIDC-Konfiguration** |
 | POST | `/api/auth/logout` | angemeldet + CSRF-Token |
@@ -340,6 +392,7 @@ Codeeinloesung, damit es genau einmal gilt.
 | POST | `/api/admin/users/password` | angemeldet + Systemadmin + CSRF-Token |
 | POST | `/api/admin/users/invitation` | angemeldet + Systemadmin + CSRF-Token |
 | POST | `/api/admin/users/invitation/revoke` | angemeldet + Systemadmin + CSRF-Token |
+| POST | `/api/admin/users/self-recovery` | angemeldet + Systemadmin + CSRF-Token |
 | POST | `/api/admin/users/status` | angemeldet + Systemadmin + CSRF-Token |
 | GET (Upgrade) | `/api/realtime` | angemeldet **oder** gueltige Gastsession; WebSocket-Einstieg der Realtime-Strecke |
 | POST | `/api/boards/guest/join` | oeffentlich, verlangt ein gueltiges Freigabetoken und die eigene Herkunft |
@@ -1588,6 +1641,13 @@ Anwendungsprozess vollstaendig ersetzen, abrufen, Bytes vergleichen.
 Anwendung: die Einladung traegt denselben Link wie die Antwort, eine erneuerte Einladung nicht mehr den
 alten, und die Mitteilung ueber eine Ruecksetzung nennt das neue Passwort nicht. Der Test kennt keinen
 SMTP-Server - er sammelt am Port der Anwendung, weil dort die Zusage liegt und nicht im Transport.
+
+`tests/integration/self-recovery.test.ts` prueft die Selbstwiederherstellung je Zusage mit einem Fall:
+Freischaltung (nie fuer den Systemadmin), Bestaetigung und Aenderung der Adresse, kein Weg ohne Postausgang,
+genau eine Mail fuer ein zulaessiges Konto und dieselbe Antwort ohne Versand fuer alle anderen, der offene
+Link als Flutgrenze, die Drosselung je Adresse ohne Sperre der Anmeldung, ungueltiger, abgelaufener,
+verbrauchter und gleichzeitig eingeloester Link, Widerruf von Sitzungen und Links ohne Anmeldung,
+unveraendertes Konto und kein Klartext in Datenbank und Protokoll.
 
 `tests/integration/second-factor.test.ts` prueft den zweiten Faktor je Zusage mit einem Fall: eingeschraenkte
 Sitzung nach lokaler und OIDC-Anmeldung (HTTP und WebSocket), Einrichtung, falscher, wiederholter und um

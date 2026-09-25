@@ -50,6 +50,7 @@ import { clearLoginAttempts, clearSecondFactorAttempts, takeLoginAttempt } from 
 import { deliver, secondFactorChangedMail } from './mailer.js'
 import { hashPassword, isSamePassword, verifyPassword } from './password.js'
 import { clientKey, createRateLimiter } from './rate-limit.js'
+import { createSelfRecoveryRoutes } from './self-recovery-routes.js'
 import { setSessionCookie, startSession } from './session.js'
 
 /**
@@ -108,7 +109,7 @@ export function createLocalAuthRoutes(context: AppContext): readonly Route[] {
     return origin === undefined || origin === allowedOrigin
   }
 
-  /** Gemeinsamer Vorlauf der drei Endpunkte. `false` heisst: die Anfrage ist bereits beantwortet. */
+  /** Gemeinsamer Vorlauf der unangemeldeten Endpunkte, auch der Selbstwiederherstellung. `false` heisst: die Anfrage ist bereits beantwortet. */
   function guard(request: IncomingMessage, response: ServerResponse, event: string): boolean {
     if (!hasAllowedOrigin(request)) {
       logger('warn', 'auth.local.foreign-origin', { event })
@@ -137,6 +138,9 @@ export function createLocalAuthRoutes(context: AppContext): readonly Route[] {
   }
 
   return [
+    // Die Selbstwiederherstellung teilt Herkunftspruefung und Ratengrenze je Client mit diesen Strecken.
+    ...createSelfRecoveryRoutes(context, guard),
+
     {
       method: 'POST',
       path: AUTH_LOCAL_LOGIN_PATH,

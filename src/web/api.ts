@@ -17,7 +17,14 @@ import type {
   CreateUserResponse,
   LocalLoginRequest,
   LocalLoginResponse,
+  PasswordResetRequest,
+  PasswordResetRequestResponse,
   RedeemInvitationRequest,
+  RedeemPasswordResetRequest,
+  SelfRecoveryResultResponse,
+  SelfRecoveryView,
+  SetRecoveryEmailRequest,
+  SetSelfRecoveryRequest,
   ResetPasswordRequest,
   SecondFactorBackupCodesResponse,
   SecondFactorEnrollResponse,
@@ -70,6 +77,7 @@ import {
   ADMIN_USER_INVITATION_PATH,
   ADMIN_USER_INVITATION_REVOKE_PATH,
   ADMIN_USER_PASSWORD_PATH,
+  ADMIN_USER_SELF_RECOVERY_PATH,
   ADMIN_USER_STATUS_PATH,
   ADMIN_USERS_PATH,
   ASSET_FILE_ID_PARAM,
@@ -78,6 +86,9 @@ import {
   AUTH_LOCAL_PASSWORD_PATH,
   AUTH_LOGOUT_PATH,
   AUTH_METHODS_PATH,
+  AUTH_PASSWORD_RESET_REDEEM_PATH,
+  AUTH_PASSWORD_RESET_REQUEST_PATH,
+  AUTH_RECOVERY_EMAIL_CONFIRM_PATH,
   AUTH_SECOND_FACTOR_BACKUP_CODES_PATH,
   AUTH_SECOND_FACTOR_CONFIRM_PATH,
   AUTH_SECOND_FACTOR_ENROLL_PATH,
@@ -122,6 +133,7 @@ import {
   FOLDERS_PATH,
   ME_APPEARANCE_PATH,
   ME_PATH,
+  ME_RECOVERY_EMAIL_PATH,
   WORKSPACE_ID_PARAM,
   WORKSPACE_MEMBER_ADD_PATH,
   WORKSPACE_MEMBER_CANDIDATES_PATH,
@@ -216,6 +228,24 @@ export async function redeemInvitation(redemption: RedeemInvitationRequest): Pro
   return request<LocalLoginResponse>(AUTH_INVITATION_REDEEM_PATH, anonymousPost(redemption))
 }
 
+/** Ruecksetzungslink anfordern. Die Antwort ist fuer jede Adresse dieselbe. */
+export async function requestPasswordReset(requested: PasswordResetRequest): Promise<PasswordResetRequestResponse> {
+  return request<PasswordResetRequestResponse>(AUTH_PASSWORD_RESET_REQUEST_PATH, anonymousPost(requested))
+}
+
+/** Ruecksetzungslink einloesen. Es entsteht keine Sitzung. */
+export async function redeemPasswordReset(redemption: RedeemPasswordResetRequest): Promise<SelfRecoveryResultResponse> {
+  return request<SelfRecoveryResultResponse>(AUTH_PASSWORD_RESET_REDEEM_PATH, anonymousPost(redemption))
+}
+
+export async function confirmRecoveryEmail(token: string): Promise<SelfRecoveryResultResponse> {
+  return request<SelfRecoveryResultResponse>(AUTH_RECOVERY_EMAIL_CONFIRM_PATH, anonymousPost({ token }))
+}
+
+export async function setRecoveryEmail(csrfToken: string, change: SetRecoveryEmailRequest): Promise<SelfRecoveryView> {
+  return request<SelfRecoveryView>(ME_RECOVERY_EMAIL_PATH, mutation(csrfToken, change))
+}
+
 /**
  * Zweiter Faktor. Jeder dieser Aufrufe, der gelingt und einen Code verbraucht, ersetzt die Sitzung: danach
  * gilt ein neues CSRF-Token, und die Oberflaeche laedt das Profil neu.
@@ -254,6 +284,10 @@ export async function createUserInvitation(csrfToken: string, userId: string): P
 
 export async function revokeUserInvitation(csrfToken: string, userId: string): Promise<UserView> {
   return request<UserView>(ADMIN_USER_INVITATION_REVOKE_PATH, mutation(csrfToken, { userId }))
+}
+
+export async function setUserSelfRecovery(csrfToken: string, change: SetSelfRecoveryRequest): Promise<UserView> {
+  return request<UserView>(ADMIN_USER_SELF_RECOVERY_PATH, mutation(csrfToken, change))
 }
 
 export async function setUserStatus(csrfToken: string, change: SetUserStatusRequest): Promise<UserView> {

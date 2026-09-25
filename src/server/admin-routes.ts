@@ -15,7 +15,8 @@
  *    erscheint genau einmal in der Anlageantwort und ist danach nicht wieder abrufbar; ein verlorener Link
  *    wird widerrufen und neu erzeugt.
  *
- * Die Instanz versendet nichts: Mailversand ist ausdruecklich nicht Teil des Produkts.
+ * Ohne Postausgang versendet die Instanz nichts; mit ihm gehen Einladung und Mitteilungen zusaetzlich per
+ * Mail (`mailer.ts`). Die Selbstwiederherstellung per Mail schaltet der Systemadmin je Konto frei.
  *
  * Deaktivieren widerruft alle Sitzungen des betroffenen Nutzers und schliesst seine offenen WebSockets; es
  * wirkt damit auf **beide** Anmeldewege sofort. Ein Systemadmin kann sich selbst nicht deaktivieren, sonst
@@ -27,6 +28,7 @@ import type {
   AdminUsersResponse,
   CreateInvitationResponse,
   CreateUserResponse,
+  SetSelfRecoveryRequest,
   SetUserStatusRequest,
   UserStatusView,
 } from '../contracts/api.js'
@@ -35,6 +37,7 @@ import {
   ADMIN_USER_INVITATION_PATH,
   ADMIN_USER_INVITATION_REVOKE_PATH,
   ADMIN_USER_PASSWORD_PATH,
+  ADMIN_USER_SELF_RECOVERY_PATH,
   ADMIN_USER_STATUS_PATH,
   ADMIN_USERS_PATH,
 } from '../contracts/api.js'
@@ -42,6 +45,7 @@ import type { UserInvitation } from '../domain/identity/local-auth.js'
 import { invitationExpiry, normalizeDisplayName, normalizeEmail, parsePassword } from '../domain/identity/local-auth.js'
 import type { User, UserId } from '../domain/identity/model.js'
 import type { IdentityStore } from '../domain/identity/repositories.js'
+import { selfRecoveryAllowable } from '../domain/identity/self-recovery.js'
 import { IdentityConflictError } from '../domain/identity/repositories.js'
 import type { AppContext } from './context.js'
 import { requireCsrfToken, requireSession, requireSystemAdmin, toUserView } from './guard.js'
@@ -67,6 +71,19 @@ function parseStatusRequest(body: Record<string, unknown> | null): SetUserStatus
   const parsed = STATUSES.find((candidate) => candidate === status)
   return parsed === undefined ? null : { userId, status: parsed }
 }
+
+function parseSelfRecoveryRequest(body: Record<string, unknown> | null): SetSelfRecoveryRequest | null {
+  const userId = body?.['userId']
+  const allowed = body?.['allowed']
+  return typeof userId === 'string' && userId.length > 0 && typeof allowed === 'boolean' ? { userId, allowed } : null
+}
+
+/** Warum ein Konto nicht freigeschaltet werden kann; der Satz erscheint unveraendert in der Oberflaeche. */
+const SELF_RECOVERY_REFUSALS = {
+  'system-admin': 'Der Systemadmin stellt seinen Zugang ausschliesslich ueber admin:recover wieder her.',
+  'user-deactivated': 'Ein deaktiviertes Konto kann nicht freigeschaltet werden.',
+  'no-local-password': 'Dieses Konto hat kein lokales Passwort, das sich zuruecksetzen liesse.',
+} as const
 
 function readUserId(body: Record<string, unknown> | null): UserId | null {
   const userId = body?.['userId']
@@ -115,13 +132,15 @@ export function createAdminRoutes(context: AppContext): readonly Route[] {
           return
         }
         const now = context.now()
-        const [users, withPassword, openInvitations] = await Promise.all([
+        const [users, withPassword, openInvitations, selfRecoveries] = await Promise.all([
           context.identity.users.list(),
           context.identity.localCredentials.listUserIds(),
           context.identity.invitations.listOpen(now),
+          context.identity.selfRecovery.list(),
         ])
         const passwords = new Set(withPassword)
         const invitations = new Map(openInvitations.map((invitation) => [invitation.userId, invitation]))
+        const recoveries = new Map(selfRecoveries.map((recovery) => [recovery.userId, recovery]))
         const body: AdminUsersResponse = {
           users: users.map((user): AdminUserView => {
             const invitation = invitations.get(user.id)
@@ -129,6 +148,8 @@ export function createAdminRoutes(context: AppContext): readonly Route[] {
               ...toUserView(user),
               hasPassword: passwords.has(user.id),
               invitationExpiresAt: invitation?.expiresAt.toISOString() ?? null,
+              selfRecoveryAllowed: recoveries.get(user.id)?.allowed ?? false,
+              recoveryEmailVerified: (recoveries.get(user.id)?.email ?? null) !== null,
             }
           }),
         }
@@ -253,6 +274,8 @@ export function createAdminRoutes(context: AppContext): readonly Route[] {
           await store.localCredentials.set(userId, passwordHash, { mustChangePassword: true })
           // Eine offene Einladung waere ein zweiter Weg auf dasselbe Konto; die Ruecksetzung schliesst ihn.
           await store.invitations.revokeOpenForUser(userId, now)
+          // Ebenso ein offener Ruecksetzungslink der Selbstwiederherstellung.
+          await store.selfRecovery.revokeOpenTokens(userId, now, 'reset')
           await store.sessions.revokeAllForUser(userId, now)
           // Der Notfallweg fuer ein gedrosseltes Konto: mit dem neuen Passwort geht es sofort weiter.
           await clearLoginAttempts(store, config.sessionSecret, target.email)
@@ -344,6 +367,59 @@ export function createAdminRoutes(context: AppContext): readonly Route[] {
       },
     },
 
+    /**
+     * Selbstwiederherstellung per Mail freischalten oder abschalten.
+     *
+     * Freischalten laesst sich nur ein aktives Konto mit lokalem Passwort und ohne Systemadminrolle - die
+     * Regel steht in der Domain und gilt bei jeder Anfrage und Einloesung noch einmal. Abschalten widerruft
+     * jeden offenen Bestaetigungs- und Ruecksetzungslink; eine bestaetigte Adresse bleibt stehen.
+     */
+    {
+      method: 'POST',
+      path: ADMIN_USER_SELF_RECOVERY_PATH,
+      handle: async ({ request, response }) => {
+        const auth = await requireSession(context, request, response)
+        if (auth === null || !requireCsrfToken(context, request, response, asRequester(auth))) {
+          return
+        }
+        if (!requireSystemAdmin(context, response, auth)) {
+          return
+        }
+        const parsed = parseSelfRecoveryRequest(await readJsonBody(request))
+        if (parsed === null) {
+          sendError(response, 400, 'userId und allowed werden erwartet')
+          return
+        }
+        const target = await context.identity.users.findById(parsed.userId)
+        if (target === null) {
+          sendError(response, 404, 'Unbekannter Nutzer')
+          return
+        }
+        if (parsed.allowed) {
+          const credential = await context.identity.localCredentials.findByUserId(target.id)
+          const allowable = selfRecoveryAllowable(target, credential !== null)
+          if (allowable !== 'ok') {
+            logger('warn', 'admin.user.self-recovery.refused', { actorId: auth.user.id, userId: target.id, reason: allowable })
+            sendError(response, 400, SELF_RECOVERY_REFUSALS[allowable])
+            return
+          }
+        }
+        const now = context.now()
+        await context.identity.transaction(async (store) => {
+          await store.selfRecovery.setAllowed(target.id, parsed.allowed)
+          if (!parsed.allowed) {
+            await store.selfRecovery.revokeOpenTokens(target.id, now)
+          }
+        })
+        logger('info', 'admin.user.self-recovery.changed', {
+          actorId: auth.user.id,
+          userId: target.id,
+          allowed: parsed.allowed,
+        })
+        sendJson(response, 200, toUserView(target))
+      },
+    },
+
     {
       method: 'POST',
       path: ADMIN_USER_STATUS_PATH,
@@ -371,12 +447,13 @@ export function createAdminRoutes(context: AppContext): readonly Route[] {
         }
         const updated = await context.identity.users.setStatus(parsed.userId, parsed.status)
         if (parsed.status === 'deactivated') {
-          // Sofort wirksam und fuer beide Anmeldewege: bestehende Sitzungen, offene Verbindungen und eine
-          // noch offene Einladung enden mit der Deaktivierung.
+          // Sofort wirksam und fuer beide Anmeldewege: bestehende Sitzungen, offene Verbindungen, eine noch
+          // offene Einladung und offene Links der Selbstwiederherstellung enden mit der Deaktivierung.
           const now = context.now()
           await context.identity.transaction(async (store) => {
             await store.sessions.revokeAllForUser(parsed.userId, now)
             await store.invitations.revokeOpenForUser(parsed.userId, now)
+            await store.selfRecovery.revokeOpenTokens(parsed.userId, now)
           })
           context.realtime.closeUser(parsed.userId)
         }

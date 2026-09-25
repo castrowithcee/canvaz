@@ -79,3 +79,36 @@ export async function takeSecondFactorAttempt(
 export async function clearSecondFactorAttempts(store: IdentityStore, sessionSecret: string, userId: UserId): Promise<void> {
   await store.loginThrottle.clear(secondFactorThrottleKey(userId, sessionSecret))
 }
+
+/**
+ * Anfragen eines Ruecksetzungslinks je eingegebener Anmeldeadresse.
+ *
+ * Dasselbe Verfahren und dasselbe Budget, aber ein eigener Zaehler: wer fremde Adressen mit Anfragen
+ * ueberzieht, verbraucht damit nicht das Anmeldebudget des Inhabers - eine Anfrage sperrt niemanden aus.
+ * Wie bei der Anmeldung zaehlt die Eingabe, ob es das Konto gibt oder nicht.
+ */
+export async function takePasswordResetAttempt(
+  store: IdentityStore,
+  config: ThrottleConfig,
+  email: string,
+  now: Date,
+): Promise<boolean> {
+  const key = createHmac('sha256', config.sessionSecret).update(`password-reset-throttle:${email}`).digest('hex')
+  const windowStart = new Date(now.getTime() - config.authAccountWindowMinutes * 60_000)
+  return (await store.loginThrottle.hit(key, now, windowStart)) <= config.authAccountAttempts
+}
+
+/**
+ * Bestaetigungsmails an eine neue Wiederherstellungsadresse je Konto. Ohne diese Grenze koennte ein
+ * angemeldetes Konto beliebige fremde Postfaecher mit Bestaetigungslinks fluten.
+ */
+export async function takeRecoveryEmailAttempt(
+  store: IdentityStore,
+  config: ThrottleConfig,
+  userId: UserId,
+  now: Date,
+): Promise<boolean> {
+  const key = createHmac('sha256', config.sessionSecret).update(`recovery-email-throttle:${userId}`).digest('hex')
+  const windowStart = new Date(now.getTime() - config.authAccountWindowMinutes * 60_000)
+  return (await store.loginThrottle.hit(key, now, windowStart)) <= config.authAccountAttempts
+}

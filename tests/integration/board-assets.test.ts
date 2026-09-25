@@ -369,7 +369,7 @@ describe('Upload', () => {
     const ada = await signedInAs('ada')
     const workspace = await createWorkspace(ada, 'Team Nord')
     const board = await createBoard(ada, workspace.id, 'Bildboard')
-    const anonym: Account = { jar: createJar(), profile: { user: {} as never, csrfToken: 'x', appearance: {} as never, secondFactor: { state: 'not-required' } } }
+    const anonym: Account = { jar: createJar(), profile: { user: {} as never, csrfToken: 'x', appearance: {} as never, secondFactor: { state: 'not-required' }, selfRecovery: null } }
 
     expect((await upload(anonym, board.id, 'datei-1', png('fremd'))).status).toBe(401)
     expect((await download(anonym, board.id, 'datei-1')).status).toBe(401)

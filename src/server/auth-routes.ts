@@ -46,6 +46,7 @@ import { describeError } from './log.js'
 import type { OidcClient } from './oidc.js'
 import { OidcError } from './oidc.js'
 import { asRequester } from './requester.js'
+import { selfRecoveryViewOf } from './self-recovery-routes.js'
 import { clearSessionCookie, csrfTokenFor, setSessionCookie, startSession } from './session.js'
 
 /** Der Callback antwortet immer mit einer Weiterleitung auf die Startseite - mit oder ohne Fehlercode. */
@@ -247,7 +248,12 @@ export function createAuthRoutes(context: AppContext): readonly Route[] {
       method: 'GET',
       path: AUTH_METHODS_PATH,
       handle: ({ response }) => {
-        const body: AuthMethodsResponse = { local: true, oidc: config.oidc !== null }
+        const body: AuthMethodsResponse = {
+          local: true,
+          oidc: config.oidc !== null,
+          // Die Selbstwiederherstellung braucht einen Postausgang; ob ein Konto sie hat, steht hier nicht.
+          passwordReset: context.mailer !== null,
+        }
         sendJson(response, 200, body)
       },
     },
@@ -299,6 +305,7 @@ export function createAuthRoutes(context: AppContext): readonly Route[] {
           csrfToken: csrfTokenFor(auth.session.id, config.sessionSecret),
           appearance: appearance ?? DEFAULT_APPEARANCE,
           secondFactor: await secondFactorOf(context, auth),
+          selfRecovery: await selfRecoveryViewOf(context, auth.user),
         }
         sendJson(response, 200, body)
       },

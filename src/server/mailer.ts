@@ -4,7 +4,9 @@
  * Diese Nachrichten verlassen Canvaz: die Einladung, die ein Konto uebergibt, die Mitteilung, dass ein
  * Passwort administrativ zurueckgesetzt wurde, und fuer den Systemadmin die Mitteilungen ueber eine
  * Aenderung seines zweiten Faktors und ueber eine Betreiber-Wiederherstellung. Jede geht an die Adresse des
- * betroffenen Kontos und an keine andere.
+ * betroffenen Kontos und an keine andere. Die Selbstwiederherstellung schreibt stattdessen an die
+ * Wiederherstellungsadresse: den Bestaetigungslink an die neue, Ruecksetzungslink und Mitteilung ueber die
+ * Ruecksetzung an die bestaetigte.
  *
  * ## Was in einer Mail steht und was nicht
  *
@@ -25,6 +27,7 @@ import { createTransport } from 'nodemailer'
 import type { Transporter } from 'nodemailer'
 
 import { INVITATION_TTL_HOURS } from '../domain/identity/local-auth.js'
+import { PASSWORD_RESET_TTL_MINUTES, RECOVERY_EMAIL_CONFIRM_TTL_HOURS } from '../domain/identity/self-recovery.js'
 import type { MailConfig } from './config.js'
 import type { Logger } from './log.js'
 import { describeError } from './log.js'
@@ -185,6 +188,65 @@ export function adminRecoveryMail(to: string, displayName: string, expiresAt: Da
       baseUrl,
       '',
       'Haben Sie die Wiederherstellung nicht angefragt, verstaendigen Sie sofort den Betrieb.',
+      '',
+    ].join('\n'),
+  }
+}
+
+/** Bestaetigung einer Wiederherstellungsadresse. Geht an die neue Adresse und belegt deren Besitz. */
+export function recoveryEmailConfirmMail(to: string, displayName: string, url: string): Mail {
+  return {
+    to,
+    subject: 'Wiederherstellungsadresse fuer Canvaz bestaetigen',
+    text: [
+      `Hallo ${displayName},`,
+      '',
+      'diese Adresse wurde als Wiederherstellungsadresse Ihres Canvaz-Kontos eingetragen. Ueber diesen Link',
+      'bestaetigen Sie sie:',
+      '',
+      url,
+      '',
+      `Der Link gilt ${String(RECOVERY_EMAIL_CONFIRM_TTL_HOURS)} Stunden und laesst sich genau einmal einloesen.`,
+      'Haben Sie das nicht veranlasst, ignorieren Sie diese Nachricht - ohne Bestaetigung passiert nichts.',
+      '',
+    ].join('\n'),
+  }
+}
+
+/** Ruecksetzungslink der Selbstwiederherstellung. Geht ausschliesslich an die bestaetigte Adresse. */
+export function selfResetLinkMail(to: string, displayName: string, url: string): Mail {
+  return {
+    to,
+    subject: 'Canvaz-Passwort zuruecksetzen',
+    text: [
+      `Hallo ${displayName},`,
+      '',
+      'fuer Ihr Canvaz-Konto wurde ein neues Passwort angefragt. Ueber diesen Link vergeben Sie es:',
+      '',
+      url,
+      '',
+      `Der Link gilt ${String(PASSWORD_RESET_TTL_MINUTES)} Minuten und laesst sich genau einmal einloesen.`,
+      'Haben Sie das nicht angefragt, ignorieren Sie diese Nachricht: Ihr Passwort und Ihre Sitzungen bleiben',
+      'unveraendert.',
+      '',
+    ].join('\n'),
+  }
+}
+
+/** Mitteilung nach einer Selbstwiederherstellung - ohne Link und ohne Passwort. */
+export function selfResetDoneMail(to: string, displayName: string, baseUrl: string): Mail {
+  return {
+    to,
+    subject: 'Ihr Canvaz-Passwort wurde geaendert',
+    text: [
+      `Hallo ${displayName},`,
+      '',
+      'das Passwort Ihres Canvaz-Kontos wurde ueber einen Ruecksetzungslink neu gesetzt. Alle Sitzungen',
+      'wurden dabei beendet; melden Sie sich mit dem neuen Passwort an.',
+      '',
+      baseUrl,
+      '',
+      'Waren Sie das nicht, wenden Sie sich sofort an Ihre Administration.',
       '',
     ].join('\n'),
   }

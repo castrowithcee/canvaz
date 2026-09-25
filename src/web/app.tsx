@@ -7,9 +7,11 @@
  * (`second-factor.tsx`); der Server laesst ihr ohnehin nichts anderes zu.
  *
  * Die angemeldete Anwendung ist eine dauerhafte Huelle aus Kopfzeile, Explorer und Inhaltsbereich; die
- * gezeigte Ansicht entscheidet die Adresse (siehe `router.ts`). Daneben stehen **genau drei** weitere
- * Adressen: die Gastansicht unter `GUEST_APP_PATH`, das Einloesen einer Einladung unter `INVITE_APP_PATH`
- * und dasselbe fuer eine Wiederherstellung unter `RECOVERY_APP_PATH`. Sie werden vor jedem Sitzungszustand
+ * gezeigte Ansicht entscheidet die Adresse (siehe `router.ts`). Daneben stehen **genau fuenf** weitere
+ * Adressen: die Gastansicht unter `GUEST_APP_PATH`, das Einloesen einer Einladung unter `INVITE_APP_PATH`,
+ * dasselbe fuer eine Wiederherstellung unter `RECOVERY_APP_PATH`, der Ruecksetzungslink der
+ * Selbstwiederherstellung unter `PASSWORD_RESET_APP_PATH` und die Bestaetigung einer
+ * Wiederherstellungsadresse unter `RECOVERY_EMAIL_CONFIRM_APP_PATH`. Sie werden vor jedem Sitzungszustand
  * entschieden, damit weder ein Gast noch ein Eingeladener erst eine Anmeldung oder gar eine Huelle mit
  * Arbeitsbereichen bekommt.
  *
@@ -53,9 +55,24 @@ import {
 } from 'lucide-react'
 
 import type { AppearanceView, LoginErrorCode, MeResponse, WorkspaceView } from '../contracts/api.js'
-import { GUEST_APP_PATH, INVITE_APP_PATH, LOGIN_ERROR_PARAM, RECOVERY_APP_PATH } from '../contracts/api.js'
+import {
+  GUEST_APP_PATH,
+  INVITE_APP_PATH,
+  LOGIN_ERROR_PARAM,
+  PASSWORD_RESET_APP_PATH,
+  RECOVERY_APP_PATH,
+  RECOVERY_EMAIL_CONFIRM_APP_PATH,
+} from '../contracts/api.js'
 import { MAX_WORKSPACE_NAME_LENGTH } from '../domain/workspace/model.js'
-import { AppearanceSettings, InviteApp, LoginView, PasswordSettings } from './account.js'
+import {
+  AppearanceSettings,
+  ConfirmRecoveryEmailApp,
+  InviteApp,
+  LoginView,
+  PasswordResetApp,
+  PasswordSettings,
+  RecoveryEmailSettings,
+} from './account.js'
 import { AdminUsers } from './admin-users.js'
 import { ApiError, createWorkspace, fetchMe, fetchWorkspaces, logout } from './api.js'
 import { applyAppearance } from './appearance.js'
@@ -465,6 +482,7 @@ function Content({
           </p>
           <AppearanceSettings me={me} onChanged={onAppearanceChanged} />
           <PasswordSettings me={me} onChanged={onProfileChanged} />
+          <RecoveryEmailSettings me={me} onChanged={onProfileChanged} />
           <SecondFactorSettings me={me} onChanged={onProfileChanged} />
         </section>
       )
@@ -823,6 +841,12 @@ export function App() {
   }
   if (window.location.pathname === RECOVERY_APP_PATH) {
     return <InviteApp purpose="recovery" />
+  }
+  if (window.location.pathname === PASSWORD_RESET_APP_PATH) {
+    return <PasswordResetApp />
+  }
+  if (window.location.pathname === RECOVERY_EMAIL_CONFIRM_APP_PATH) {
+    return <ConfirmRecoveryEmailApp />
   }
   return <MemberApp />
 }

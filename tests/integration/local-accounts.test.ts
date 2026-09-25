@@ -140,7 +140,7 @@ describe('Instanz ohne OIDC', () => {
   it('startet, meldet nur den lokalen Weg und kennt die OIDC-Route nicht', async () => {
     const methods = (await (await fetch(`${app.baseUrl}${AUTH_METHODS_PATH}`)).json()) as AuthMethodsResponse
 
-    expect(methods).toEqual({ local: true, oidc: false })
+    expect(methods).toEqual({ local: true, oidc: false, passwordReset: false })
     // Die Route entsteht gar nicht erst: der Aufruf faellt auf die SPA zurueck, statt einen Fluss zu
     // beginnen - es gibt keine Weiterleitung zu einem Provider.
     const einstieg = await fetch(`${app.baseUrl}${AUTH_LOGIN_PATH}`, { redirect: 'manual' })

@@ -21,6 +21,13 @@ export const AUTH_LOCAL_PASSWORD_PATH = `${API_BASE_PATH}/auth/local/password`
 /** Einloesen eines Einladungslinks: der Empfaenger setzt sein Passwort selbst. */
 export const AUTH_INVITATION_REDEEM_PATH = `${API_BASE_PATH}/auth/invitation/redeem`
 /**
+ * Selbstwiederherstellung (nur mit Postausgang): Ruecksetzungslink anfordern, ihn einloesen und eine neue
+ * Wiederherstellungsadresse bestaetigen. Alle drei ohne Sitzung; keiner meldet an.
+ */
+export const AUTH_PASSWORD_RESET_REQUEST_PATH = `${API_BASE_PATH}/auth/password-reset/request`
+export const AUTH_PASSWORD_RESET_REDEEM_PATH = `${API_BASE_PATH}/auth/password-reset/redeem`
+export const AUTH_RECOVERY_EMAIL_CONFIRM_PATH = `${API_BASE_PATH}/auth/recovery-email/confirm`
+/**
  * Zweiter Faktor des Systemadmins. Erreichbar auch mit einer Sitzung, deren zweiter Faktor noch aussteht -
  * als einzige Endpunkte neben Profil und Abmeldung.
  */
@@ -35,6 +42,8 @@ export const AUTH_SECOND_FACTOR_BACKUP_CODES_PATH = `${API_BASE_PATH}/auth/secon
 export const ME_PATH = `${API_BASE_PATH}/me`
 /** Eigenes Erscheinungsbild aendern. Gelesen wird es mit dem Profil (`MeResponse.appearance`). */
 export const ME_APPEARANCE_PATH = `${API_BASE_PATH}/me/appearance`
+/** Eigene Wiederherstellungsadresse setzen oder aendern - mit dem aktuellen Passwort. */
+export const ME_RECOVERY_EMAIL_PATH = `${API_BASE_PATH}/me/recovery-email`
 export const ADMIN_USERS_PATH = `${API_BASE_PATH}/admin/users`
 export const ADMIN_USER_STATUS_PATH = `${API_BASE_PATH}/admin/users/status`
 /** Kontoanlage durch den Systemadmin: Initialpasswort oder Einladungslink. */
@@ -44,6 +53,8 @@ export const ADMIN_USER_PASSWORD_PATH = `${API_BASE_PATH}/admin/users/password`
 /** Neue Einladung fuer ein vorhandenes Konto - zugleich der zweite Weg der Ruecksetzung. */
 export const ADMIN_USER_INVITATION_PATH = `${API_BASE_PATH}/admin/users/invitation`
 export const ADMIN_USER_INVITATION_REVOKE_PATH = `${API_BASE_PATH}/admin/users/invitation/revoke`
+/** Selbstwiederherstellung per Mail fuer ein Konto freischalten oder abschalten. */
+export const ADMIN_USER_SELF_RECOVERY_PATH = `${API_BASE_PATH}/admin/users/self-recovery`
 export const REALTIME_PATH = `${API_BASE_PATH}/realtime`
 
 export const WORKSPACES_PATH = `${API_BASE_PATH}/workspaces`
@@ -145,6 +156,12 @@ export const INVITE_APP_PATH = '/einladung'
  */
 export const RECOVERY_APP_PATH = '/wiederherstellung'
 
+/** Einloesen eines Ruecksetzungslinks aus der Mail (`/passwort-zuruecksetzen#<token>`). */
+export const PASSWORD_RESET_APP_PATH = '/passwort-zuruecksetzen'
+
+/** Bestaetigen einer Wiederherstellungsadresse (`/adresse-bestaetigen#<token>`). */
+export const RECOVERY_EMAIL_CONFIRM_APP_PATH = '/adresse-bestaetigen'
+
 /** Untergrenze eines Passworts. Sie steht im Vertrag, damit die Oberflaeche sie nennen kann, statt zu raten. */
 export const MIN_PASSWORD_LENGTH = 15
 export const MAX_PASSWORD_LENGTH = 200
@@ -153,6 +170,11 @@ export const MAX_PASSWORD_LENGTH = 200
 export type AuthMethodsResponse = {
   readonly local: true
   readonly oidc: boolean
+  /**
+   * Gibt es hier die Selbstwiederherstellung per Mail? Nur mit Postausgang. Die Antwort sagt nichts ueber
+   * ein Konto: ob ein bestimmtes freigeschaltet ist, erfaehrt niemand vor der Anmeldung.
+   */
+  readonly passwordReset: boolean
 }
 
 export type LocalLoginRequest = {
@@ -179,6 +201,59 @@ export type ChangePasswordRequest = {
   readonly email: string
   readonly currentPassword: string
   readonly newPassword: string
+}
+
+/** Anfrage eines Ruecksetzungslinks mit der Anmeldeadresse. */
+export type PasswordResetRequest = {
+  readonly email: string
+}
+
+/**
+ * Die eine Antwort auf jede Anfrage - gleich, ob es das Konto gibt, ob es freigeschaltet ist und ob eine
+ * Mail rausgeht.
+ */
+export type PasswordResetRequestResponse = {
+  readonly status: 'accepted'
+}
+
+/** Einloesen eines Ruecksetzungslinks. Es entsteht keine Sitzung; danach wird angemeldet. */
+export type RedeemPasswordResetRequest = {
+  readonly token: string
+  readonly password: string
+}
+
+export type ConfirmRecoveryEmailRequest = {
+  readonly token: string
+}
+
+/** Wiederherstellungsadresse setzen oder aendern. `currentPassword` ist die frische Bestaetigung. */
+export type SetRecoveryEmailRequest = {
+  readonly currentPassword: string
+  readonly email: string
+}
+
+/**
+ * Selbstwiederherstellung des eigenen Kontos. `null` im Profil heisst: hier nicht verfuegbar (nicht
+ * freigeschaltet, kein lokales Passwort, Systemadmin oder kein Postausgang).
+ */
+export type SelfRecoveryView = {
+  /** Bestaetigte Wiederherstellungsadresse; nur an sie geht ein Ruecksetzungslink. */
+  readonly email: string | null
+  /** Adresse mit offenem Bestaetigungslink; sie gilt erst nach der Bestaetigung. */
+  readonly pendingEmail: string | null
+}
+
+/**
+ * Ergebnis einer eingeloesten Ruecksetzung oder Bestaetigung. Keines von beiden legt eine Sitzung an: nach
+ * einer Ruecksetzung meldet sich der Inhaber mit dem neuen Passwort an.
+ */
+export type SelfRecoveryResultResponse = {
+  readonly status: 'ok'
+}
+
+export type SetSelfRecoveryRequest = {
+  readonly userId: string
+  readonly allowed: boolean
 }
 
 export type RedeemInvitationRequest = {
@@ -223,6 +298,7 @@ export type MeResponse = {
   /** Das eigene Erscheinungsbild; ohne gespeicherte Wahl `DEFAULT_APPEARANCE`. */
   readonly appearance: AppearanceView
   readonly secondFactor: SecondFactorView
+  readonly selfRecovery: SelfRecoveryView | null
 }
 
 /** Ein Code des zweiten Faktors: sechs Ziffern aus der App oder ein Ersatzcode (`XXXXX-XXXXX`). */
@@ -301,6 +377,10 @@ export type AdminUserView = UserView & {
   readonly hasPassword: boolean
   /** ISO-8601 der offenen Einladung; `null` heisst: keine offene Einladung. */
   readonly invitationExpiresAt: string | null
+  /** Selbstwiederherstellung per Mail freigeschaltet. */
+  readonly selfRecoveryAllowed: boolean
+  /** Ob eine Wiederherstellungsadresse bestaetigt ist - die Adresse selbst steht hier nicht. */
+  readonly recoveryEmailVerified: boolean
 }
 
 export type AdminUsersResponse = {

@@ -8,6 +8,7 @@
 import type { AppearanceView } from '../../contracts/api.js'
 import type { InvitationPurpose, LocalCredential, UserInvitation, UserInvitationId } from './local-auth.js'
 import type { TotpFactor } from './second-factor.js'
+import type { RecoveryEmailToken, RecoveryEmailTokenPurpose, SelfRecovery } from './self-recovery.js'
 import type {
   AuthenticatedSession,
   ExternalIdentity,
@@ -223,6 +224,44 @@ export interface SecondFactorRepository {
   removeAll(userId: UserId): Promise<void>
 }
 
+export type NewRecoveryEmailToken = {
+  readonly userId: UserId
+  readonly purpose: RecoveryEmailTokenPurpose
+  readonly email: string
+  /** Hash des Werts. Der Wert selbst verlaesst den Server genau einmal, im Link der Nachricht. */
+  readonly tokenHash: string
+  readonly expiresAt: Date
+}
+
+/**
+ * Selbstwiederherstellung: Freischaltung, bestaetigte Adresse und die Links dazu.
+ *
+ * Die Links sind getrennt von `InvitationRepository`: sie melden nie an und erscheinen nie als offener
+ * Zugang in der Systemadministration.
+ */
+export interface SelfRecoveryRepository {
+  find(userId: UserId): Promise<SelfRecovery | null>
+  /**
+   * Dasselbe und sperrt die Zeile bis zum Ende der Transaktion. Serialisiert Anfragen desselben Kontos, damit
+   * gleichzeitig nie zwei offene Ruecksetzungslinks entstehen. Nur innerhalb einer Transaktion sinnvoll.
+   */
+  findForUpdate(userId: UserId): Promise<SelfRecovery | null>
+  /** Alle Zeilen; Grundlage der Anzeige in der Systemadministration. */
+  list(): Promise<readonly SelfRecovery[]>
+  /** Schaltet frei oder ab. Eine bestaetigte Adresse bleibt dabei stehen. */
+  setAllowed(userId: UserId, allowed: boolean): Promise<void>
+  setVerifiedEmail(userId: UserId, email: string, verifiedAt: Date): Promise<void>
+  createToken(token: NewRecoveryEmailToken): Promise<RecoveryEmailToken>
+  /** Loest einen Wert auf und sperrt die Zeile bis zum Ende der Transaktion - wie bei der Einladung. */
+  findTokenByHash(tokenHash: string): Promise<RecoveryEmailToken | null>
+  /** Einmalverwendung. `false` heisst: ein gleichzeitiger Vorgang war zuerst da oder der Link ist widerrufen. */
+  markTokenRedeemed(id: string, redeemedAt: Date): Promise<boolean>
+  /** Der juengste noch einloesbare Link dieses Zwecks, sonst `null`. */
+  findOpenToken(userId: UserId, purpose: RecoveryEmailTokenPurpose, now: Date): Promise<RecoveryEmailToken | null>
+  /** Widerruft offene Links des Kontos - eines Zwecks oder ohne Angabe aller. Liefert deren Zahl. */
+  revokeOpenTokens(userId: UserId, revokedAt: Date, purpose?: RecoveryEmailTokenPurpose): Promise<number>
+}
+
 /**
  * Gebuendelter Zugang zur Identitaetspersistenz. `transaction` gibt dem Aufrufer Atomaritaet ueber mehrere
  * Repositories, ohne dass der Domain-Core die Datenbank kennt: die Provisionierung legt Nutzer, Verknuepfung
@@ -237,5 +276,6 @@ export interface IdentityStore {
   readonly sessions: SessionRepository
   readonly loginThrottle: LoginThrottleRepository
   readonly secondFactors: SecondFactorRepository
+  readonly selfRecovery: SelfRecoveryRepository
   transaction<T>(run: (store: IdentityStore) => Promise<T>): Promise<T>
 }

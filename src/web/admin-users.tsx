@@ -1,7 +1,8 @@
 /**
  * Kontenverwaltung der Systemadministration.
  *
- * Anlegen, Zugang uebergeben, zuruecksetzen, Einladung widerrufen, aktivieren und deaktivieren. Die Ansicht
+ * Anlegen, Zugang uebergeben, zuruecksetzen, Einladung widerrufen, Selbstwiederherstellung per Mail
+ * freischalten, aktivieren und deaktivieren. Die Ansicht
  * blendet nichts als Sicherheitsgrenze aus - jede Aktion wird serverseitig entschieden, und jede Ablehnung
  * erscheint hier als Text.
  *
@@ -15,7 +16,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { KeyRound, Mail, MailX, RotateCcw, UserCheck, UserPlus, UserX } from 'lucide-react'
+import { KeyRound, Mail, MailCheck, MailX, RotateCcw, UserCheck, UserPlus, UserX } from 'lucide-react'
 
 import type { AdminUserView, MeResponse } from '../contracts/api.js'
 import { MIN_PASSWORD_LENGTH } from '../contracts/api.js'
@@ -26,6 +27,7 @@ import {
   fetchAdminUsers,
   resetUserPassword,
   revokeUserInvitation,
+  setUserSelfRecovery,
   setUserStatus,
 } from './api.js'
 import { Dialog } from './overlays.js'
@@ -50,6 +52,18 @@ function AccessBadge({ user }: { readonly user: AdminUserView }) {
     )
   }
   return user.hasPassword ? <Badge>lokales Passwort</Badge> : <Badge>kein lokaler Zugang</Badge>
+}
+
+/** Ob die Selbstwiederherstellung frei ist und ob der Inhaber schon eine Adresse bestaetigt hat. */
+function SelfRecoveryBadge({ user }: { readonly user: AdminUserView }) {
+  if (!user.selfRecoveryAllowed) {
+    return null
+  }
+  return user.recoveryEmailVerified ? (
+    <Badge tone="success">Mail-Ruecksetzung frei</Badge>
+  ) : (
+    <Badge>Mail-Ruecksetzung frei, Adresse unbestaetigt</Badge>
+  )
 }
 
 /** Ein frisch erzeugter Einladungslink. Er steht genau hier und wird nirgends aufbewahrt. */
@@ -357,7 +371,10 @@ export function AdminUsers({ me }: { readonly me: MeResponse }) {
                       {user.isSystemAdmin ? <Badge tone="accent">Systemadmin</Badge> : <Badge>Nutzer</Badge>}
                     </td>
                     <td data-label="Zugang">
-                      <AccessBadge user={user} />
+                      <span className="actions">
+                        <AccessBadge user={user} />
+                        <SelfRecoveryBadge user={user} />
+                      </span>
                     </td>
                     <td data-label="Aktion">
                       <span className="actions">
@@ -404,6 +421,30 @@ export function AdminUsers({ me }: { readonly me: MeResponse }) {
                         >
                           Passwort zuruecksetzen
                         </Button>
+                        {/* Der Systemadmin hat ausschliesslich den Betreiberweg; der Server lehnt es ohnehin ab. */}
+                        {!user.isSystemAdmin && (
+                          <Button
+                            icon={user.selfRecoveryAllowed ? MailX : MailCheck}
+                            onClick={() => {
+                              run(
+                                user.id,
+                                setUserSelfRecovery(me.csrfToken, {
+                                  userId: user.id,
+                                  allowed: !user.selfRecoveryAllowed,
+                                }),
+                                'Die Freischaltung konnte nicht geaendert werden.',
+                              )
+                            }}
+                            busy={busy}
+                            aria-label={
+                              user.selfRecoveryAllowed
+                                ? `Mail-Ruecksetzung fuer ${user.displayName} abschalten`
+                                : `Mail-Ruecksetzung fuer ${user.displayName} freischalten`
+                            }
+                          >
+                            {user.selfRecoveryAllowed ? 'Mail-Ruecksetzung abschalten' : 'Mail-Ruecksetzung freischalten'}
+                          </Button>
+                        )}
                         {user.invitationExpiresAt !== null && (
                           <Button
                             variant="danger"
