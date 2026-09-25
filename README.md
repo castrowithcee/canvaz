@@ -133,10 +133,16 @@ hat.
 Konfiguriert wird der Weg wie OIDC: **ganz oder gar nicht**. Ohne jede der Variablen gibt es ihn nicht;
 sobald eine gesetzt ist, gelten Server (`CANVAZ_SMTP_HOST`) und Absender (`CANVAZ_MAIL_FROM`) als gewollt
 und ein fehlender Wert ist ein Startfehler. `CANVAZ_SMTP_PORT` ist ohne Angabe 587, implizites TLS
-(`CANVAZ_SMTP_SECURE`) folgt dem Port - 465 ja, sonst STARTTLS, wenn der Server es anbietet.
+(`CANVAZ_SMTP_SECURE`) folgt dem Port - 465 ja, sonst ist STARTTLS **Pflicht**: bietet der Server es nicht
+an oder scheitert es, bricht der Versand ab, bevor Anmeldung, Empfaenger oder Inhalt den Server erreichen.
 `CANVAZ_SMTP_USER` und `CANVAZ_SMTP_PASSWORD` gehoeren zusammen oder entfallen beide; ein Postausgang im
 eigenen Netz verlangt haeufig keine Anmeldung. Die Anwendung kennt ausschliesslich diese Variablen: welcher
 Server dahintersteht, ist Sache der Umgebung und steht in keiner Datei dieses Repositorys.
+
+`CANVAZ_SMTP_ALLOW_INSECURE=true` hebt die STARTTLS-Pflicht auf; ohne Angabe gilt `false`. Die Ausnahme ist
+nur fuer einen isolierten lokalen Relay im selben vertrauenswuerdigen Netz gedacht, etwa einen
+Auffangserver der Entwicklung. Ein externer Relay laeuft nie mit ihr: Einladungslinks und Zugangsdaten
+gingen sonst im Klartext ueber das Netz.
 
 **Der Versand ist eine Zustellung und keine Bedingung.** Das Konto ist angelegt, bevor die erste Verbindung
 zum Postausgang steht. Ein nicht erreichbarer Server macht daraus keinen Fehlschlag: der Vorgang antwortet
