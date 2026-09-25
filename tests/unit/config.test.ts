@@ -177,6 +177,8 @@ describe('Konfiguration', () => {
       host: 'smtp.example.com',
       port: 587,
       secure: false,
+      // Klartext zum Relay nur auf ausdrueckliche Angabe.
+      allowInsecure: false,
       auth: null,
       // Dieselbe Normalisierung wie bei jeder anderen Adresse der Instanz.
       from: 'canvaz@example.com',
