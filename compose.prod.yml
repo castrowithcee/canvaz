@@ -55,6 +55,9 @@ services:
       CANVAZ_WEB_ROOT: dist/web
       DATABASE_URL: postgres://canvaz:${CANVAZ_DB_PASSWORD:?CANVAZ_DB_PASSWORD fehlt in .env.production}@postgres:5432/canvaz
       CANVAZ_STORAGE_FILESYSTEM_ROOT: /var/lib/canvaz/assets
+      # Caddy (`docker/Caddyfile`) setzt `x-forwarded-for` auf die tatsaechliche Absenderadresse, egal ob
+      # der Host rootful oder rootless Docker faehrt; nur damit erkennt die Anwendung die echte Client-Adresse
+      # (siehe "Echte Client-Adresse erkennen" in der README) statt der Docker-Netzadresse von Caddy.
       CANVAZ_TRUSTED_PROXY: 'true'
     volumes:
       # Persistentes Volume statt Containerlayer: der `filesystem`-Adapter braucht genau das.

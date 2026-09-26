@@ -5,7 +5,7 @@
  * OIDC-Client und den WebSocket-Einstieg; keine Route baut selbst eine Verbindung auf.
  */
 
-import { API_BASE_PATH } from '../contracts/api.js'
+import { HEALTH_PATH, METRICS_PATH, READY_PATH } from '../contracts/api.js'
 import type { HealthResponse, ReadyResponse } from '../contracts/api.js'
 import { createAdminRoutes } from './admin-routes.js'
 import { createAuthRoutes } from './auth-routes.js'
@@ -28,7 +28,7 @@ export function createRoutes(context: AppContext): readonly Route[] {
   return [
     {
       method: 'GET',
-      path: `${API_BASE_PATH}/health`,
+      path: HEALTH_PATH,
       handle: async ({ response }) => {
         // Ein Health-Check ohne Datenbankkontakt meldet "gesund", waehrend nichts funktioniert.
         await context.pool.query('select 1')
@@ -38,7 +38,7 @@ export function createRoutes(context: AppContext): readonly Route[] {
     },
     {
       method: 'GET',
-      path: `${API_BASE_PATH}/ready`,
+      path: READY_PATH,
       handle: async ({ response }) => {
         // Beide Abhaengigkeiten werden geprueft, auch wenn die erste schon scheitert: die Antwort soll
         // sagen, *was* fehlt, statt nur *dass* etwas fehlt.
@@ -70,7 +70,7 @@ export function createRoutes(context: AppContext): readonly Route[] {
     },
     {
       method: 'GET',
-      path: `${API_BASE_PATH}/metrics`,
+      path: METRICS_PATH,
       handle: ({ response }) => {
         const text = context.metrics.render({
           realtimeConnections: context.realtime.openConnections,

@@ -11,6 +11,7 @@ import type {
   AppearanceView,
   AdminUsersResponse,
   AuthMethodsResponse,
+  ClientAddressResponse,
   ChangePasswordRequest,
   CreateInvitationResponse,
   CreateUserRequest,
@@ -73,6 +74,7 @@ import type {
   WorkspacesResponse,
 } from '../contracts/api.js'
 import {
+  ADMIN_CLIENT_ADDRESS_PATH,
   ADMIN_USER_CREATE_PATH,
   ADMIN_USER_INVITATION_PATH,
   ADMIN_USER_INVITATION_REVOKE_PATH,
@@ -292,6 +294,10 @@ export async function setUserSelfRecovery(csrfToken: string, change: SetSelfReco
 
 export async function setUserStatus(csrfToken: string, change: SetUserStatusRequest): Promise<UserView> {
   return request<UserView>(ADMIN_USER_STATUS_PATH, mutation(csrfToken, change))
+}
+
+export async function fetchClientAddress(): Promise<ClientAddressResponse> {
+  return request<ClientAddressResponse>(ADMIN_CLIENT_ADDRESS_PATH)
 }
 
 function withWorkspace(path: string, workspaceId: string): string {

@@ -10,13 +10,14 @@ import { stat } from 'node:fs/promises'
 import type { IncomingMessage, RequestListener, ServerResponse } from 'node:http'
 import { extname, join, normalize, resolve, sep } from 'node:path'
 
-import { API_BASE_PATH } from '../contracts/api.js'
+import { API_BASE_PATH, HEALTH_PATH, METRICS_PATH, READY_PATH } from '../contracts/api.js'
 import type { ErrorResponse } from '../contracts/api.js'
+import type { ClientAddressMonitor } from './client-address.js'
+import { resolveClientAddress } from './client-address.js'
 import { describeError } from './log.js'
 import type { Logger } from './log.js'
 import type { Metrics } from './metrics.js'
 import type { RateLimiter } from './rate-limit.js'
-import { clientKey } from './rate-limit.js'
 
 export type RouteHandler = (context: {
   readonly request: IncomingMessage
@@ -240,14 +241,27 @@ export type RequestListenerOptions = {
   readonly trustedProxy: boolean
   readonly metrics: Metrics
   readonly logger: Logger
+  /** Zaehlt die Klasse jeder API-Anfrage ein - ohne eine Adresse zu speichern - fuer den Plausibilitaetshinweis. */
+  readonly addressMonitor: ClientAddressMonitor
 }
+
+/**
+ * Betriebsendpunkte: der Docker-`HEALTHCHECK`, der aktive Healthcheck eines beliebigen davorstehenden
+ * Reverse Proxy und Monitoring fragen sie regelmaessig und automatisiert ab, unabhaengig vom echten Verkehr
+ * und unabhaengig davon, welcher Proxy oder welches Werkzeug fragt. Sie zaehlen deshalb in die Ratengrenze
+ * (unveraendert), aber nicht in den Plausibilitaetshinweis der Client-Adresse - sonst wuerde eine kleine
+ * Instanz mit wenig echtem Verkehr allein durch diese Anfragen als "ueberwiegend intern" gelten. Die
+ * Ausnahme haengt ausschliesslich an diesen Pfaden, nie an einem bestimmten Proxy.
+ */
+const OPERATIONAL_PATHS: ReadonlySet<string> = new Set([HEALTH_PATH, READY_PATH, METRICS_PATH])
 
 /**
  * Baut den Request-Listener aus Routen und SPA-Wurzel. Unbekannte GET-Pfade fallen auf `index.html`
  * zurueck, damit clientseitige Routen nach einem Neuladen weiter funktionieren.
  *
- * Hier haengen die drei Dinge, die jede Anfrage betreffen und deshalb an keiner einzelnen Route stehen
- * duerfen: Sicherheitskopfzeilen, die Ratengrenze der API und die Zaehlung der Statusklasse.
+ * Hier haengen die Dinge, die jede Anfrage betreffen und deshalb an keiner einzelnen Route stehen duerfen:
+ * Sicherheitskopfzeilen, die Ratengrenze der API, die Zaehlung der Statusklasse und die Klassifizierung der
+ * Client-Adresse fuer den Plausibilitaetshinweis.
  */
 export function createRequestListener(routes: readonly Route[], options: RequestListenerOptions): RequestListener {
   const root = resolve(options.webRoot)
@@ -263,14 +277,22 @@ export function createRequestListener(routes: readonly Route[], options: Request
       const method = request.method ?? 'GET'
       // Nur die API: statische Dateien der SPA kommen beim ersten Laden im Dutzend und sind kein Angriffsweg.
       const istApi = url.pathname.startsWith(`${API_BASE_PATH}/`)
-      if (istApi && !options.rateLimit.take(clientKey(request, options.trustedProxy))) {
-        options.metrics.recordRateLimited()
-        // Ohne Kennung des Clients: die Adresse steht im Zugriffsprotokoll des Reverse Proxy, und das Log der
-        // Anwendung soll keine zweite Sammlung davon werden.
-        options.logger('warn', 'http.rate.exceeded', { path: url.pathname })
-        response.setHeader('retry-after', '1')
-        sendError(response, 429, 'Zu viele Anfragen')
-        return
+      if (istApi) {
+        // Eine Ermittlung fuer beides: die Ratengrenze zaehlt die Adresse, der Monitor nur ihre Klasse -
+        // und auch nur fuer Anfragen, die nicht vom Betrieb selbst stammen (siehe OPERATIONAL_PATHS).
+        const clientAddress = resolveClientAddress(request, options.trustedProxy)
+        if (!OPERATIONAL_PATHS.has(url.pathname)) {
+          options.addressMonitor.record(clientAddress)
+        }
+        if (!options.rateLimit.take(clientAddress.address)) {
+          options.metrics.recordRateLimited()
+          // Ohne Kennung des Clients: die Adresse steht im Zugriffsprotokoll des Reverse Proxy, und das Log
+          // der Anwendung soll keine zweite Sammlung davon werden.
+          options.logger('warn', 'http.rate.exceeded', { path: url.pathname })
+          response.setHeader('retry-after', '1')
+          sendError(response, 429, 'Zu viele Anfragen')
+          return
+        }
       }
       // Erst nach Pfad, dann nach Methode: derselbe Pfad kann mehrere Methoden tragen (`/api/workspaces`
       // listet und legt an), und ein bekannter Pfad mit falscher Methode bleibt eine 405.

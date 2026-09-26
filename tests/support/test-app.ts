@@ -24,6 +24,7 @@ import { createWorkspaceStore } from '../../src/persistence/workspace-store.js'
 import { createRoutes } from '../../src/server/app.js'
 import { createBoardRooms } from '../../src/server/board-rooms.js'
 import type { BoardRoomOptions, BoardRooms } from '../../src/server/board-rooms.js'
+import { createClientAddressMonitor } from '../../src/server/client-address.js'
 import { loadConfig } from '../../src/server/config.js'
 import type { AppContext } from '../../src/server/context.js'
 import { createRequestListener } from '../../src/server/http.js'
@@ -161,6 +162,7 @@ export async function startTestApp(options: {
     onConnection: options.onConnection ?? rooms.onConnection,
   })
   const metrics = createMetrics()
+  const addressMonitor = createClientAddressMonitor(logger)
   const context: AppContext = {
     config,
     pool: options.pool,
@@ -174,6 +176,7 @@ export async function startTestApp(options: {
     rooms,
     logger,
     metrics,
+    addressMonitor,
     now,
   }
   server.on(
@@ -184,6 +187,7 @@ export async function startTestApp(options: {
       trustedProxy: config.trustedProxy,
       metrics,
       logger,
+      addressMonitor,
     }),
   )
   realtime.attach(server)

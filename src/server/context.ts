@@ -12,6 +12,7 @@ import type { IdentityStore } from '../domain/identity/repositories.js'
 import type { AssetStoragePort } from '../domain/storage/asset-storage-port.js'
 import type { WorkspaceStore } from '../domain/workspace/repositories.js'
 import type { BoardRooms } from './board-rooms.js'
+import type { ClientAddressMonitor } from './client-address.js'
 import type { AppConfig } from './config.js'
 import type { Logger } from './log.js'
 import type { Mailer } from './mailer.js'
@@ -45,6 +46,12 @@ export type AppContext = {
   readonly logger: Logger
   /** Zaehler des Betriebs. Der Metrikendpunkt liest sie, sonst schreibt nur der Request-Listener hinein. */
   readonly metrics: Metrics
+  /**
+   * Erkennt, ob die ermittelten Client-Adressen plausibel oeffentlich sind - ohne eine einzige Adresse zu
+   * speichern. Der Request-Listener zaehlt jede API-Anfrage ein, die Systemadministration und #35 (IP-Sperre
+   * nach gehaeuften Fehlanmeldungen) lesen die Aussage.
+   */
+  readonly addressMonitor: ClientAddressMonitor
   /** Injizierbare Uhr: Tests pruefen Ablauf und Widerruf ohne Wartezeit. */
   readonly now: () => Date
 }

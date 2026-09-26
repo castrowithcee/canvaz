@@ -18,13 +18,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import { KeyRound, Mail, MailCheck, MailX, RotateCcw, UserCheck, UserPlus, UserX } from 'lucide-react'
 
-import type { AdminUserView, MeResponse } from '../contracts/api.js'
+import type { AdminUserView, ClientAddressResponse, MeResponse } from '../contracts/api.js'
 import { MIN_PASSWORD_LENGTH } from '../contracts/api.js'
 import {
   ApiError,
   createUser,
   createUserInvitation,
   fetchAdminUsers,
+  fetchClientAddress,
   resetUserPassword,
   revokeUserInvitation,
   setUserSelfRecovery,
@@ -63,6 +64,84 @@ function SelfRecoveryBadge({ user }: { readonly user: AdminUserView }) {
     <Badge tone="success">Mail-Ruecksetzung frei</Badge>
   ) : (
     <Badge>Mail-Ruecksetzung frei, Adresse unbestaetigt</Badge>
+  )
+}
+
+function ClientAddressClassBadge({ addressClass }: { readonly addressClass: ClientAddressResponse['addressClass'] }) {
+  switch (addressClass) {
+    case 'public':
+      return <Badge tone="success">oeffentlich</Badge>
+    case 'private':
+      return <Badge tone="accent">privat</Badge>
+    case 'loopback':
+      return <Badge>Loopback</Badge>
+    case 'proxy':
+      return <Badge tone="accent">Proxy</Badge>
+    case 'unknown':
+      return <Badge tone="danger">unbekannt</Badge>
+  }
+}
+
+const PLAUSIBILITY_TEXT: Readonly<Record<ClientAddressResponse['plausibility'], string>> = {
+  plausible: 'Diese Instanz sieht insgesamt plausible oeffentliche Client-Adressen.',
+  implausible:
+    'Ueberwiegend nicht-oeffentliche Adressen - vermutlich fehlt die Weiterleitung der echten Client-Adresse.',
+  unknown: 'Noch keine ausreichende Datengrundlage fuer ein Urteil.',
+}
+
+/**
+ * Zeigt, welche Adresse die Anwendung fuer die aktuelle Anfrage ermittelt - zur Pruefung von
+ * `CANVAZ_TRUSTED_PROXY` und der Weiterleitung durch den Reverse Proxy, unabhaengig davon, ob Docker
+ * rootful oder rootless laeuft. Die Adresse wird nirgends gespeichert; jede Aktualisierung ermittelt sie neu.
+ */
+function ClientAddressCheck() {
+  const [result, setResult] = useState<ClientAddressResponse | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [pending, setPending] = useState(false)
+
+  const load = useCallback(() => {
+    setPending(true)
+    setError(null)
+    fetchClientAddress()
+      .then((response) => {
+        setResult(response)
+      })
+      .catch((cause: unknown) => {
+        setError(messageOf(cause, 'Die Client-Adresse konnte nicht ermittelt werden.'))
+      })
+      .finally(() => {
+        setPending(false)
+      })
+  }, [])
+
+  useEffect(load, [load])
+
+  return (
+    <section aria-labelledby="client-address-heading">
+      <h3 id="client-address-heading">Client-Adresse dieser Anfrage</h3>
+      {error !== null && (
+        <Notice>
+          <p>{error}</p>
+        </Notice>
+      )}
+      {result !== null && (
+        <>
+          <p className="actions">
+            <code>{result.address}</code>
+            <ClientAddressClassBadge addressClass={result.addressClass} />
+            <Badge tone={result.trustedProxy ? 'accent' : 'neutral'}>
+              CANVAZ_TRUSTED_PROXY={result.trustedProxy ? 'true' : 'false'}
+            </Badge>
+          </p>
+          <p>{PLAUSIBILITY_TEXT[result.plausibility]}</p>
+        </>
+      )}
+      <p className="actions">
+        <Button icon={RotateCcw} onClick={load} busy={pending} aria-label="Client-Adresse erneut ermitteln">
+          Erneut ermitteln
+        </Button>
+      </p>
+    </section>
   )
 }
 
@@ -472,6 +551,8 @@ export function AdminUsers({ me }: { readonly me: MeResponse }) {
           </table>
         </div>
       )}
+
+      <ClientAddressCheck />
 
       <ResetPasswordDialog
         me={me}

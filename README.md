@@ -7,15 +7,15 @@ Planung, Architekturentscheidungen und Betriebswissen liegen im getrennten Repos
 
 ## Struktur
 
-| Pfad | Rolle |
-| --- | --- |
-| `src/domain` | Reiner Fachkern: Modelle, Invarianten, Repository- und Storage-Ports. Kein IO. |
-| `src/contracts` | Zwischen Server und SPA geteilte Typen (HTTP-Vertraege, Szenenvertrag). |
-| `src/server` | Konfiguration, HTTP, Routentabelle, lokale und externe Anmeldung, Guards, WebSocket-Einstieg, Boardraeume, Composition Root. |
-| `src/persistence` | Adapter zur Aussenwelt: Pool, SQL-Migrationen, Repository- und Storage-Umsetzungen. |
-| `src/web` | React/Vite-SPA inklusive Editor-Port und Excalidraw-Adapter. |
-| `tests` | `unit` (ohne IO), `integration` (echte Datenbank), `support` (Testhilfen). |
-| `Dockerfile`, `compose.prod.yml`, `docker/` | Laufzeitimage, Produktionsbereitstellung, Reverse Proxy und Betriebswerkzeug. |
+| Pfad                                        | Rolle                                                                                                                        |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `src/domain`                                | Reiner Fachkern: Modelle, Invarianten, Repository- und Storage-Ports. Kein IO.                                               |
+| `src/contracts`                             | Zwischen Server und SPA geteilte Typen (HTTP-Vertraege, Szenenvertrag).                                                      |
+| `src/server`                                | Konfiguration, HTTP, Routentabelle, lokale und externe Anmeldung, Guards, WebSocket-Einstieg, Boardraeume, Composition Root. |
+| `src/persistence`                           | Adapter zur Aussenwelt: Pool, SQL-Migrationen, Repository- und Storage-Umsetzungen.                                          |
+| `src/web`                                   | React/Vite-SPA inklusive Editor-Port und Excalidraw-Adapter.                                                                 |
+| `tests`                                     | `unit` (ohne IO), `integration` (echte Datenbank), `support` (Testhilfen).                                                   |
+| `Dockerfile`, `compose.prod.yml`, `docker/` | Laufzeitimage, Produktionsbereitstellung, Reverse Proxy und Betriebswerkzeug.                                                |
 
 Excalidraw (exakt `0.18.1`) erscheint ausschliesslich in `src/web/board/excalidraw-adapter.ts`. Die
 Reconciliation in `src/domain/board/reconcile.ts` ist Eigencode.
@@ -222,6 +222,7 @@ neue. Rolle, Status und Mitgliedschaften bleiben unveraendert; es entsteht weder
 Die Einloesung **entfernt den zweiten Faktor samt Ersatzcodes**; die Sitzung danach ist eingeschraenkt und
 fuehrt zur Neueinrichtung (siehe unten). Das ist der einzige Weg, einen verlorenen Faktor zu ersetzen. Mit
 eingerichtetem Postausgang erfaehrt der Systemadmin per Mail vom Befehl und von der Entfernung des Faktors
+
 - ohne Link.
 
 - **Uebergabe:** der Link gehoert nur dem Inhaber des Kontos und geht ueber einen vertrauenswuerdigen
@@ -296,15 +297,15 @@ Ohne konfigurierten Postausgang verschickt die Instanz **nichts**: ein Einladung
 der Antwort der Anlage, und wer ihn zustellt, entscheidet der Betrieb; eine Selbstwiederherstellung gibt es
 dann nicht. Mit Postausgang kommen diese Nachrichten dazu, jede an eine Adresse des betroffenen Kontos:
 
-| Anlass | Inhalt |
-| --- | --- |
-| Konto angelegt oder Einladung erneuert | der Einladungslink, gueltig 72 Stunden und einmal einloesbar |
-| Passwort administrativ zurueckgesetzt | die Mitteilung, dass es zurueckgesetzt wurde - **ohne** das neue Passwort |
-| Wiederherstellungsadresse eingetragen | an die **neue** Adresse: der Bestaetigungslink, 24 Stunden, einmal |
-| Ruecksetzung angefragt (freigeschaltetes Konto) | an die **bestaetigte** Wiederherstellungsadresse: der Ruecksetzungslink, 15 Minuten, einmal |
-| Passwort per Ruecksetzungslink gesetzt | an die bestaetigte Wiederherstellungsadresse: die Mitteilung - **ohne** Link und Passwort |
-| Zweiter Faktor des Systemadmins geaendert oder per Wiederherstellung entfernt | die Mitteilung, dass es geschah - **ohne** Geheimnis oder Ersatzcode |
-| `admin:recover` ausgefuehrt | die Mitteilung an den Systemadmin - **ohne** den Wiederherstellungslink |
+| Anlass                                                                        | Inhalt                                                                                      |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Konto angelegt oder Einladung erneuert                                        | der Einladungslink, gueltig 72 Stunden und einmal einloesbar                                |
+| Passwort administrativ zurueckgesetzt                                         | die Mitteilung, dass es zurueckgesetzt wurde - **ohne** das neue Passwort                   |
+| Wiederherstellungsadresse eingetragen                                         | an die **neue** Adresse: der Bestaetigungslink, 24 Stunden, einmal                          |
+| Ruecksetzung angefragt (freigeschaltetes Konto)                               | an die **bestaetigte** Wiederherstellungsadresse: der Ruecksetzungslink, 15 Minuten, einmal |
+| Passwort per Ruecksetzungslink gesetzt                                        | an die bestaetigte Wiederherstellungsadresse: die Mitteilung - **ohne** Link und Passwort   |
+| Zweiter Faktor des Systemadmins geaendert oder per Wiederherstellung entfernt | die Mitteilung, dass es geschah - **ohne** Geheimnis oder Ersatzcode                        |
+| `admin:recover` ausgefuehrt                                                   | die Mitteilung an den Systemadmin - **ohne** den Wiederherstellungslink                     |
 
 Ein Passwort steht in keiner Nachricht. Ein Postfach ist kein Ort fuer ein Geheimnis, das ohne zweiten
 Faktor Zugang gibt; das neue Initialpasswort geht den Weg, den die Administration mit dem Konto vereinbart
@@ -370,33 +371,34 @@ Der transiente Flow-Zustand (`state`, `nonce`, `code_verifier`) liegt in einem v
 kurzlebigen HttpOnly-Cookie (`canvaz_oidc_flow`, zehn Minuten). Der Callback verwirft es vor der
 Codeeinloesung, damit es genau einmal gilt.
 
-| Methode | Pfad | Zugang |
-| --- | --- | --- |
-| GET | `/api/health` | oeffentlich; Lebendigkeit samt Datenbankkontakt |
-| GET | `/api/ready` | oeffentlich; Bereitschaft, siehe [Betrieb auf einem VPS](#betrieb-auf-einem-vps) |
-| GET | `/api/metrics` | nur im internen Netz; der Reverse Proxy beantwortet ihn nach aussen mit 404 |
-| GET | `/api/auth/methods` | oeffentlich; welche Anmeldewege es hier gibt |
-| POST | `/api/auth/local/login` | oeffentlich, eigene Ratengrenze je Client und je Zielkonto, Herkunftspruefung |
-| POST | `/api/auth/local/password` | oeffentlich, verlangt das bisherige Passwort; dieselben Grenzen |
-| POST | `/api/auth/invitation/redeem` | oeffentlich, verlangt einen gueltigen Einladungs- oder Wiederherstellungswert |
-| POST | `/api/auth/password-reset/request` | oeffentlich, Grenzen je Client und je Adresse; **nur mit Postausgang**, Antwort immer `202` |
-| POST | `/api/auth/password-reset/redeem` | oeffentlich, verlangt einen gueltigen Ruecksetzungslink; meldet nicht an |
-| POST | `/api/auth/recovery-email/confirm` | oeffentlich, verlangt einen gueltigen Bestaetigungslink |
-| POST | `/api/me/recovery-email` | angemeldet + CSRF-Token + aktuelles Passwort; **nur mit Postausgang** |
-| GET | `/api/auth/login` | oeffentlich, leitet zum Identity Provider; **nur mit OIDC-Konfiguration** |
-| GET | `/api/auth/callback` | oeffentlich, Pfad stammt aus `CANVAZ_OIDC_REDIRECT_URI`; **nur mit OIDC-Konfiguration** |
-| POST | `/api/auth/logout` | angemeldet + CSRF-Token |
-| GET | `/api/me` | angemeldet |
-| GET | `/api/admin/users` | angemeldet + Systemadmin |
-| POST | `/api/admin/users/create` | angemeldet + Systemadmin + CSRF-Token |
-| POST | `/api/admin/users/password` | angemeldet + Systemadmin + CSRF-Token |
-| POST | `/api/admin/users/invitation` | angemeldet + Systemadmin + CSRF-Token |
-| POST | `/api/admin/users/invitation/revoke` | angemeldet + Systemadmin + CSRF-Token |
-| POST | `/api/admin/users/self-recovery` | angemeldet + Systemadmin + CSRF-Token |
-| POST | `/api/admin/users/status` | angemeldet + Systemadmin + CSRF-Token |
-| GET (Upgrade) | `/api/realtime` | angemeldet **oder** gueltige Gastsession; WebSocket-Einstieg der Realtime-Strecke |
-| POST | `/api/boards/guest/join` | oeffentlich, verlangt ein gueltiges Freigabetoken und die eigene Herkunft |
-| GET | `/api/boards/guest/session` | gueltige Gastsession |
+| Methode       | Pfad                                 | Zugang                                                                                                                                            |
+| ------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET           | `/api/health`                        | oeffentlich; Lebendigkeit samt Datenbankkontakt                                                                                                   |
+| GET           | `/api/ready`                         | oeffentlich; Bereitschaft, siehe [Betrieb auf einem VPS](#betrieb-auf-einem-vps)                                                                  |
+| GET           | `/api/metrics`                       | nur im internen Netz; der Reverse Proxy beantwortet ihn nach aussen mit 404                                                                       |
+| GET           | `/api/auth/methods`                  | oeffentlich; welche Anmeldewege es hier gibt                                                                                                      |
+| POST          | `/api/auth/local/login`              | oeffentlich, eigene Ratengrenze je Client und je Zielkonto, Herkunftspruefung                                                                     |
+| POST          | `/api/auth/local/password`           | oeffentlich, verlangt das bisherige Passwort; dieselben Grenzen                                                                                   |
+| POST          | `/api/auth/invitation/redeem`        | oeffentlich, verlangt einen gueltigen Einladungs- oder Wiederherstellungswert                                                                     |
+| POST          | `/api/auth/password-reset/request`   | oeffentlich, Grenzen je Client und je Adresse; **nur mit Postausgang**, Antwort immer `202`                                                       |
+| POST          | `/api/auth/password-reset/redeem`    | oeffentlich, verlangt einen gueltigen Ruecksetzungslink; meldet nicht an                                                                          |
+| POST          | `/api/auth/recovery-email/confirm`   | oeffentlich, verlangt einen gueltigen Bestaetigungslink                                                                                           |
+| POST          | `/api/me/recovery-email`             | angemeldet + CSRF-Token + aktuelles Passwort; **nur mit Postausgang**                                                                             |
+| GET           | `/api/auth/login`                    | oeffentlich, leitet zum Identity Provider; **nur mit OIDC-Konfiguration**                                                                         |
+| GET           | `/api/auth/callback`                 | oeffentlich, Pfad stammt aus `CANVAZ_OIDC_REDIRECT_URI`; **nur mit OIDC-Konfiguration**                                                           |
+| POST          | `/api/auth/logout`                   | angemeldet + CSRF-Token                                                                                                                           |
+| GET           | `/api/me`                            | angemeldet                                                                                                                                        |
+| GET           | `/api/admin/users`                   | angemeldet + Systemadmin                                                                                                                          |
+| POST          | `/api/admin/users/create`            | angemeldet + Systemadmin + CSRF-Token                                                                                                             |
+| POST          | `/api/admin/users/password`          | angemeldet + Systemadmin + CSRF-Token                                                                                                             |
+| POST          | `/api/admin/users/invitation`        | angemeldet + Systemadmin + CSRF-Token                                                                                                             |
+| POST          | `/api/admin/users/invitation/revoke` | angemeldet + Systemadmin + CSRF-Token                                                                                                             |
+| POST          | `/api/admin/users/self-recovery`     | angemeldet + Systemadmin + CSRF-Token                                                                                                             |
+| POST          | `/api/admin/users/status`            | angemeldet + Systemadmin + CSRF-Token                                                                                                             |
+| GET           | `/api/admin/client-address`          | angemeldet + Systemadmin; Adresse und Klasse der eigenen aktuellen Anfrage, siehe [Echte Client-Adresse erkennen](#echte-client-adresse-erkennen) |
+| GET (Upgrade) | `/api/realtime`                      | angemeldet **oder** gueltige Gastsession; WebSocket-Einstieg der Realtime-Strecke                                                                 |
+| POST          | `/api/boards/guest/join`             | oeffentlich, verlangt ein gueltiges Freigabetoken und die eigene Herkunft                                                                         |
+| GET           | `/api/boards/guest/session`          | gueltige Gastsession                                                                                                                              |
 
 Die Endpunkte der Arbeitsbereiche stehen im Abschnitt [Arbeitsbereiche und Rollen](#arbeitsbereiche-und-rollen),
 die der Boards im Abschnitt [Boards und Szenen](#boards-und-szenen).
@@ -409,13 +411,58 @@ Fuer einen Gast gilt dasselbe, und zusaetzlich beendet der Widerruf seines Freig
 Verbindung, die daraus entstanden ist.
 Ein Upgrade mit fremdem `Origin` wird abgewiesen, weil der CSRF-Header beim Handshake nicht greift.
 
+### Echte Client-Adresse erkennen
+
+Die Ratengrenze oben und eine spaetere IP-Sperre nach gehaeuften Fehlanmeldungen brauchen dieselbe
+Voraussetzung: die Anwendung muss die Adresse des tatsaechlichen Clients sehen, nicht die eines
+dazwischenliegenden Docker-Netzes oder Reverse Proxy. Das haengt vom Deployment ab und wird deshalb erkannt,
+nicht angenommen.
+
+- **Rootful Docker mit dem mitgelieferten Caddy** (`compose.prod.yml`): funktioniert ohne weiteres Zutun.
+  Caddy setzt `x-forwarded-for` auf die tatsaechliche Absenderadresse, `CANVAZ_TRUSTED_PROXY=true` ist in
+  `compose.prod.yml` bereits gesetzt, und die Anwendung sieht Caddys Containeradresse als Proxy sowie die
+  echte Adresse dahinter.
+- **Rootful Docker mit einem eigenen Reverse Proxy:** derselbe Weg in eigener Verantwortung - der Proxy muss
+  `x-forwarded-for` auf die tatsaechliche Absenderadresse setzen (nicht durchreichen, was ein Client selbst
+  behauptet), und `CANVAZ_TRUSTED_PROXY=true` muss gesetzt sein. Ohne beides sieht die Anwendung nur die
+  Containeradresse des Proxys.
+- **Rootless Docker:** Port-Forwarding mit `docker run -p` gibt unter rootless Docker die Quelladresse
+  standardmaessig nicht weiter (siehe [offizielle Doku zum Troubleshooting](https://docs.docker.com/engine/security/rootless/troubleshoot/)).
+  Zum Erkennen der echten Client-IP wie folgt konfigurieren:
+  - **RootlessKit ab v3.0:** In `~/.config/docker/daemon.json` `{"userland-proxy": false}` setzen, danach
+    `systemctl --user restart docker` ausfuehren. Eventuell muss das Kernelmodul `br_netfilter` geladen sein.
+  - **Aeltere Versionen:** In `~/.config/systemd/user/docker.service.d/override.conf` entweder
+    `Environment="DOCKERD_ROOTLESS_ROOTLESSKIT_NET=slirp4netns"` und `Environment="DOCKERD_ROOTLESS_ROOTLESSKIT_PORT_DRIVER=slirp4netns"`
+    oder `Environment="DOCKERD_ROOTLESS_ROOTLESSKIT_NET=pasta"` und `Environment="DOCKERD_ROOTLESS_ROOTLESSKIT_PORT_DRIVER=implicit"`
+    setzen, danach `systemctl --user daemon-reload` und `systemctl --user restart docker` ausfuehren.
+    Danach traegt `x-forwarded-for` die echte Adresse.
+
+**Pruefen:** Die Systemadministration zeigt unter "Client-Adresse dieser Anfrage"
+(`GET /api/admin/client-address`) Adresse und Klasse der eigenen aktuellen Anfrage - oeffentlich, privat,
+Loopback oder die Adresse des Proxys selbst - ohne sie zu speichern. IPv4-gemappte IPv6-Adressen
+(`::ffff:a.b.c.d`) werden dabei auf ihre IPv4-Form zurueckgefuehrt; private Bereiche sind RFC 1918, CGNAT
+(`100.64.0.0/10`), Link-Local und die IPv6-ULA (`fc00::/7`).
+
+Sieht die Instanz ueber viele Anfragen hinweg ueberwiegend nicht-oeffentliche Adressen, steht dazu beim
+**Uebergang** in diesen Zustand (ab mindestens 50 Anfragen je Zaehlfenster von 200, mit mindestens 80%
+nicht-oeffentlichem Anteil) eine Logzeile (`client-address.mostly-internal`, nur Stichprobengroesse und
+Anteil in Prozent - nie eine Adresse oder ihre Klasse je Anfrage). Bleibt der Zustand bestehen, wiederholt
+sich die Meldung nicht; erst eine Erholung und ein erneuter Einbruch loesen sie wieder aus. Betriebsproben
+(`/api/health`, `/api/ready`, `/api/metrics`) zaehlen dabei nicht mit - gleich ob sie vom Docker-`HEALTHCHECK`,
+vom aktiven Healthcheck eines beliebigen davorstehenden Reverse Proxy oder von Monitoring stammen, sonst
+wuerde eine kleine Instanz mit wenig echtem Verkehr allein durch diese wiederkehrenden Anfragen als
+"ueberwiegend intern" gelten. Die Ausnahme haengt ausschliesslich an diesen drei Pfaden, nie an einem
+bestimmten Proxy. Diese Erkennung ist zugleich die Voraussetzung fuer eine spaetere IP-Sperre nach
+gehaeuften Fehlanmeldungen: ohne plausible Adressen entstuende sonst eine Sperre auf eine Adresse, die gar
+nicht die des tatsaechlichen Absenders ist.
+
 ## Arbeitsbereiche und Rollen
 
 Ein **Arbeitsbereich** ist die aeussere Datengrenze der Instanz: jeder fachliche Datensatz traegt seinen
 Workspacebezug, und ein Nutzer sieht ausschliesslich Arbeitsbereiche, denen er angehoert.
 
 Bestaetigte Rollen sind `owner`, `admin` und `member`. **Boardrollen sind eine eigene Ebene darunter** und
-wirken zusaetzlich zur Mitgliedschaft (siehe *Boards und Szenen*). **Gastrollen stehen daneben und nicht
+wirken zusaetzlich zur Mitgliedschaft (siehe _Boards und Szenen_). **Gastrollen stehen daneben und nicht
 darunter**: ein Gast aus einem Freigabelink ist in keinem Arbeitsbereich Mitglied und erreicht ausschliesslich
 das eine Board seines Links.
 
@@ -426,15 +473,15 @@ eine reine Funktion ohne IO, standardmaessig verweigernd. In den Routen steht ke
 nur der Aufruf und die Uebersetzung der Ablehnung. Was die Oberflaeche ausblendet, ist Bequemlichkeit und
 keine Grenze.
 
-| Aktion | owner | admin | member | Nichtmitglied | Systemadmin ohne Mitgliedschaft | deaktiviert |
-| --- | --- | --- | --- | --- | --- | --- |
-| lesen (Stammdaten, Mitglieder) | ja | ja | ja | nein | ja | nein |
-| umbenennen | ja | ja | nein | nein | ja | nein |
-| archivieren, entarchivieren | ja | nein | nein | nein | ja | nein |
-| Mitglied als `member`/`admin` aufnehmen | ja | ja | nein | nein | ja | nein |
-| Mitglied als `owner` aufnehmen | ja | nein | nein | nein | ja | nein |
-| Rolle aendern oder Mitglied entfernen, sofern kein `owner` beteiligt ist | ja | ja | nein | nein | ja | nein |
-| Rolle aendern oder Mitglied entfernen, wenn ein `owner` beteiligt ist | ja | nein | nein | nein | ja | nein |
+| Aktion                                                                   | owner | admin | member | Nichtmitglied | Systemadmin ohne Mitgliedschaft | deaktiviert |
+| ------------------------------------------------------------------------ | ----- | ----- | ------ | ------------- | ------------------------------- | ----------- |
+| lesen (Stammdaten, Mitglieder)                                           | ja    | ja    | ja     | nein          | ja                              | nein        |
+| umbenennen                                                               | ja    | ja    | nein   | nein          | ja                              | nein        |
+| archivieren, entarchivieren                                              | ja    | nein  | nein   | nein          | ja                              | nein        |
+| Mitglied als `member`/`admin` aufnehmen                                  | ja    | ja    | nein   | nein          | ja                              | nein        |
+| Mitglied als `owner` aufnehmen                                           | ja    | nein  | nein   | nein          | ja                              | nein        |
+| Rolle aendern oder Mitglied entfernen, sofern kein `owner` beteiligt ist | ja    | ja    | nein   | nein          | ja                              | nein        |
+| Rolle aendern oder Mitglied entfernen, wenn ein `owner` beteiligt ist    | ja    | nein  | nein   | nein          | ja                              | nein        |
 
 In einem **archivierten** Arbeitsbereich ist nur noch das Entarchivieren moeglich; alles andere bleibt
 lesbar und wird abgelehnt. Ein **deaktivierter** Nutzer verliert jeden Zugriff, unabhaengig von jeder
@@ -467,17 +514,17 @@ Mitgliedschaft, nicht an dieser Stufe.
 
 Alle verlangen eine Sitzung; alle zustandsaendernden zusaetzlich das CSRF-Token im Header `x-canvaz-csrf`.
 
-| Methode | Pfad | Berechtigung | Antwort ohne Berechtigung |
-| --- | --- | --- | --- |
-| GET | `/api/workspaces` | eigene Mitgliedschaften | 401 ohne Sitzung |
-| POST | `/api/workspaces` | jeder aktive Nutzer | 401 ohne Sitzung |
-| POST | `/api/workspaces/rename` | `workspace:rename` | 404 unsichtbar, sonst 403 |
-| POST | `/api/workspaces/status` | `workspace:archive` / `workspace:unarchive` | 404 unsichtbar, sonst 403 |
-| GET | `/api/workspaces/members?workspaceId=` | `workspace:read` | 404 |
-| GET | `/api/workspaces/members/candidates?workspaceId=&q=` | `member:add` | 404 unsichtbar, sonst 403 |
-| POST | `/api/workspaces/members/add` | `member:add` | 404 unsichtbar, sonst 403 |
-| POST | `/api/workspaces/members/role` | `member:change-role` | 404 unsichtbar, sonst 403 |
-| POST | `/api/workspaces/members/remove` | `member:remove` | 404 unsichtbar, sonst 403 |
+| Methode | Pfad                                                 | Berechtigung                                | Antwort ohne Berechtigung |
+| ------- | ---------------------------------------------------- | ------------------------------------------- | ------------------------- |
+| GET     | `/api/workspaces`                                    | eigene Mitgliedschaften                     | 401 ohne Sitzung          |
+| POST    | `/api/workspaces`                                    | jeder aktive Nutzer                         | 401 ohne Sitzung          |
+| POST    | `/api/workspaces/rename`                             | `workspace:rename`                          | 404 unsichtbar, sonst 403 |
+| POST    | `/api/workspaces/status`                             | `workspace:archive` / `workspace:unarchive` | 404 unsichtbar, sonst 403 |
+| GET     | `/api/workspaces/members?workspaceId=`               | `workspace:read`                            | 404                       |
+| GET     | `/api/workspaces/members/candidates?workspaceId=&q=` | `member:add`                                | 404 unsichtbar, sonst 403 |
+| POST    | `/api/workspaces/members/add`                        | `member:add`                                | 404 unsichtbar, sonst 403 |
+| POST    | `/api/workspaces/members/role`                       | `member:change-role`                        | 404 unsichtbar, sonst 403 |
+| POST    | `/api/workspaces/members/remove`                     | `member:remove`                             | 404 unsichtbar, sonst 403 |
 
 **404 statt 403, wo die Existenz sonst durchscheinen wuerde.** Wer einen Arbeitsbereich nicht sehen darf,
 bekommt dieselbe Antwort wie fuer eine frei erfundene Kennung; erst wer ihn sehen darf, bekommt mit 403 eine
@@ -503,7 +550,6 @@ strukturierte Metadaten. Aenderung und Nachweis entstehen in derselben Transakti
 Boardinhalte stehen dort nie. Eine Leseansicht gibt es bewusst noch nicht; die Ereignisse sind ueber
 `WorkspaceStore.audit` und SQL abfragbar.
 
-
 ## Boards und Szenen
 
 Ein **Board** ist eine Zeichenflaeche innerhalb genau eines Arbeitsbereichs und hat genau einen fachlichen
@@ -522,7 +568,7 @@ Zwei unabhaengige Eingaben entscheiden ueber einen internen Nutzer, in dieser Re
 1. Die **Workspace-Mitgliedschaft** ist die Eintrittskarte. Ohne Rolle im Arbeitsbereich gibt es keinen
    Boardzugriff, und **keine Boardrolle kann das umgehen**.
 2. Die **Boardrolle** (`owner`, `editor`, `viewer`) verfeinert die Mitgliedschaft je Board. Sie wirkt
-   *zusaetzlich* zur Mitgliedschaft und wird als Freigabe an einen vorhandenen internen Nutzer vergeben.
+   _zusaetzlich_ zur Mitgliedschaft und wird als Freigabe an einen vorhandenen internen Nutzer vergeben.
 
 Ein **Gast** aus einem Freigabelink steht vor derselben Funktion, aber auf einem eigenen Weg: er hat weder
 Mitgliedschaft noch Boardrolle, und seine einzige Eingabe ist der Grant seines Links
@@ -534,14 +580,14 @@ Freigabe schraenkt darin gezielt ein oder benennt jemanden ausdruecklich, statt 
 erst einzeln eroeffnen zu muessen. Deshalb bleibt der Entzug einer Freigabe genau das: die ausdrueckliche
 Boardrolle faellt weg, und es gilt wieder die Mitgliedschaft.
 
-| Aktion | Board-`owner` | Workspace-`owner` | `editor` (auch ohne Freigabe) | `viewer` | `guest-editor` | `guest-viewer` | Nichtmitglied | Systemadmin ohne Mitgliedschaft | deaktiviert |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Board sehen, oeffnen, Szene laden | ja | ja | ja | ja | ja | ja | nein | nein | nein |
-| umbenennen, archivieren, entarchivieren | ja | ja | ja | nein | nein | nein | nein | nein | nein |
-| Szene speichern, Bild hochladen, importieren | ja | ja | ja | nein | ja | nein | nein | nein | nein |
-| Version wiederherstellen | ja | ja | nein | nein | nein | nein | nein | nein | nein |
-| Freigaben und Gastlinks verwalten | ja | ja | nein | nein | nein | nein | nein | nein | nein |
-| Ownerschaft uebertragen | ja | ja | nein | nein | nein | nein | nein | nein | nein |
+| Aktion                                       | Board-`owner` | Workspace-`owner` | `editor` (auch ohne Freigabe) | `viewer` | `guest-editor` | `guest-viewer` | Nichtmitglied | Systemadmin ohne Mitgliedschaft | deaktiviert |
+| -------------------------------------------- | ------------- | ----------------- | ----------------------------- | -------- | -------------- | -------------- | ------------- | ------------------------------- | ----------- |
+| Board sehen, oeffnen, Szene laden            | ja            | ja                | ja                            | ja       | ja             | ja             | nein          | nein                            | nein        |
+| umbenennen, archivieren, entarchivieren      | ja            | ja                | ja                            | nein     | nein           | nein           | nein          | nein                            | nein        |
+| Szene speichern, Bild hochladen, importieren | ja            | ja                | ja                            | nein     | ja             | nein           | nein          | nein                            | nein        |
+| Version wiederherstellen                     | ja            | ja                | nein                          | nein     | nein           | nein           | nein          | nein                            | nein        |
+| Freigaben und Gastlinks verwalten            | ja            | ja                | nein                          | nein     | nein           | nein           | nein          | nein                            | nein        |
+| Ownerschaft uebertragen                      | ja            | ja                | nein                          | nein     | nein           | nein           | nein          | nein                            | nein        |
 
 Die beiden Gastspalten gelten **nur fuer das eine Board des jeweiligen Links**. Jedes andere Board - auch ein
 Nachbarboard desselben Arbeitsbereichs - ist fuer einen Gast nicht vorhanden.
@@ -639,7 +685,7 @@ Mitgliedschaft und keine Anmeldung, nur diese eine Sitzung fuer dieses eine Boar
 **Ablauf und Widerruf wirken sofort**, auf neue wie auf bestehende Gastsessions: jede Aufloesung eines
 Gastzugriffs prueft Gastsession **und** Link in derselben Abfrage, und nichts davon wird zwischengespeichert.
 Der Widerruf schliesst zusaetzlich offene Realtime-Verbindungen dieses Links unmittelbar (siehe
-*Echtzeit-Kollaboration*).
+_Echtzeit-Kollaboration_).
 
 **Was ein Gast erreicht, ist der Inhalt seines Boards - und sonst nichts.** Vier Endpunkte nehmen eine
 Gastsession an: Szene laden und speichern, Bild abrufen und hochladen. Jede andere Strecke - Boardliste,
@@ -679,7 +725,7 @@ kommen darin nicht vor, und es gibt keinen Weg dorthin - auch keinen Rueckweg au
 Beitritt nimmt die Ansicht das Token aus der Adresszeile; ein neu geladener Tab findet ueber sein Gastcookie
 zurueck ins Board. Liegt dagegen ein Token in der Adresse, wird immer beigetreten: welches Board es meint,
 weiss allein der Server, und ein vorhandenes Gastcookie koennte zu einem anderen gehoeren. Ist im selben Browser
-eine interne Sitzung offen, hat sie Vorrang (siehe *Bekannte Grenzen*); bleibt das Board dadurch unsichtbar,
+eine interne Sitzung offen, hat sie Vorrang (siehe _Bekannte Grenzen_); bleibt das Board dadurch unsichtbar,
 benennt die Gastansicht genau diese Ursache.
 
 Was es bewusst **nicht** gibt: dauerhafte externe Konten, Gastmitgliedschaften in einem Arbeitsbereich,
@@ -690,32 +736,32 @@ Einladungen per E-Mail und weitere Gastrollen.
 Alle verlangen eine Sitzung; alle zustandsaendernden zusaetzlich das CSRF-Token im Header `x-canvaz-csrf`.
 Die Antwort entsteht in der Transaktion und wird erst nach dem Commit gesendet.
 
-| Methode | Pfad | Berechtigung | Ohne Berechtigung | Konflikt |
-| --- | --- | --- | --- | --- |
-| GET | `/api/boards?workspaceId=&status=&q=` | Mitglied im Arbeitsbereich | 404 | — |
-| POST | `/api/boards` | `board:create` | 404 unsichtbar, sonst 403 | — |
-| POST | `/api/boards/duplicate` | `board:read` auf der Quelle + `board:create` im selben Arbeitsbereich | 404 unsichtbar, sonst 403 | 409 archivierte Quelle |
-| POST | `/api/boards/rename` | `board:rename` | 404 unsichtbar, sonst 403 | — |
-| POST | `/api/boards/status` | `board:archive` / `board:unarchive` | 404 unsichtbar, sonst 403 | — |
-| GET | `/api/boards/scene?boardId=` | `board:read` | 404 | — |
-| POST | `/api/boards/scene` | `scene:write` | 404 unsichtbar, sonst 403 | 409 |
-| POST | `/api/boards/assets?boardId=&fileId=` | `scene:write` | 404 unsichtbar, sonst 403 | 409 |
-| GET | `/api/boards/assets?boardId=&fileId=` | `board:read` | 404 | — |
-| GET | `/api/boards/grants?boardId=` | `board:read` | 404 | — |
-| POST | `/api/boards/grants/add` | `grant:manage` | 404 unsichtbar, sonst 403 | 409 |
-| POST | `/api/boards/grants/role` | `grant:manage` | 404 unsichtbar, sonst 403 | — |
-| POST | `/api/boards/grants/remove` | `grant:manage` | 404 unsichtbar, sonst 403 | 409 |
-| POST | `/api/boards/owner` | `board:transfer-ownership` | 404 unsichtbar, sonst 403 | — |
-| GET | `/api/boards/share-links?boardId=` | `grant:manage` | 404 unsichtbar, sonst 403 | — |
-| POST | `/api/boards/share-links/create` | `grant:manage` | 404 unsichtbar, sonst 403 | — |
-| POST | `/api/boards/share-links/revoke` | `grant:manage` | 404 unsichtbar, sonst 403 | — |
-| GET | `/api/boards/versions?boardId=` | `board:read` | 404 | — |
-| GET | `/api/boards/versions/scene?boardId=&version=` | `board:read` | 404 | — |
-| POST | `/api/boards/versions/restore` | `scene:restore` | 404 unsichtbar, sonst 403 | 409 |
-| GET | `/api/boards/export?boardId=` | `board:read` | 404 | — |
-| POST | `/api/boards/import` | `scene:write` | 404 unsichtbar, sonst 403 | 409 |
-| POST | `/api/boards/guest/join` | oeffentlich, gueltiges Token | 404 | — |
-| GET | `/api/boards/guest/session` | gueltige Gastsession | 401 | — |
+| Methode | Pfad                                           | Berechtigung                                                          | Ohne Berechtigung         | Konflikt               |
+| ------- | ---------------------------------------------- | --------------------------------------------------------------------- | ------------------------- | ---------------------- |
+| GET     | `/api/boards?workspaceId=&status=&q=`          | Mitglied im Arbeitsbereich                                            | 404                       | —                      |
+| POST    | `/api/boards`                                  | `board:create`                                                        | 404 unsichtbar, sonst 403 | —                      |
+| POST    | `/api/boards/duplicate`                        | `board:read` auf der Quelle + `board:create` im selben Arbeitsbereich | 404 unsichtbar, sonst 403 | 409 archivierte Quelle |
+| POST    | `/api/boards/rename`                           | `board:rename`                                                        | 404 unsichtbar, sonst 403 | —                      |
+| POST    | `/api/boards/status`                           | `board:archive` / `board:unarchive`                                   | 404 unsichtbar, sonst 403 | —                      |
+| GET     | `/api/boards/scene?boardId=`                   | `board:read`                                                          | 404                       | —                      |
+| POST    | `/api/boards/scene`                            | `scene:write`                                                         | 404 unsichtbar, sonst 403 | 409                    |
+| POST    | `/api/boards/assets?boardId=&fileId=`          | `scene:write`                                                         | 404 unsichtbar, sonst 403 | 409                    |
+| GET     | `/api/boards/assets?boardId=&fileId=`          | `board:read`                                                          | 404                       | —                      |
+| GET     | `/api/boards/grants?boardId=`                  | `board:read`                                                          | 404                       | —                      |
+| POST    | `/api/boards/grants/add`                       | `grant:manage`                                                        | 404 unsichtbar, sonst 403 | 409                    |
+| POST    | `/api/boards/grants/role`                      | `grant:manage`                                                        | 404 unsichtbar, sonst 403 | —                      |
+| POST    | `/api/boards/grants/remove`                    | `grant:manage`                                                        | 404 unsichtbar, sonst 403 | 409                    |
+| POST    | `/api/boards/owner`                            | `board:transfer-ownership`                                            | 404 unsichtbar, sonst 403 | —                      |
+| GET     | `/api/boards/share-links?boardId=`             | `grant:manage`                                                        | 404 unsichtbar, sonst 403 | —                      |
+| POST    | `/api/boards/share-links/create`               | `grant:manage`                                                        | 404 unsichtbar, sonst 403 | —                      |
+| POST    | `/api/boards/share-links/revoke`               | `grant:manage`                                                        | 404 unsichtbar, sonst 403 | —                      |
+| GET     | `/api/boards/versions?boardId=`                | `board:read`                                                          | 404                       | —                      |
+| GET     | `/api/boards/versions/scene?boardId=&version=` | `board:read`                                                          | 404                       | —                      |
+| POST    | `/api/boards/versions/restore`                 | `scene:restore`                                                       | 404 unsichtbar, sonst 403 | 409                    |
+| GET     | `/api/boards/export?boardId=`                  | `board:read`                                                          | 404                       | —                      |
+| POST    | `/api/boards/import`                           | `scene:write`                                                         | 404 unsichtbar, sonst 403 | 409                    |
+| POST    | `/api/boards/guest/join`                       | oeffentlich, gueltiges Token                                          | 404                       | —                      |
+| GET     | `/api/boards/guest/session`                    | gueltige Gastsession                                                  | 401                       | —                      |
 
 Die vier Endpunkte, die zusaetzlich eine **Gastsession** annehmen, sind `GET`/`POST` auf
 `/api/boards/scene` und `/api/boards/assets`. Fuer sie entscheidet dieselbe Policy wie fuer ein Mitglied;
@@ -761,7 +807,7 @@ zweite Absicherung. Zwei gleichzeitige Speicherungen auf derselben Ausgangsversi
 neue Version und genau eine 409.
 
 Diese Pruefung bleibt die Wahrheit ueber die Persistenz - **auch fuer die Echtzeitstrecke**. Ein
-Realtime-Checkpoint geht denselben Weg und kann sie nicht umgehen (siehe *Echtzeit-Kollaboration*).
+Realtime-Checkpoint geht denselben Weg und kann sie nicht umgehen (siehe _Echtzeit-Kollaboration_).
 
 Ohne Echtzeitverbindung speichert die Oberflaeche verzoegert nach der letzten Aenderung und auf Knopfdruck.
 Nach einem Konflikt hoert sie auf, automatisch zu speichern: mit der neuen Ausgangsversion weiterzumachen
@@ -857,16 +903,16 @@ den Inhalt und legt dafuer eine neue Version an - der bisherige Stand bleibt in 
 **Eine Importdatei ist nicht vertrauenswuerdig** und wird vollstaendig geprueft, bevor irgendetwas davon
 gespeichert wird:
 
-| Fall | Antwort |
-| --- | --- |
-| kein `.excalidraw`, unbekannte Formatversion, ungueltige Elemente oder Ansichtsangaben | 400 |
-| Verweis auf ein Bild **ausserhalb** der Datei (`http(s)://` statt `data:`) | 400, nichts wird nachgeladen |
-| Elementverweis mit ausfuehrbarem Inhalt (`javascript:`, auch mit eingestreuten Steuerzeichen) | 400 |
-| mehr als 100 eingebettete Bilder | 400 |
-| eingebettetes Bild ohne erlaubtes Bildformat oder mit falsch behauptetem Typ | 415 |
-| einzelnes Bild ueber `CANVAZ_MAX_ASSET_BYTES`, Datei ueber `CANVAZ_MAX_IMPORT_BYTES` | 413 |
-| Dateikennung, zu der im Board bereits ein **anderer** Inhalt liegt | 409 |
-| Board inzwischen gespeichert (`baseVersion` ueberholt) | 409 |
+| Fall                                                                                          | Antwort                      |
+| --------------------------------------------------------------------------------------------- | ---------------------------- |
+| kein `.excalidraw`, unbekannte Formatversion, ungueltige Elemente oder Ansichtsangaben        | 400                          |
+| Verweis auf ein Bild **ausserhalb** der Datei (`http(s)://` statt `data:`)                    | 400, nichts wird nachgeladen |
+| Elementverweis mit ausfuehrbarem Inhalt (`javascript:`, auch mit eingestreuten Steuerzeichen) | 400                          |
+| mehr als 100 eingebettete Bilder                                                              | 400                          |
+| eingebettetes Bild ohne erlaubtes Bildformat oder mit falsch behauptetem Typ                  | 415                          |
+| einzelnes Bild ueber `CANVAZ_MAX_ASSET_BYTES`, Datei ueber `CANVAZ_MAX_IMPORT_BYTES`          | 413                          |
+| Dateikennung, zu der im Board bereits ein **anderer** Inhalt liegt                            | 409                          |
+| Board inzwischen gespeichert (`baseVersion` ueberholt)                                        | 409                          |
 
 Die Bilder laufen durch **dieselbe** Signaturpruefung wie ein Upload: die Magic Bytes muessen ein erlaubtes
 Format ergeben und zum in der Data-URL genannten Typ passen. Der Speicherschluessel entsteht wie immer
@@ -878,7 +924,7 @@ Form haben wie beim Upload. Die Groesse eines Imports ist mit `CANVAZ_MAX_IMPORT
 aus derselben Boardzeile erreichbar - dieselbe Entscheidung wie ueberall in dieser SPA: kein Dialog, kein
 Fokuskaefig, jede Ueberschrift bleibt in der Dokumentstruktur. Der Abschnitt zeigt den aktuellen Stand und
 die Aufbewahrungsgrenze, dann Export, dann Import mit dem Hinweis, dass er den Inhalt ersetzt und der
-bisherige Stand erhalten bleibt, und zuletzt den Verlauf mit *Ansehen* und *Wiederherstellen* je Zeile. Die
+bisherige Stand erhalten bleibt, und zuletzt den Verlauf mit _Ansehen_ und _Wiederherstellen_ je Zeile. Die
 Vorschau oeffnet denselben Editor auf der ganzen Flaeche und benennt im Kopf, dass sie eine Vorschau ist.
 Angeboten wird, was der Server ohnehin traegt (`mayRestore` der Antwort, `mayChangeBoard` fuer den Import) -
 Bequemlichkeit und keine Grenze.
@@ -916,10 +962,10 @@ get(key: string): Promise<Uint8Array | null>
 delete(key: string): Promise<void>
 ```
 
-| Adapter | Umsetzung | Zusagen |
-| --- | --- | --- |
-| `filesystem` | `src/persistence/asset-storage-filesystem.ts` | Schreibt ausschliesslich unter `CANVAZ_STORAGE_FILESYSTEM_ROOT`. Geschrieben wird in eine temporaere Datei im Zielverzeichnis und dann per `rename` gezogen - ein Abbruch hinterlaesst nie eine halbe Datei unter dem gueltigen Schluessel. |
-| `s3` | `src/persistence/asset-storage-s3.ts` | Spricht AWS S3 und S3-kompatible Server ueber signierte HTTP-Anfragen (AWS Signature Version 4, `node:crypto` und `fetch`). Ein einzelnes `PUT` ist die atomare Einheit des Objektspeichers. Im Betrieb ein externer Anbieter, den der Betreiber selbst stellt; in Entwicklung und CI ist SeaweedFS der Testpartner. |
+| Adapter      | Umsetzung                                     | Zusagen                                                                                                                                                                                                                                                                                                              |
+| ------------ | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `filesystem` | `src/persistence/asset-storage-filesystem.ts` | Schreibt ausschliesslich unter `CANVAZ_STORAGE_FILESYSTEM_ROOT`. Geschrieben wird in eine temporaere Datei im Zielverzeichnis und dann per `rename` gezogen - ein Abbruch hinterlaesst nie eine halbe Datei unter dem gueltigen Schluessel.                                                                          |
+| `s3`         | `src/persistence/asset-storage-s3.ts`         | Spricht AWS S3 und S3-kompatible Server ueber signierte HTTP-Anfragen (AWS Signature Version 4, `node:crypto` und `fetch`). Ein einzelnes `PUT` ist die atomare Einheit des Objektspeichers. Im Betrieb ein externer Anbieter, den der Betreiber selbst stellt; in Entwicklung und CI ist SeaweedFS der Testpartner. |
 
 **Kein S3-SDK.** Gebraucht werden drei Aufrufe auf genau einem Bucket. `@aws-sdk/client-s3` braechte
 Paginierung, Multipart, Presigning, Retry-Strategien, eine Credential-Provider-Kette und einen
@@ -940,26 +986,26 @@ Datensatz.
 (`src/persistence/asset-storage.ts`); Routen, Domain und Datenbank kennen nur `AssetStoragePort`. Fehlende
 adapterspezifische Pflichtwerte fuehren zum Startfehler, gesammelt wie jeder andere Konfigurationsfehler.
 
-| Variable | Gilt fuer | Bedeutung |
-| --- | --- | --- |
-| `CANVAZ_STORAGE_ADAPTER` | beide | `filesystem` (Standard) oder `s3` |
-| `CANVAZ_MAX_ASSET_BYTES` | beide | Obergrenze je Datei, Standard 5 MiB (erlaubt 16 KiB bis 64 MiB) |
-| `CANVAZ_STORAGE_FILESYSTEM_ROOT` | `filesystem` | Wurzelverzeichnis, **Pflicht ohne Standardwert** |
-| `CANVAZ_S3_ENDPOINT` | `s3` | Basis-URL des Dienstes |
-| `CANVAZ_S3_REGION` | `s3` | Region der Signatur |
-| `CANVAZ_S3_BUCKET` | `s3` | Bucket, vom Betreiber angelegt |
-| `CANVAZ_S3_ACCESS_KEY_ID`, `CANVAZ_S3_SECRET_ACCESS_KEY` | `s3` | Zugangsdaten |
-| `CANVAZ_S3_FORCE_PATH_STYLE` | `s3` | `true` fuer Anbieter ohne Bucket-Subdomains (etwa SeaweedFS im Test), Standard `false` (AWS) |
+| Variable                                                 | Gilt fuer    | Bedeutung                                                                                    |
+| -------------------------------------------------------- | ------------ | -------------------------------------------------------------------------------------------- |
+| `CANVAZ_STORAGE_ADAPTER`                                 | beide        | `filesystem` (Standard) oder `s3`                                                            |
+| `CANVAZ_MAX_ASSET_BYTES`                                 | beide        | Obergrenze je Datei, Standard 5 MiB (erlaubt 16 KiB bis 64 MiB)                              |
+| `CANVAZ_STORAGE_FILESYSTEM_ROOT`                         | `filesystem` | Wurzelverzeichnis, **Pflicht ohne Standardwert**                                             |
+| `CANVAZ_S3_ENDPOINT`                                     | `s3`         | Basis-URL des Dienstes                                                                       |
+| `CANVAZ_S3_REGION`                                       | `s3`         | Region der Signatur                                                                          |
+| `CANVAZ_S3_BUCKET`                                       | `s3`         | Bucket, vom Betreiber angelegt                                                               |
+| `CANVAZ_S3_ACCESS_KEY_ID`, `CANVAZ_S3_SECRET_ACCESS_KEY` | `s3`         | Zugangsdaten                                                                                 |
+| `CANVAZ_S3_FORCE_PATH_STYLE`                             | `s3`         | `true` fuer Anbieter ohne Bucket-Subdomains (etwa SeaweedFS im Test), Standard `false` (AWS) |
 
 Fuer das Wurzelverzeichnis gibt es bewusst **keinen** Standardwert: es muss ein persistentes Volume sein.
 Ein Ersatzpfad im Containerlayer saehe aus wie Persistenz und waere beim naechsten Neustart weg.
 
 #### Endpunkte
 
-| Methode | Pfad | Berechtigung | Ohne Berechtigung | Falscher Typ | Zu gross |
-| --- | --- | --- | --- | --- | --- |
-| POST | `/api/boards/assets?boardId=&fileId=&fileName=` | `scene:write` + CSRF-Token | 404 unsichtbar, sonst 403 | 415 | 413 |
-| GET | `/api/boards/assets?boardId=&fileId=` | `board:read` | 404 | — | — |
+| Methode | Pfad                                            | Berechtigung               | Ohne Berechtigung         | Falscher Typ | Zu gross |
+| ------- | ----------------------------------------------- | -------------------------- | ------------------------- | ------------ | -------- |
+| POST    | `/api/boards/assets?boardId=&fileId=&fileName=` | `scene:write` + CSRF-Token | 404 unsichtbar, sonst 403 | 415          | 413      |
+| GET     | `/api/boards/assets?boardId=&fileId=`           | `board:read`               | 404                       | —            | —        |
 
 Der Upload traegt die Bytes **roh** im Anfragekoerper; Board, Dateikennung und Dateiname stehen in der
 Abfragezeichenfolge. Das spart die Base64-Aufblaehung und einen Parser fuer mehrteilige Koerper. Ein Bild
@@ -1154,22 +1200,22 @@ Nachrichten validiert (`parseClientMessage`). `REALTIME_PROTOCOL_VERSION` steht 
 im `join` des Clients; weichen sie ab, wird der Beitritt abgelehnt, statt halb verstandene Nachrichten zu
 verarbeiten.
 
-| Richtung | Typ | Nutzlast |
-| --- | --- | --- |
-| Server → Client | `ready` | `protocolVersion`, `userId` - authentifiziert, aber in keinem Raum |
-| Client → Server | `join` | `protocolVersion`, `boardId` |
-| Server → Client | `joined` | `boardId`, `clientId`, `canWrite`, `version`, vollstaendige `scene`, `peers` |
-| Client → Server | `scene-change` | `boardId`, geaenderte `elements`, `appState` oder `null`, `fileIds` |
-| Server → Client | `scene-change` | `boardId`, uebernommene `elements`, `appState`, neue `files` |
-| Client → Server | `presence` | `boardId`, `pointer` oder `null`, `selectedElementIds` |
-| Server → Client | `presence` | `boardId`, vollstaendiges Teilnehmerfeld `peers` |
-| Client → Server | `resync` | `boardId` |
-| Server → Client | `snapshot` | `boardId`, `version`, vollstaendige `scene` |
-| Client → Server | `leave` | `boardId` |
-| Server → Client | `left` | `boardId` |
-| Server → Client | `access` | `boardId`, `canWrite` - die Berechtigung hat sich geaendert |
-| Server → Client | `saved` | `boardId`, `version`, `savedAt` |
-| Server → Client | `error` | `code`, `message` |
+| Richtung        | Typ            | Nutzlast                                                                     |
+| --------------- | -------------- | ---------------------------------------------------------------------------- |
+| Server → Client | `ready`        | `protocolVersion`, `userId` - authentifiziert, aber in keinem Raum           |
+| Client → Server | `join`         | `protocolVersion`, `boardId`                                                 |
+| Server → Client | `joined`       | `boardId`, `clientId`, `canWrite`, `version`, vollstaendige `scene`, `peers` |
+| Client → Server | `scene-change` | `boardId`, geaenderte `elements`, `appState` oder `null`, `fileIds`          |
+| Server → Client | `scene-change` | `boardId`, uebernommene `elements`, `appState`, neue `files`                 |
+| Client → Server | `presence`     | `boardId`, `pointer` oder `null`, `selectedElementIds`                       |
+| Server → Client | `presence`     | `boardId`, vollstaendiges Teilnehmerfeld `peers`                             |
+| Client → Server | `resync`       | `boardId`                                                                    |
+| Server → Client | `snapshot`     | `boardId`, `version`, vollstaendige `scene`                                  |
+| Client → Server | `leave`        | `boardId`                                                                    |
+| Server → Client | `left`         | `boardId`                                                                    |
+| Server → Client | `access`       | `boardId`, `canWrite` - die Berechtigung hat sich geaendert                  |
+| Server → Client | `saved`        | `boardId`, `version`, `savedAt`                                              |
+| Server → Client | `error`        | `code`, `message`                                                            |
 
 `fileIds` nennt ausschliesslich Kennungen: Groesse, Typ und Speicherschluessel loest der Server aus
 `board_assets` auf. Bytes laufen nie ueber diesen Kanal, sondern weiterhin ueber den autorisierten
@@ -1306,14 +1352,14 @@ Alle Werte sind Implementierungsgrenzen mit Reserve gegenueber dem Lastziel und 
 (`createRealtimeGateway`, `createBoardRooms`; die Raumgroesse folgt `CANVAZ_MAX_SCENE_BYTES`). Keine davon
 fuehrt zu einem unbenannten Fehler, und keine hinterlaesst einen Raum, der nicht weiterarbeitet.
 
-| Grenze | Standard | Bei Ueberschreitung | Warum dieser Wert |
-| --- | --- | --- | --- |
-| Rahmengroesse (`maxPayload`) | `CANVAZ_MAX_SCENE_BYTES`, 5 MiB | `ws` verwirft den Rahmen und schliesst mit `1009` | Mehr kann auch ein gespeicherter Snapshot nie tragen |
-| Elemente je Nachricht | 2 000 | `zu-viele-elemente`, **nichts** uebernommen | Weit ueber jeder laufenden Aenderung; gekappt waere stiller Datenverlust |
-| Nachrichten je Verbindung | 120/s, Eimer 240 | `zu-viele-nachrichten`; bei Dauerflut Schliessen mit `4429` | Der Browser buendelt auf hoechstens 40/s - dreifache Reserve, zwei Sekunden Nachholschub |
-| Akkumulierter Raumzustand | `CANVAZ_MAX_SCENE_BYTES`, 5 MiB | `raum-zu-gross`, Aenderung verworfen, Raum bleibt benutzbar | Der Raum haelt genau das, was ein Checkpoint schreibt und die HTTP-Speicherung wieder annehmen muss |
-| Teilnehmer je Raum | 10 | `raum-voll` beim Beitritt, Anwesende unberuehrt | Der Reservewert des Produktvertrags |
-| Verbindungen je Nutzer (Gast: je Gastsession) | 5 | `zu-viele-verbindungen` und Schliessen mit `4429` | Fuenf Tabs sind grosszuegig; ein Konto darf die zehn Verbindungen nicht allein belegen |
+| Grenze                                        | Standard                        | Bei Ueberschreitung                                         | Warum dieser Wert                                                                                   |
+| --------------------------------------------- | ------------------------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Rahmengroesse (`maxPayload`)                  | `CANVAZ_MAX_SCENE_BYTES`, 5 MiB | `ws` verwirft den Rahmen und schliesst mit `1009`           | Mehr kann auch ein gespeicherter Snapshot nie tragen                                                |
+| Elemente je Nachricht                         | 2 000                           | `zu-viele-elemente`, **nichts** uebernommen                 | Weit ueber jeder laufenden Aenderung; gekappt waere stiller Datenverlust                            |
+| Nachrichten je Verbindung                     | 120/s, Eimer 240                | `zu-viele-nachrichten`; bei Dauerflut Schliessen mit `4429` | Der Browser buendelt auf hoechstens 40/s - dreifache Reserve, zwei Sekunden Nachholschub            |
+| Akkumulierter Raumzustand                     | `CANVAZ_MAX_SCENE_BYTES`, 5 MiB | `raum-zu-gross`, Aenderung verworfen, Raum bleibt benutzbar | Der Raum haelt genau das, was ein Checkpoint schreibt und die HTTP-Speicherung wieder annehmen muss |
+| Teilnehmer je Raum                            | 10                              | `raum-voll` beim Beitritt, Anwesende unberuehrt             | Der Reservewert des Produktvertrags                                                                 |
+| Verbindungen je Nutzer (Gast: je Gastsession) | 5                               | `zu-viele-verbindungen` und Schliessen mit `4429`           | Fuenf Tabs sind grosszuegig; ein Konto darf die zehn Verbindungen nicht allein belegen              |
 
 Geprueft wird die **projizierte** Groesse, nicht die aktuelle: eine Aenderung, die den Raum kleiner macht
 oder gleich gross laesst, kommt auch an der Grenze noch durch. Ein volles Board bleibt damit vollstaendig
@@ -1343,12 +1389,12 @@ faellt ohnehin dem Herzschlag zum Opfer.
 `tests/integration/realtime-load.test.ts` misst gegen die Zielwerte des Produktvertrags, mit den
 **Standardtakten** und nicht mit verkuerzten Testwerten:
 
-| Messung | Aufbau | Ergebnis | Schwelle im Test |
-| --- | --- | --- | --- |
-| Zustellzeit einer Aenderung an **alle** neun Gegenstellen | 5 Bearbeiter, 10 Verbindungen, 100 Aenderungen im 50-ms-Takt | p50 8,3 ms, p95 9,7 ms, Spitze 22,0 ms | p95 < 150 ms, Spitze < 500 ms |
-| Zustellzeit einer Zeigerbewegung an **alle** neun Gegenstellen | 5 Bearbeiter, 10 Verbindungen, 100 Bewegungen im 150-ms-Takt | p50 102,2 ms, p95 104,2 ms, Spitze 104,6 ms | p95 < 250 ms, Spitze < 600 ms |
-| Checkpoint-Takt unter Dauerlast | 5 Bearbeiter, 575 Aenderungen in 11,5 s | 1 Checkpoint waehrend der Last, 1 weiterer nach der Ruhezeit | Obergrenze gegriffen, weniger als ein Zehntel der Aenderungen als Versionen |
-| Ressourcenverhalten | dieselbe Last | Raum haelt 5 Elemente statt 100 Nachrichten, `scene_versions` bleibt unter der Aufbewahrungsgrenze, Raumzahl faellt auf 0 | fest zugesichert |
+| Messung                                                        | Aufbau                                                       | Ergebnis                                                                                                                  | Schwelle im Test                                                            |
+| -------------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| Zustellzeit einer Aenderung an **alle** neun Gegenstellen      | 5 Bearbeiter, 10 Verbindungen, 100 Aenderungen im 50-ms-Takt | p50 8,3 ms, p95 9,7 ms, Spitze 22,0 ms                                                                                    | p95 < 150 ms, Spitze < 500 ms                                               |
+| Zustellzeit einer Zeigerbewegung an **alle** neun Gegenstellen | 5 Bearbeiter, 10 Verbindungen, 100 Bewegungen im 150-ms-Takt | p50 102,2 ms, p95 104,2 ms, Spitze 104,6 ms                                                                               | p95 < 250 ms, Spitze < 600 ms                                               |
+| Checkpoint-Takt unter Dauerlast                                | 5 Bearbeiter, 575 Aenderungen in 11,5 s                      | 1 Checkpoint waehrend der Last, 1 weiterer nach der Ruhezeit                                                              | Obergrenze gegriffen, weniger als ein Zehntel der Aenderungen als Versionen |
+| Ressourcenverhalten                                            | dieselbe Last                                                | Raum haelt 5 Elemente statt 100 Nachrichten, `scene_versions` bleibt unter der Aufbewahrungsgrenze, Raumzahl faellt auf 0 | fest zugesichert                                                            |
 
 Die Schwellen sind Obergrenzen mit Reserve, keine Bestwerte: der Bezugspunkt ist die Wahrnehmung. Eine
 gemeinsame Zeichenflaeche fuehlt sich gleichzeitig an, solange eine fremde Aenderung innerhalb von etwa
@@ -1421,7 +1467,7 @@ lokalen Benutzerverwaltung. Wer ihn zuschaltet, setzt alle vier - sonst startet 
 Die Konfiguration bleibt generisch: gesetzt wird nur der Issuer, den Rest holt die Anwendung ueber
 Discovery (`<issuer>/.well-known/openid-configuration`). Fuer Authentik:
 
-1. **Provider anlegen**: Typ *OAuth2/OpenID Provider*.
+1. **Provider anlegen**: Typ _OAuth2/OpenID Provider_.
    - Client type: **Confidential**
    - Authorization flow: der gewuenschte Anmeldeflow (z. B. `default-provider-authorization-explicit-consent`)
    - Redirect URI (Strict): `https://<canvaz-host>/api/auth/callback` - identisch mit
@@ -1436,12 +1482,12 @@ Discovery (`<issuer>/.well-known/openid-configuration`). Fuer Authentik:
    Adresse.
 4. **Werte uebernehmen**:
 
-   | Umgebungsvariable | Wert aus Authentik |
-   | --- | --- |
-   | `CANVAZ_OIDC_ISSUER` | *OpenID Configuration Issuer*, z. B. `https://authentik.example.com/application/o/canvaz/` |
-   | `CANVAZ_OIDC_CLIENT_ID` | *Client ID* des Providers |
-   | `CANVAZ_OIDC_CLIENT_SECRET` | *Client Secret* des Providers |
-   | `CANVAZ_OIDC_REDIRECT_URI` | dieselbe Redirect-URI wie oben |
+   | Umgebungsvariable           | Wert aus Authentik                                                                         |
+   | --------------------------- | ------------------------------------------------------------------------------------------ |
+   | `CANVAZ_OIDC_ISSUER`        | _OpenID Configuration Issuer_, z. B. `https://authentik.example.com/application/o/canvaz/` |
+   | `CANVAZ_OIDC_CLIENT_ID`     | _Client ID_ des Providers                                                                  |
+   | `CANVAZ_OIDC_CLIENT_SECRET` | _Client Secret_ des Providers                                                              |
+   | `CANVAZ_OIDC_REDIRECT_URI`  | dieselbe Redirect-URI wie oben                                                             |
 
    Alle vier Werte sind Laufzeitkonfiguration und stehen nie im Repository.
 
@@ -1459,13 +1505,13 @@ ausschliesslich aus drei Diensten: einem Reverse Proxy mit TLS, dem Anwendungsse
 zwar unabhaengig vom gewaehlten Storage-Adapter. Wer `s3` faehrt, spricht einen externen, selbst gestellten
 Objektspeicher an; diese Instanz liefert dafuer keinen eigenen Dienst mit.
 
-| Datei | Rolle |
-| --- | --- |
-| `Dockerfile` | Zweistufiges Laufzeitimage: gebaute SPA und gebauter Server, ohne Werkzeugkette und ohne Quelltext. Laeuft unprivilegiert. |
-| `compose.prod.yml` | Die Bereitstellung. `compose.yml` daneben bleibt die Entwicklungsumgebung und startet nur Datenbank und SeaweedFS. |
-| `docker/Caddyfile` | TLS, HSTS, Bereitschaftspruefung des Upstreams, Abriegelung des Metrikendpunkts. |
-| `docker/canvaz-ops.sh` | `backup`, `restore`, `check`. |
-| `.env.production.example` | Vorlage der Laufzeitkonfiguration. Die ausgefuellte `.env.production` bleibt auf dem Host. |
+| Datei                     | Rolle                                                                                                                      |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `Dockerfile`              | Zweistufiges Laufzeitimage: gebaute SPA und gebauter Server, ohne Werkzeugkette und ohne Quelltext. Laeuft unprivilegiert. |
+| `compose.prod.yml`        | Die Bereitstellung. `compose.yml` daneben bleibt die Entwicklungsumgebung und startet nur Datenbank und SeaweedFS.         |
+| `docker/Caddyfile`        | TLS, HSTS, Bereitschaftspruefung des Upstreams, Abriegelung des Metrikendpunkts.                                           |
+| `docker/canvaz-ops.sh`    | `backup`, `restore`, `check`.                                                                                              |
+| `.env.production.example` | Vorlage der Laufzeitkonfiguration. Die ausgefuellte `.env.production` bleibt auf dem Host.                                 |
 
 ### Voraussetzungen
 
@@ -1507,17 +1553,17 @@ kommen aus `.env.production`, und der Server startet gar nicht erst, wenn einer 
 
 ### Getrennte Konfiguration
 
-| Umgebung | Woher | Besonderheit |
-| --- | --- | --- |
-| Entwicklung | `.env` aus `.env.example`, `compose.yml` | Datenbank und SeaweedFS auf hohen Hostports, Klartext-HTTP. |
-| Test | `CANVAZ_TEST_DATABASE_URL`, `CANVAZ_TEST_S3_ENDPOINT`, sonst Werte im Testaufbau | eigene Datenbank `canvaz_test`. |
-| Produktion | `.env.production` aus `.env.production.example`, `compose.prod.yml` | TLS, Reverse Proxy, persistente Volumes, `CANVAZ_TRUSTED_PROXY=true`. |
+| Umgebung    | Woher                                                                            | Besonderheit                                                          |
+| ----------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| Entwicklung | `.env` aus `.env.example`, `compose.yml`                                         | Datenbank und SeaweedFS auf hohen Hostports, Klartext-HTTP.           |
+| Test        | `CANVAZ_TEST_DATABASE_URL`, `CANVAZ_TEST_S3_ENDPOINT`, sonst Werte im Testaufbau | eigene Datenbank `canvaz_test`.                                       |
+| Produktion  | `.env.production` aus `.env.production.example`, `compose.prod.yml`              | TLS, Reverse Proxy, persistente Volumes, `CANVAZ_TRUSTED_PROXY=true`. |
 
 ### Gesundheit, Bereitschaft, Metriken und Logs
 
 `/api/health` beantwortet die Frage **lebt dieser Prozess** (mit Datenbankkontakt) und haengt am
 Container-Healthcheck. `/api/ready` beantwortet die Frage **darf diese Instanz Verkehr bekommen**: sie
-prueft Datenbank *und* konfigurierten Assetspeicher und antwortet sonst mit `503` samt Angabe, welche der
+prueft Datenbank _und_ konfigurierten Assetspeicher und antwortet sonst mit `503` samt Angabe, welche der
 beiden fehlt. Der Reverse Proxy fragt genau diesen Pfad (`health_uri /api/ready`, alle fuenf Sekunden) und
 nimmt die Instanz aus dem Verkehr, solange sie nicht bereit ist. Der Grund steht als eine Logzeile
 (`ready.failed`) im Serverlog, nie in der oeffentlich erreichbaren Antwort.

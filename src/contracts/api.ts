@@ -9,6 +9,21 @@ import type { BinaryFileRef, SceneSnapshot } from './scene.js'
 
 export const API_BASE_PATH = '/api'
 
+/**
+ * Betriebsendpunkte: Lebendigkeit, Bereitschaft und Metriken.
+ *
+ * Oeffentlich erreichbar (den Metrikendpunkt beantwortet der Reverse Proxy nach aussen mit 404), aber
+ * regelmaessig vom Docker-`HEALTHCHECK`, vom aktiven Healthcheck eines beliebigen davorstehenden Reverse
+ * Proxy und von Monitoring selbst angefragt - nicht von echten Clients, gleich welcher Proxy oder welches
+ * Werkzeug fragt. Der Plausibilitaetshinweis der Client-Adresse (`client-address.ts`) zaehlt sie deshalb
+ * nicht mit, sonst wuerde eine kleine Instanz mit wenig echtem Verkehr allein durch diese Anfragen als
+ * "ueberwiegend intern" gelten. Die Ausnahme haengt ausschliesslich an diesen Pfaden, nie an einem
+ * bestimmten Proxy.
+ */
+export const HEALTH_PATH = `${API_BASE_PATH}/health`
+export const READY_PATH = `${API_BASE_PATH}/ready`
+export const METRICS_PATH = `${API_BASE_PATH}/metrics`
+
 /** Einstieg der externen Anmeldung. Existiert nur mit konfiguriertem Identity Provider. */
 export const AUTH_LOGIN_PATH = `${API_BASE_PATH}/auth/login`
 export const AUTH_LOGOUT_PATH = `${API_BASE_PATH}/auth/logout`
@@ -55,6 +70,11 @@ export const ADMIN_USER_INVITATION_PATH = `${API_BASE_PATH}/admin/users/invitati
 export const ADMIN_USER_INVITATION_REVOKE_PATH = `${API_BASE_PATH}/admin/users/invitation/revoke`
 /** Selbstwiederherstellung per Mail fuer ein Konto freischalten oder abschalten. */
 export const ADMIN_USER_SELF_RECOVERY_PATH = `${API_BASE_PATH}/admin/users/self-recovery`
+/**
+ * Adresse und Klasse der aktuellen Anfrage, wie die Anwendung sie ermittelt - fuer die Systemadministration.
+ * Speichert nichts; die Antwort gilt genau fuer diese eine Anfrage.
+ */
+export const ADMIN_CLIENT_ADDRESS_PATH = `${API_BASE_PATH}/admin/client-address`
 export const REALTIME_PATH = `${API_BASE_PATH}/realtime`
 
 export const WORKSPACES_PATH = `${API_BASE_PATH}/workspaces`
@@ -385,6 +405,27 @@ export type AdminUserView = UserView & {
 
 export type AdminUsersResponse = {
   readonly users: readonly AdminUserView[]
+}
+
+/**
+ * Klasse einer ermittelten Client-Adresse.
+ *
+ * `proxy` heisst: das ist nicht der Client, sondern der unmittelbare Gegenpart der Verbindung - der
+ * konfigurierte Reverse Proxy. `unknown` heisst: die ermittelte Zeichenkette ist keine gueltige Adresse.
+ */
+export type ClientAddressClass = 'public' | 'private' | 'loopback' | 'proxy' | 'unknown'
+
+/** Ob die Instanz insgesamt plausible oeffentliche Client-Adressen sieht - Grundlage fuer #35. */
+export type ClientAddressPlausibility = 'plausible' | 'implausible' | 'unknown'
+
+export type ClientAddressResponse = {
+  /** Adresse dieser einen Anfrage. Wird nirgends gespeichert. */
+  readonly address: string
+  readonly addressClass: ClientAddressClass
+  /** Ob `CANVAZ_TRUSTED_PROXY` gesetzt ist - erklaert, warum die Adresse ist, was sie ist. */
+  readonly trustedProxy: boolean
+  /** Urteil ueber die Anfragen dieses Prozesses insgesamt, nicht nur ueber diese eine. */
+  readonly plausibility: ClientAddressPlausibility
 }
 
 /**

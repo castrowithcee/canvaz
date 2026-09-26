@@ -13,6 +13,8 @@
 
 import type { IncomingMessage } from 'node:http'
 
+import { resolveClientAddress } from './client-address.js'
+
 export type RateLimiter = {
   /** `true`, wenn die Anfrage laufen darf. `false` heisst: Grenze erreicht. */
   take(client: string): boolean
@@ -74,15 +76,11 @@ export function createRateLimiter(options: {
  * davor und kann die eigene Zaehlung damit nicht verwaessern.
  *
  * Ohne `CANVAZ_TRUSTED_PROXY` wird die Kopfzeile gar nicht gelesen - ohne Proxy waere sie frei erfunden.
+ *
+ * Die Ermittlung selbst steht in `client-address.ts` (`resolveClientAddress`), zusammen mit ihrer
+ * Klassifizierung fuer die Systemadministration und den Plausibilitaetshinweis. Diese Funktion nimmt davon
+ * nur die Adresse - die Ratengrenze braucht keine Klasse.
  */
 export function clientKey(request: IncomingMessage, trustedProxy: boolean): string {
-  if (trustedProxy) {
-    const forwarded = request.headers['x-forwarded-for']
-    const chain = Array.isArray(forwarded) ? forwarded.join(',') : (forwarded ?? '')
-    const last = chain.split(',').at(-1)?.trim() ?? ''
-    if (last !== '') {
-      return last
-    }
-  }
-  return request.socket.remoteAddress ?? 'unbekannt'
+  return resolveClientAddress(request, trustedProxy).address
 }

@@ -14,6 +14,7 @@ import { createPool } from '../persistence/pool.js'
 import { createWorkspaceStore } from '../persistence/workspace-store.js'
 import { createRoutes } from './app.js'
 import { createBoardRooms } from './board-rooms.js'
+import { createClientAddressMonitor } from './client-address.js'
 import { ConfigError, loadConfig } from './config.js'
 import type { AppContext } from './context.js'
 import { createRequestListener } from './http.js'
@@ -64,6 +65,7 @@ const realtime = createRealtimeGateway({
   onConnection: rooms.onConnection,
 })
 const metrics = createMetrics()
+const addressMonitor = createClientAddressMonitor(consoleLogger)
 const context: AppContext = {
   config,
   pool,
@@ -80,6 +82,7 @@ const context: AppContext = {
   rooms,
   logger: consoleLogger,
   metrics,
+  addressMonitor,
   now: () => new Date(),
 }
 /**
@@ -95,6 +98,7 @@ const server = createServer(
     trustedProxy: config.trustedProxy,
     metrics,
     logger: consoleLogger,
+    addressMonitor,
   }),
 )
 realtime.attach(server)

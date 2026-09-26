@@ -26,6 +26,7 @@
 import type {
   AdminUserView,
   AdminUsersResponse,
+  ClientAddressResponse,
   CreateInvitationResponse,
   CreateUserResponse,
   SetSelfRecoveryRequest,
@@ -33,6 +34,7 @@ import type {
   UserStatusView,
 } from '../contracts/api.js'
 import {
+  ADMIN_CLIENT_ADDRESS_PATH,
   ADMIN_USER_CREATE_PATH,
   ADMIN_USER_INVITATION_PATH,
   ADMIN_USER_INVITATION_REVOKE_PATH,
@@ -47,6 +49,7 @@ import type { User, UserId } from '../domain/identity/model.js'
 import type { IdentityStore } from '../domain/identity/repositories.js'
 import { selfRecoveryAllowable } from '../domain/identity/self-recovery.js'
 import { IdentityConflictError } from '../domain/identity/repositories.js'
+import { resolveClientAddress } from './client-address.js'
 import type { AppContext } from './context.js'
 import { requireCsrfToken, requireSession, requireSystemAdmin, toUserView } from './guard.js'
 import type { Route } from './http.js'
@@ -463,6 +466,34 @@ export function createAdminRoutes(context: AppContext): readonly Route[] {
           status: updated.status,
         })
         sendJson(response, 200, toUserView(updated))
+      },
+    },
+
+    /**
+     * Adresse und Klasse der aktuellen Anfrage.
+     *
+     * Die Anzeige der Systemadministration, damit ein Betreiber sieht, was `CANVAZ_TRUSTED_PROXY` und die
+     * Weiterleitung des Reverse Proxy tatsaechlich ankommen lassen - unabhaengig von rootful oder rootless
+     * Docker. Es entsteht dabei kein zweiter Datensatz: die Adresse gilt genau fuer diese eine Anfrage und
+     * wird nicht gespeichert. `plausibility` ist das Urteil ueber die Anfragen dieses Prozesses insgesamt
+     * (siehe `client-address.ts`), nicht nur ueber diese eine.
+     */
+    {
+      method: 'GET',
+      path: ADMIN_CLIENT_ADDRESS_PATH,
+      handle: async ({ request, response }) => {
+        const auth = await requireSession(context, request, response)
+        if (auth === null || !requireSystemAdmin(context, response, auth)) {
+          return
+        }
+        const resolved = resolveClientAddress(request, config.trustedProxy)
+        const body: ClientAddressResponse = {
+          address: resolved.address,
+          addressClass: resolved.class,
+          trustedProxy: config.trustedProxy,
+          plausibility: context.addressMonitor.plausibility(),
+        }
+        sendJson(response, 200, body)
       },
     },
   ]
