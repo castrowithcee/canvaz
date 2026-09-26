@@ -22,11 +22,13 @@
  * weiter gesichert. Sichtbar sind ausserdem der laufende Versuch, der erfolgreiche Abgleich nach der
  * Wiederaufnahme und jede benannt abgelehnte Nachricht.
  *
- * ## Kopfzeile und Board-Sidebar
+ * ## Schwebende Gruppen und Board-Sidebar
  *
- * Die Kopfzeile ist eine Arbeitsleiste und keine Statusseite: Rueckweg, Titel mit Inline-Umbenennung, **ein**
- * verdichteter Zustand (`board-status.ts`), Presence und die Boardaktionen. Sie wiederholt nicht, was schon
+ * Ueber der Zeichenflaeche ist keine Zeile reserviert. Zwei kompakte Gruppen schweben darueber: oben links
+ * Rueckweg, Titel mit Inline-Umbenennung und Boardmenue, oben rechts Presence, **ein** verdichteter Zustand
+ * (`board-status.ts`), die Freigabe und der Ausloeser der Board-Sidebar. Sie wiederholen nicht, was schon
  * dasteht - ausformuliert wird nur, was Aufmerksamkeit verlangt, und nur das wird Hilfsmitteln angekuendigt.
+ * Ihre Hoehe halten die Bedienelemente der Zeichenflaeche frei; die Zeichnung selbst laeuft darunter weiter.
  *
  * Alles Umfangreichere - Ablage, Arbeitsbereichswechsel, Freigaben, Versionen, Import/Export, Archiv und
  * Papierkorb - steht in der Board-Sidebar (`board-panel.tsx`) neben der Zeichenflaeche. Sie ist auf jeder
@@ -66,8 +68,21 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
-import { ArrowLeft, PanelRight, RotateCcw, Save, Share2, SquarePen, Undo2, Users, X } from 'lucide-react'
+import type { CSSProperties, ReactNode } from 'react'
+import {
+  ArrowLeft,
+  History,
+  Info,
+  MoreHorizontal,
+  PanelRight,
+  Pencil,
+  RotateCcw,
+  Save,
+  Share2,
+  Undo2,
+  Users,
+  X,
+} from 'lucide-react'
 
 import '@excalidraw/excalidraw/index.css'
 
@@ -88,7 +103,7 @@ import {
   uploadBoardAsset,
 } from '../api.js'
 import { BoardPanel } from '../board-panel.js'
-import { Drawer } from '../overlays.js'
+import { Drawer, Menu, MenuItem } from '../overlays.js'
 import type { BoardPanelView } from '../router.js'
 import { Badge, Button, ConfirmDialog, IconButton, Loading, Notice } from '../ui.js'
 import { boardStatus, readOnlyReason } from './board-status.js'
@@ -100,7 +115,7 @@ import type { BoardRealtime, RealtimeStatus } from './realtime-client.js'
 /** Ab hier steht die Board-Sidebar als Spalte neben der Zeichenflaeche. Derselbe Wert steht in `styles.css`. */
 const PANEL_DOCKED = '(min-width: 64rem)'
 
-/** Die Board-Sidebar ist derselbe Knoten, auf den der Ausloeser der Kopfzeile wirkt. */
+/** Die Board-Sidebar ist derselbe Knoten, auf den ihr Ausloeser in der schwebenden Gruppe wirkt. */
 const PANEL_ID = 'board-sidebar'
 
 /** Ruhezeit nach der letzten Aenderung, bevor gespeichert wird. */
@@ -223,7 +238,7 @@ export function BoardEditor({
   const [mountKey, setMountKey] = useState(0)
   /** Angedockt heisst: die Board-Sidebar ist eine Spalte und kein modales Sheet. */
   const [docked, setDocked] = useState(() => window.matchMedia(PANEL_DOCKED).matches)
-  /** Inline-Umbenennung des Titels in der Kopfzeile. */
+  /** Inline-Umbenennung des Titels in der schwebenden Gruppe. */
   const [renaming, setRenaming] = useState(false)
   const [titleDraft, setTitleDraft] = useState('')
   const [renameBusy, setRenameBusy] = useState(false)
@@ -232,6 +247,8 @@ export function BoardEditor({
   const [panelRevision, setPanelRevision] = useState(0)
   /** Rueckfrage vor dem Verlassen, solange ungesicherte Arbeit im Editor steht. */
   const [confirmLeave, setConfirmLeave] = useState(false)
+  /** Hoehe der schwebenden Gruppen samt Meldungen; `null`, solange sie noch nicht vermessen sind. */
+  const [floatHeight, setFloatHeight] = useState<number | null>(null)
 
   // Refs statt State: der Speichervorgang liest den jeweils aktuellen Stand, ohne neu aufgebaut zu werden.
   const versionRef = useRef(0)
@@ -254,6 +271,8 @@ export function BoardEditor({
   const renameTriggerRef = useRef<HTMLButtonElement>(null)
   /** Ob die Eingabe im vorigen Rendern offen war - sonst waere jedes Rendern eine Fokusrueckgabe. */
   const wasRenamingRef = useRef(false)
+  /** Die schwebenden Gruppen. Ihre Hoehe ist der obere Rand, den die Bedienelemente der Zeichenflaeche freihalten. */
+  const floatRef = useRef<HTMLDivElement>(null)
 
   const load = useCallback(() => {
     setState({ kind: 'loading' })
@@ -390,6 +409,23 @@ export function BoardEditor({
       query.removeEventListener('change', sync)
     }
   }, [])
+
+  // Die schwebenden Gruppen ueberdecken nichts: ihre Hoehe geht als oberer Sicherheitsabstand an die
+  // Zeichenflaeche (`--sat` in `styles.css`), und deren Bedienelemente beginnen darunter. Gemessen wird,
+  // weil Umbruch, Inline-Eingabe und Meldungen die Hoehe aendern - die Anordnung selbst bleibt CSS.
+  useEffect(() => {
+    const element = floatRef.current
+    if (element === null) {
+      return
+    }
+    const observer = new ResizeObserver(() => {
+      setFloatHeight(Math.ceil(element.getBoundingClientRect().height))
+    })
+    observer.observe(element)
+    return () => {
+      observer.disconnect()
+    }
+  }, [state.kind])
 
   /** Der frisch geladene Boardstand aus der Sidebar. Titel und Archivzustand haengen daran. */
   const applyBoard = useCallback((board: BoardView) => {
@@ -785,10 +821,21 @@ export function BoardEditor({
       })
   }
 
+  /** Wer gerade mit dabei ist - fuer den Kurzhinweis und fuer Hilfsmittel derselbe Satz. */
+  const peersText =
+    peers.length === 0 ? 'Allein auf diesem Board.' : `Mit dabei: ${peers.map((peer) => peer.displayName).join(', ')}`
+
   return (
-    <div className={panelOpen ? 'board board--panel' : 'board'}>
-      <header className="board__bar">
-        <div className="board__lead">
+    <div
+      className={panelOpen ? 'board board--panel' : 'board'}
+      style={floatHeight === null ? undefined : ({ '--board-float': `${String(floatHeight)}px` } as CSSProperties)}
+    >
+      {/*
+        * Die schwebenden Gruppen liegen ueber der Zeichenflaeche und reservieren keine Zeile. Sie stehen im
+        * Dokument vor der Board-Sidebar: so folgt auf ihren Ausloeser unmittelbar das, was er oeffnet.
+        */}
+      <div className="board__float" ref={floatRef}>
+        <div className="board__group board__group--lead">
           {onClose !== null && (
             <IconButton
               label="Zurueck zur Bibliothek"
@@ -845,12 +892,15 @@ export function BoardEditor({
             </form>
           ) : (
             <>
-              <h1 className="board__title">{title}</h1>
+              {/* Gekuerzt wird nur die Anzeige; der volle Titel steht als Kurzhinweis daran. */}
+              <h1 className="board__title" title={title}>
+                {title}
+              </h1>
               {titleEditable && (
                 <IconButton
                   ref={renameTriggerRef}
                   label={`${title} umbenennen`}
-                  icon={SquarePen}
+                  icon={Pencil}
                   variant="quiet"
                   onClick={() => {
                     setTitleDraft(title)
@@ -861,9 +911,44 @@ export function BoardEditor({
               )}
             </>
           )}
+          {/*
+            * Das Boardmenue fuehrt zu den selteneren Bereichen der Board-Sidebar. Es ist kein zweiter Ort:
+            * jeder Eintrag oeffnet genau den Bereich, in dem die Handlung ohnehin steht.
+            */}
+          {member !== null && !renaming && (
+            <Menu label={`Boardmenue fuer ${title}`} icon={MoreHorizontal}>
+              <MenuItem
+                icon={Info}
+                onSelect={() => {
+                  member.onPanel('uebersicht')
+                }}
+              >
+                Uebersicht und Ablage
+              </MenuItem>
+              <MenuItem
+                icon={History}
+                onSelect={() => {
+                  member.onPanel('versionen')
+                }}
+              >
+                Versionen
+              </MenuItem>
+            </Menu>
+          )}
         </div>
 
-        <div className="board__states">
+        <div className="board__group board__group--work">
+          <p
+            className={peers.length === 0 ? 'board__peers board__peers--allein' : 'board__peers'}
+            role="status"
+            title={peersText}
+          >
+            <Users size={16} aria-hidden="true" />
+            <span className="board__peers-count" aria-hidden="true">
+              {peers.length === 0 ? 'Allein' : String(peers.length + 1)}
+            </span>
+            <span className="visually-hidden">{peersText}</span>
+          </p>
           {/* Der Modus bleibt sichtbar: er entscheidet, was diese Ansicht ueberhaupt anbietet. */}
           {reason !== null && (
             <Badge tone={state.loaded.previewOf === null ? 'neutral' : 'accent'}>
@@ -885,18 +970,6 @@ export function BoardEditor({
           <p className="visually-hidden" role="status">
             {status.critical ? status.detail : ''}
           </p>
-          <p className="board__peers" role="status">
-            <Users size={16} aria-hidden="true" />
-            <span aria-hidden="true">{peers.length === 0 ? 'Allein' : String(peers.length + 1)}</span>
-            <span className="visually-hidden">
-              {peers.length === 0
-                ? 'Allein auf diesem Board.'
-                : `Mit dabei: ${peers.map((peer) => peer.displayName).join(', ')}`}
-            </span>
-          </p>
-        </div>
-
-        <div className="board__actions">
           {state.loaded.previewOf !== null && member !== null && (
             <Button
               variant="primary"
@@ -931,11 +1004,14 @@ export function BoardEditor({
             <Button
               variant="primary"
               icon={Share2}
+              title="Freigeben"
+              extraClass="board__share"
               onClick={() => {
                 member.onPanel('freigaben')
               }}
             >
-              Freigeben
+              {/* Sehr schmal steht nur das Symbol da; der Name bleibt fuer Hilfsmittel und als Kurzhinweis. */}
+              <span className="board__share-label">Freigeben</span>
             </Button>
           )}
           {member !== null && (
@@ -943,6 +1019,7 @@ export function BoardEditor({
               ref={panelTriggerRef}
               label={panelOpen ? 'Board-Sidebar schliessen' : 'Board-Sidebar oeffnen'}
               icon={PanelRight}
+              variant="quiet"
               aria-expanded={panelOpen}
               aria-controls={PANEL_ID}
               onClick={() => {
@@ -955,61 +1032,64 @@ export function BoardEditor({
             />
           )}
         </div>
-      </header>
 
-      {confirmLeave && onClose !== null && (
-        <ConfirmDialog danger>
-          <p>
-            An diesem Board stehen Aenderungen, die noch nicht gesichert sind. Beim Verlassen gehen sie
-            verloren.
-          </p>
-          <p className="actions">
-            <Button
-              onClick={() => {
-                setConfirmLeave(false)
-              }}
-            >
-              Hierbleiben
-            </Button>
-            <Button variant="danger" onClick={onClose}>
-              Trotzdem schliessen
-            </Button>
-          </p>
-        </ConfirmDialog>
-      )}
-      {renameError !== null && <Notice text={renameError} />}
-      {accessNote !== null && (
-        <Notice kind="info">
-          <p>{accessNote}</p>
-          <p className="actions">
-            <Button
-              onClick={() => {
-                setAccessNote(null)
-              }}
-            >
-              Hinweis ausblenden
-            </Button>
-          </p>
-        </Notice>
-      )}
-      {assetProblem !== null && <Notice text={assetProblem} />}
-      {rejected !== null && (
-        <Notice>
-          <p>Der Server hat eine Nachricht abgelehnt: {rejected}</p>
-          <p className="actions">
-            <Button
-              onClick={() => {
-                setRejected(null)
-              }}
-            >
-              Hinweis ausblenden
-            </Button>
-          </p>
-        </Notice>
-      )}
-      {save.kind === 'conflict' && (
-        <Notice text="Dieses Board wurde inzwischen an anderer Stelle gespeichert. Deine Zeichnung ist noch da, wurde aber nicht uebernommen und hat nichts ueberschrieben. Lade das Board neu, um auf dem aktuellen Stand weiterzuarbeiten." />
-      )}
+        {/* Meldungen schweben unter den Gruppen; die Bedienelemente der Zeichenflaeche ruecken mit. */}
+        <div className="board__notices">
+          {confirmLeave && onClose !== null && (
+            <ConfirmDialog danger>
+              <p>
+                An diesem Board stehen Aenderungen, die noch nicht gesichert sind. Beim Verlassen gehen sie
+                verloren.
+              </p>
+              <p className="actions">
+                <Button
+                  onClick={() => {
+                    setConfirmLeave(false)
+                  }}
+                >
+                  Hierbleiben
+                </Button>
+                <Button variant="danger" onClick={onClose}>
+                  Trotzdem schliessen
+                </Button>
+              </p>
+            </ConfirmDialog>
+          )}
+          {renameError !== null && <Notice text={renameError} />}
+          {accessNote !== null && (
+            <Notice kind="info">
+              <p>{accessNote}</p>
+              <p className="actions">
+                <Button
+                  onClick={() => {
+                    setAccessNote(null)
+                  }}
+                >
+                  Hinweis ausblenden
+                </Button>
+              </p>
+            </Notice>
+          )}
+          {assetProblem !== null && <Notice text={assetProblem} />}
+          {rejected !== null && (
+            <Notice>
+              <p>Der Server hat eine Nachricht abgelehnt: {rejected}</p>
+              <p className="actions">
+                <Button
+                  onClick={() => {
+                    setRejected(null)
+                  }}
+                >
+                  Hinweis ausblenden
+                </Button>
+              </p>
+            </Notice>
+          )}
+          {save.kind === 'conflict' && (
+            <Notice text="Dieses Board wurde inzwischen an anderer Stelle gespeichert. Deine Zeichnung ist noch da, wurde aber nicht uebernommen und hat nichts ueberschrieben. Lade das Board neu, um auf dem aktuellen Stand weiterzuarbeiten." />
+          )}
+        </div>
+      </div>
 
       <div className="board__body">
         {member !== null && (
@@ -1019,8 +1099,8 @@ export function BoardEditor({
            * von der Plattform, und die Zeichenflaeche dahinter ist `inert`.
            *
            * Er steht **vor** der Zeichenflaeche im Dokument: sonst laegen angedockt die zwoelf Tabstopps
-           * der Excalidraw-Bedienelemente zwischen dem Ausloeser der Kopfzeile und dem, was er geoeffnet
-           * hat. Rechts erscheint er trotzdem - das erledigt `order` in `styles.css`.
+           * der Excalidraw-Bedienelemente zwischen dem Ausloeser in der schwebenden Gruppe und dem, was er
+           * geoeffnet hat. Rechts erscheint er trotzdem - das erledigt `order` in `styles.css`.
            */
           <Drawer
             id={PANEL_ID}

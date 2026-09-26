@@ -373,11 +373,13 @@ export function Menu({
   }, [open])
 
   // Beim Oeffnen steht der Fokus auf dem ersten Eintrag; das Menue ist damit sofort mit Pfeilen bedienbar.
+  // Erst wenn es platziert ist: bis dahin ist die Liste unsichtbar und nimmt keinen Fokus an.
+  const placed = position !== null
   useEffect(() => {
-    if (open) {
+    if (open && placed) {
       listRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
     }
-  }, [open])
+  }, [open, placed])
 
   return (
     <div

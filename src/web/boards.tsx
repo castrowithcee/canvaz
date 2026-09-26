@@ -31,6 +31,7 @@ import {
   Pencil,
   Plus,
   RotateCcw,
+  Share2,
   SquarePen,
   Trash2,
   X,
@@ -39,7 +40,7 @@ import {
 import type { BoardView, FolderView, MeResponse, WorkspaceView } from '../contracts/api.js'
 import { BOARD_FOLDER_ROOT } from '../contracts/api.js'
 import { MAX_BOARD_TITLE_LENGTH } from '../domain/board/model.js'
-import { mayChangeBoard } from '../domain/board/policy.js'
+import { mayChangeBoard, mayManageBoard } from '../domain/board/policy.js'
 import { MAX_FOLDER_NAME_LENGTH } from '../domain/folder/model.js'
 import {
   ApiError,
@@ -156,7 +157,8 @@ function InlineName({
  * Das Kontextmenue eines Eintrags.
  *
  * Es steht dauerhaft in der Zeile und nie nur bei Hover: mit Tastatur und mit Beruehrung ist es derselbe
- * Weg. Die haeufigen Handlungen stehen oben, das Folgenreiche unten und abgesetzt.
+ * Weg. Die haeufigen Handlungen stehen oben - auch die, die `QuickActions` bei Hover zusaetzlich an der Zeile
+ * zeigt -, das Folgenreiche unten und abgesetzt.
  */
 function EntryMenu({
   target,
@@ -230,6 +232,56 @@ function EntryMenu({
         </MenuItem>
       )}
     </Menu>
+  )
+}
+
+/**
+ * Die haeufigen Handlungen eines Eintrags, direkt an der Zeile.
+ *
+ * Sie erscheinen bei Hover und Fokus, damit die Liste ruhig bleibt; ohne Hover (Beruehrung) stehen sie
+ * immer da (`styles.css`). Keine davon gibt es **nur** hier: Umbenennen steht ebenso im Kontextmenue, und
+ * die Freigabe fuehrt in denselben Bereich der Board-Sidebar wie die Freigabe im Editor. Das Kontextmenue
+ * daneben bleibt der sichtbare Ausloeser fuer alles.
+ */
+function QuickActions({
+  target,
+  editable,
+  shareable,
+  workspaceId,
+  onRename,
+}: {
+  readonly target: Target
+  readonly editable: boolean
+  /** Wahr, wenn der Anfragende dieses Board freigeben darf. Fuer Ordner immer falsch. */
+  readonly shareable: boolean
+  readonly workspaceId: string
+  readonly onRename: (target: Target) => void
+}) {
+  const name = targetName(target)
+  return (
+    <>
+      {editable && (
+        <IconButton
+          label={`${name} umbenennen`}
+          icon={Pencil}
+          variant="quiet"
+          extraClass="row__quick"
+          onClick={() => {
+            onRename(target)
+          }}
+        />
+      )}
+      {shareable && target.kind === 'board' && (
+        <Link
+          className={actionClass('quiet', 'icon-button row__quick')}
+          title={`${name} freigeben`}
+          route={{ kind: 'board', workspaceId, boardId: target.board.id, version: null, panel: 'freigaben' }}
+        >
+          <Share2 size={18} aria-hidden="true" />
+          <span className="visually-hidden">{name} freigeben</span>
+        </Link>
+      )}
+    </>
   )
 }
 
@@ -368,6 +420,9 @@ export function Boards({
     workspace.status === 'active' &&
     board.status === 'active' &&
     mayChangeBoard({ kind: 'member', role: board.viewerRole })
+  /** Freigeben darf nur, wer das Board verantwortet - dieselbe Frage, die auch der Editor stellt. */
+  const shareableBoard = (board: BoardView): boolean =>
+    workspace.status === 'active' && mayManageBoard({ kind: 'member', role: board.viewerRole })
 
   const subfolders = archive
     ? []
@@ -602,17 +657,29 @@ export function Boards({
                     <span>{entry.name}</span>
                   </Link>
                   <span className="row__meta">Ordner</span>
-                  <EntryMenu
-                    target={{ kind: 'folder', folder: entry }}
-                    editable={manageFolders}
-                    workspaceId={workspaceId}
-                    onRename={(target) => {
-                      remember(menuId(targetId(target)))
-                      setRenaming(target)
-                    }}
-                    onMove={setMoving}
-                    onRemove={setRemoving}
-                  />
+                  <div className="row__actions">
+                    <QuickActions
+                      target={{ kind: 'folder', folder: entry }}
+                      editable={manageFolders}
+                      shareable={false}
+                      workspaceId={workspaceId}
+                      onRename={(target) => {
+                        remember(menuId(targetId(target)))
+                        setRenaming(target)
+                      }}
+                    />
+                    <EntryMenu
+                      target={{ kind: 'folder', folder: entry }}
+                      editable={manageFolders}
+                      workspaceId={workspaceId}
+                      onRename={(target) => {
+                        remember(menuId(targetId(target)))
+                        setRenaming(target)
+                      }}
+                      onMove={setMoving}
+                      onRemove={setRemoving}
+                    />
+                  </div>
                 </li>
             ),
           )}
@@ -654,17 +721,29 @@ export function Boards({
                 <span className="row__meta">
                   {board.ownerDisplayName} · {new Date(board.updatedAt).toLocaleDateString('de-DE')}
                 </span>
-                <EntryMenu
-                  target={{ kind: 'board', board }}
-                  editable={editableBoard(board)}
-                  workspaceId={workspaceId}
-                  onRename={(target) => {
-                    remember(menuId(targetId(target)))
-                    setRenaming(target)
-                  }}
-                  onMove={setMoving}
-                  onRemove={setRemoving}
-                />
+                <div className="row__actions">
+                  <QuickActions
+                    target={{ kind: 'board', board }}
+                    editable={editableBoard(board)}
+                    shareable={shareableBoard(board)}
+                    workspaceId={workspaceId}
+                    onRename={(target) => {
+                      remember(menuId(targetId(target)))
+                      setRenaming(target)
+                    }}
+                  />
+                  <EntryMenu
+                    target={{ kind: 'board', board }}
+                    editable={editableBoard(board)}
+                    workspaceId={workspaceId}
+                    onRename={(target) => {
+                      remember(menuId(targetId(target)))
+                      setRenaming(target)
+                    }}
+                    onMove={setMoving}
+                    onRemove={setRemoving}
+                  />
+                </div>
               </li>
             ),
           )}

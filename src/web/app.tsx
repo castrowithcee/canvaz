@@ -26,7 +26,7 @@
  * ## Der Editor tritt aus der Huelle heraus
  *
  * Die Boardroute zeigt den Editor im Vollbild; Kopfzeile und Haupt-Seitenleiste treten dafuer ab. Was ein
- * Board braucht, traegt er selbst: seine Kopfzeile den Rueckweg in den zuletzt gezeigten
+ * Board braucht, traegt er selbst: seine schwebende Gruppe den Rueckweg in den zuletzt gezeigten
  * Bibliothekskontext, seine Board-Sidebar die Boardaufgaben. Eine eigene Detailseite gibt es dafuer nicht
  * mehr - fuer dieselbe Handlung soll es genau einen Ort geben.
  *
@@ -493,7 +493,7 @@ function Shell({
   }
 
   // Der Editor braucht die ganze Flaeche; Kopfzeile und Haupt-Seitenleiste treten dafuer ab. Seine eigene
-  // Kopfzeile traegt den Rueckweg, und die Board-Sidebar traegt die Boardaufgaben (`board/board-view.tsx`).
+  // schwebende Gruppe traegt den Rueckweg, die Board-Sidebar die Boardaufgaben (`board/board-view.tsx`).
   if (route.kind === 'board' && routeWorkspace !== null) {
     const back: AppRoute = {
       kind: 'arbeitsbereich',
