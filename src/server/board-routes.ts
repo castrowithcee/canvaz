@@ -43,6 +43,7 @@ import {
   ASSET_FILE_ID_PARAM,
   ASSET_FILE_NAME_PARAM,
   BOARD_ASSETS_PATH,
+  BOARD_DUPLICATE_PATH,
   BOARD_FOLDER_PARAM,
   BOARD_FOLDER_PATH,
   BOARD_FOLDER_ROOT,
@@ -165,6 +166,24 @@ function toFileRef(asset: BoardAsset): BinaryFileRef {
     storageKey: asset.storageKey,
   }
 }
+
+/**
+ * Bricht eine Duplizierung ab, nachdem schon geschrieben wurde.
+ *
+ * Ein Wurf statt einer zurueckgegebenen Antwort: die Transaktion rollt damit zurueck, statt ein halbes Board
+ * zu committen, und die benannte Antwort kommt trotzdem beim Client an.
+ */
+class DuplicateAborted extends Error {
+  readonly reply: Reply
+
+  constructor(reply: Reply) {
+    super('Duplizieren abgebrochen')
+    this.name = 'DuplicateAborted'
+    this.reply = reply
+  }
+}
+
+const DUPLICATE_ASSET_MISSING = 'Ein Bild des Boards fehlt im Speicher. Es wurde keine Kopie angelegt.'
 
 const FOLDER_NOT_FOUND = 'Ordner nicht gefunden'
 
@@ -467,6 +486,172 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
           return ok(201, await reloadedBoardView(tx, asRequester(guarded.auth), board.id))
         })
         send(response, reply)
+      },
+    },
+
+    /**
+     * Board innerhalb seines Arbeitsbereichs duplizieren.
+     *
+     * Geprueft wird wie bei einer Anlage plus Lesen: `board:read` auf der Quelle - eine unsichtbare Quelle ist
+     * dieselbe 404 wie eine erfundene - und `board:create` im selben Arbeitsbereich unter dessen
+     * Zeilensperre. Die Kopie gehoert dem Anfragenden. Uebernommen wird der zuletzt gespeicherte Stand samt
+     * der Bytes jedes darin genannten Bildes; Freigaben, Gastlinks, Verlauf und Archivzustand nicht.
+     *
+     * **Nichts Halbes:** Board, Assetdatensaetze und erste Version entstehen in einer Transaktion. Die Bytes
+     * liegen unter Schluesseln der neuen Boardkennung, die vor dem Commit niemand sonst kennt. Scheitert der
+     * Vorgang vor dem Commit, werden genau diese Schluessel wieder entfernt - anders als beim Upload kann hier
+     * kein gleichzeitiger zweiter Vorgang dieselben Bytes brauchen. Scheitert erst der Commit selbst, ist
+     * sein Ausgang offen; dann bleiben die Bytes liegen und werden als `board.asset.orphan` benannt.
+     */
+    {
+      method: 'POST',
+      path: BOARD_DUPLICATE_PATH,
+      handle: async ({ request, response }) => {
+        const guarded = await guardMutation(context, request, response)
+        if (guarded === null) {
+          return
+        }
+        const sourceId = readUuid(guarded.body['boardId'])
+        const title = normalizeBoardTitle(guarded.body['title'])
+        const folderId = readBoardFolderId(guarded.body['folderId'])
+        if (sourceId === null) {
+          sendError(response, 404, NOT_FOUND.message)
+          return
+        }
+        if (title === null) {
+          sendError(response, 400, `Ein Titel mit 1 bis ${String(MAX_BOARD_TITLE_LENGTH)} Zeichen wird erwartet`)
+          return
+        }
+        if (folderId === undefined) {
+          sendError(response, 404, FOLDER_NOT_FOUND)
+          return
+        }
+        const requester = asRequester(guarded.auth)
+        const userId = guarded.auth.user.id
+        const written: string[] = []
+        let committing = false
+        try {
+          const reply = await store.transaction(async (tx) => {
+            const source = await loadVisibleBoard(tx, requester, sourceId, { lock: false })
+            if (isReply(source)) {
+              return source
+            }
+            if (source.board.status !== 'active') {
+              return fail(409, 'Ein archiviertes Board wird nicht dupliziert. Entarchiviere es zuerst.')
+            }
+            // Dieselbe Sperre wie bei der Anlage: eine gleichzeitige Archivierung laesst keine Kopie hinter
+            // sich entstehen.
+            const target = await tx.workspaces.findForUpdate(source.workspace.id, userId)
+            if (target === null) {
+              return fail(404, NOT_FOUND.message)
+            }
+            const denial = deny(requester, target.workspace, withoutBoard(target.role), 'board:create')
+            if (denial !== null) {
+              return denial
+            }
+            const unbekannt = await denyUnknownFolder(tx, target.workspace.id, folderId)
+            if (unbekannt !== null) {
+              return unbekannt
+            }
+            const latest = await tx.scenes.findLatest(source.board.id)
+            const board = await tx.boards.create(target.workspace.id, title, userId, folderId)
+            let copiedFiles = 0
+            if (latest !== null) {
+              const files: Record<string, BinaryFileRef> = {}
+              for (const [key, ref] of Object.entries(latest.snapshot.files)) {
+                const asset = await tx.assets.findByFileId(source.board.id, ref.id)
+                const bytes = asset === null ? null : await context.storage.get(asset.storageKey)
+                if (
+                  asset === null ||
+                  bytes === null ||
+                  createHash('sha256').update(bytes).digest('hex') !== asset.checksumSha256
+                ) {
+                  context.logger('error', 'board.asset.missing', { boardId: source.board.id, fileId: ref.id })
+                  throw new DuplicateAborted(fail(500, DUPLICATE_ASSET_MISSING))
+                }
+                const storageKey = buildAssetStorageKey(board.id, asset.fileId, asset.checksumSha256)
+                await context.storage.put(storageKey, bytes)
+                written.push(storageKey)
+                const recorded = await tx.assets.record({
+                  boardId: board.id,
+                  workspaceId: target.workspace.id,
+                  fileId: asset.fileId,
+                  fileName: asset.fileName,
+                  mimeType: asset.mimeType,
+                  byteSize: asset.byteSize,
+                  checksumSha256: asset.checksumSha256,
+                  storageKey,
+                })
+                files[key] = toFileRef(recorded)
+              }
+              copiedFiles = written.length
+              const snapshot: SceneSnapshot = {
+                ...latest.snapshot,
+                boardId: board.id,
+                appState: { ...latest.snapshot.appState, name: title },
+                files,
+                updatedAt: context.now().getTime(),
+              }
+              if (Buffer.byteLength(serializeSceneSnapshot(snapshot)) > context.config.maxSceneBytes) {
+                throw new DuplicateAborted(
+                  fail(413, 'Die Kopie waere zu gross fuer ein Board. Es wurde keine Kopie angelegt.'),
+                )
+              }
+              // Der eigene Verlauf beginnt mit dem kopierten Stand als Version 1.
+              await tx.scenes.append(board.id, 1, snapshot, userId)
+              await tx.boards.setSceneVersion(board.id, 1)
+            }
+            await tx.audit.record({
+              actorId: userId,
+              action: 'board.duplicated',
+              targetType: 'board',
+              targetId: board.id,
+              workspaceId: target.workspace.id,
+              details: {
+                title: board.title,
+                folderId,
+                sourceBoardId: source.board.id,
+                sourceVersion: latest?.version ?? 0,
+                files: copiedFiles,
+              },
+            })
+            const view = await reloadedBoardView(tx, requester, board.id)
+            committing = true
+            return ok(201, view)
+          })
+          send(response, reply)
+        } catch (error) {
+          if (committing) {
+            // Der Ausgang des Commits ist offen: die Bytes koennten zu einem angelegten Board gehoeren.
+            for (const storageKey of written) {
+              context.logger('error', 'board.asset.orphan', { storageKey, cause: String(error) })
+            }
+            throw error
+          }
+          // Zurueckgerollt: die Schluessel gehoeren zu einer Boardkennung, die es nie gab.
+          for (const storageKey of written) {
+            try {
+              await context.storage.delete(storageKey)
+            } catch (cleanup) {
+              context.logger('error', 'board.asset.orphan', { storageKey, cause: String(cleanup) })
+            }
+          }
+          if (error instanceof DuplicateAborted) {
+            send(response, error.reply)
+            return
+          }
+          if (error instanceof CorruptSceneError) {
+            context.logger('error', 'board.scene.corrupt', { boardId: sourceId, version: error.version })
+            sendError(response, 500, 'Die gespeicherte Szene ist beschaedigt und kann nicht kopiert werden')
+            return
+          }
+          context.logger('error', 'board.duplicate.failed', { boardId: sourceId, userId, cause: String(error) })
+          sendError(
+            response,
+            500,
+            'Das Board konnte nicht dupliziert werden, etwa wegen eines Speicherfehlers. Es wurde nichts angelegt.',
+          )
+        }
       },
     },
 

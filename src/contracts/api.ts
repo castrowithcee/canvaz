@@ -511,6 +511,23 @@ export type MoveBoardToWorkspaceRequest = {
   readonly folderId?: string | null
 }
 
+/**
+ * Board innerhalb seines Arbeitsbereichs duplizieren (POST, Antwort `BoardView` der Kopie mit 201).
+ *
+ * Kopiert wird der **zuletzt gespeicherte** Stand samt aller darin genannten Bilder; die Kopie bekommt eine
+ * eigene Kennung, eigene Assetdatensaetze und eigene Bytes und gehoert dem Anfragenden. Freigaben, Gastlinks,
+ * Versionsverlauf und Archivzustand bleiben am Original - die Kopie beginnt aktiv mit genau einer Version.
+ * Verlangt `board:read` auf der Quelle und `board:create` in deren Arbeitsbereich.
+ */
+export const BOARD_DUPLICATE_PATH = `${API_BASE_PATH}/boards/duplicate`
+
+export type DuplicateBoardRequest = {
+  readonly boardId: string
+  readonly title: string
+  /** Ordner der Kopie im selben Arbeitsbereich; fehlt er oder ist er `null`, liegt sie unmittelbar darin. */
+  readonly folderId?: string | null
+}
+
 export type BoardStatusView = 'active' | 'archived'
 
 export type BoardView = {

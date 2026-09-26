@@ -18,8 +18,12 @@ import {
   ASSET_FILE_ID_PARAM,
   ASSET_FILE_NAME_PARAM,
   BOARD_ASSETS_PATH,
+  BOARD_DUPLICATE_PATH,
+  BOARD_GRANT_ADD_PATH,
+  BOARD_GUEST_JOIN_PATH,
   BOARD_ID_PARAM,
   BOARD_SCENE_PATH,
+  BOARD_SHARE_LINK_CREATE_PATH,
   BOARD_STATUS_PATH,
   BOARDS_PATH,
   CSRF_HEADER,
@@ -30,7 +34,10 @@ import {
   WORKSPACES_PATH,
 } from '../../src/contracts/api.js'
 import type {
+  BoardSceneResponse,
   BoardView,
+  CreateBoardShareLinkResponse,
+  GuestSessionResponse,
   MeResponse,
   UploadBoardAssetResponse,
   WorkspaceView,
@@ -558,6 +565,149 @@ describe('Archivierung und Bestand', () => {
     await pool.query('delete from workspaces where id = $1', [workspace.id])
 
     expect(await assetCount(board.id)).toBe(0)
+  })
+})
+
+/* ---------------------------------------------------------------------------------------------------- */
+/* Duplizieren                                                                                           */
+/* ---------------------------------------------------------------------------------------------------- */
+
+async function boardCount(workspaceId: string): Promise<number> {
+  const result = await pool.query<{ count: string }>('select count(*)::text as count from boards where workspace_id = $1', [
+    workspaceId,
+  ])
+  return Number(result.rows[0]?.count ?? '0')
+}
+
+/** Board mit gespeicherter Zeichnung und Bild(ern); `bilder` nennt die Dateikennungen. */
+async function boardMitZeichnung(account: Account, workspaceId: string, bilder: readonly string[]) {
+  const board = await createBoard(account, workspaceId, 'Skizze')
+  const files: Record<string, BinaryFileRef> = {}
+  for (const id of bilder) {
+    files[id] = await uploadOk(account, board.id, id, png(`Inhalt ${id}`))
+  }
+  const scene: SceneSnapshot = {
+    ...szeneMitBild(board.id, null),
+    elements: [
+      { id: 'rahmen', type: 'rectangle', version: 3, versionNonce: 7 },
+      ...bilder.map((id) => ({ id: `bild-${id}`, type: 'image', version: 1, versionNonce: 1, fileId: id })),
+    ],
+    files,
+  }
+  expect((await post(account, BOARD_SCENE_PATH, { boardId: board.id, baseVersion: 0, scene })).status).toBe(200)
+  return board
+}
+
+describe('Duplizieren', () => {
+  it('kopiert Zeichnung und Bild unabhaengig, laesst Freigaben am Original und weist Unberechtigte ab', async () => {
+    await signedInAs('root')
+    const ada = await signedInAs('ada')
+    const bob = await signedInAs('bob')
+    const eve = await signedInAs('eve')
+    const workspace = await createWorkspace(ada, 'Team Nord')
+    await addMember(ada, workspace.id, bob.profile.user.id, 'member')
+    const original = await boardMitZeichnung(ada, workspace.id, ['datei-1'])
+    const freigabe = { boardId: original.id, userId: bob.profile.user.id, role: 'viewer' }
+    expect((await post(ada, BOARD_GRANT_ADD_PATH, freigabe)).status).toBe(201)
+    const link = await post(ada, BOARD_SHARE_LINK_CREATE_PATH, { boardId: original.id })
+    expect(link.status).toBe(201)
+    const token = new URL(((await link.json()) as CreateBoardShareLinkResponse).url).hash.slice(1)
+
+    const response = await post(ada, BOARD_DUPLICATE_PATH, { boardId: original.id, title: 'Skizze (Kopie)' })
+    expect(response.status).toBe(201)
+    const kopie = (await response.json()) as BoardView
+    expect(kopie).toMatchObject({
+      title: 'Skizze (Kopie)',
+      ownerUserId: ada.profile.user.id,
+      status: 'active',
+      sceneVersion: 1,
+    })
+    expect(kopie.id).not.toBe(original.id)
+
+    // Nach dem Laden vollstaendig: dieselbe Zeichnung, eigene Assetzuordnung, dieselben Bytes.
+    const geladen = (await (
+      await ada.jar.fetch(`${app.baseUrl}${BOARD_SCENE_PATH}?${BOARD_ID_PARAM}=${kopie.id}`)
+    ).json()) as BoardSceneResponse
+    expect(geladen.scene.elements.map((element) => element.id)).toEqual(['rahmen', 'bild-datei-1'])
+    expect(geladen.scene.files['datei-1']?.storageKey).toContain(`boards/${kopie.id}/`)
+    const bytes = await download(ada, kopie.id, 'datei-1')
+    expect(new Uint8Array(await bytes.arrayBuffer())).toEqual(png('Inhalt datei-1'))
+
+    // Eigener Verlauf mit genau einer Version; Freigaben und Gastlinks bleiben am Original.
+    const zaehle = async (tabelle: string, boardId: string): Promise<number> => {
+      const result = await pool.query<{ n: string }>(`select count(*)::text as n from ${tabelle} where board_id = $1`, [
+        boardId,
+      ])
+      return Number(result.rows[0]?.n)
+    }
+    expect(await zaehle('scene_versions', kopie.id)).toBe(1)
+    expect(await zaehle('board_grants', kopie.id)).toBe(0)
+    expect(await zaehle('board_share_links', kopie.id)).toBe(0)
+    expect(await zaehle('board_grants', original.id)).toBe(1)
+    expect(await zaehle('board_share_links', original.id)).toBe(1)
+
+    // Unabhaengig: eine Aenderung an der Kopie laesst das Original unberuehrt.
+    const leer = { ...geladen.scene, elements: [], files: {} }
+    expect((await post(ada, BOARD_SCENE_PATH, { boardId: kopie.id, baseVersion: 1, scene: leer })).status).toBe(200)
+    const originalSzene = await pool.query<{ scene: SceneSnapshot }>(
+      'select scene from scene_versions where board_id = $1 order by version desc limit 1',
+      [original.id],
+    )
+    expect(originalSzene.rows[0]?.scene.elements).toHaveLength(2)
+
+    // Nichtmitglied: dieselbe 404 wie eine erfundene Kennung. Gast: die Strecke gibt es fuer ihn nicht.
+    expect((await post(eve, BOARD_DUPLICATE_PATH, { boardId: original.id, title: 'Fremd' })).status).toBe(404)
+    const gastJar = createJar()
+    const beitritt = await gastJar.fetch(`${app.baseUrl}${BOARD_GUEST_JOIN_PATH}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token, displayName: 'Gast' }),
+    })
+    expect(beitritt.status).toBe(201)
+    const gast = (await beitritt.json()) as GuestSessionResponse
+    const gastVersuch = await gastJar.fetch(`${app.baseUrl}${BOARD_DUPLICATE_PATH}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', [CSRF_HEADER]: gast.csrfToken },
+      body: JSON.stringify({ boardId: original.id, title: 'Gastkopie' }),
+    })
+    expect(gastVersuch.status).toBe(401)
+
+    // Ein Viewer ohne Anlagerecht - im archivierten Arbeitsbereich darf niemand anlegen - bekommt 403.
+    expect((await post(ada, WORKSPACE_STATUS_PATH, { workspaceId: workspace.id, status: 'archived' })).status).toBe(200)
+    expect((await post(bob, BOARD_DUPLICATE_PATH, { boardId: original.id, title: 'Leserkopie' })).status).toBe(403)
+    expect(await boardCount(workspace.id)).toBe(2)
+  })
+
+  it('hinterlaesst bei einem Speicherfehler weder ein Board noch Bytes', async () => {
+    await signedInAs('root')
+    const ada = await signedInAs('ada')
+    const workspace = await createWorkspace(ada, 'Team Nord')
+    const original = await boardMitZeichnung(ada, workspace.id, ['datei-1', 'datei-2'])
+
+    // Das erste Bild wird geschrieben, das zweite scheitert.
+    const storage = app.context.storage
+    const put = storage.put.bind(storage)
+    const geschrieben: string[] = []
+    storage.put = async (key, bytes) => {
+      if (geschrieben.length === 1) {
+        throw new Error('Speicher voll')
+      }
+      geschrieben.push(key)
+      await put(key, bytes)
+    }
+    let response: Response
+    try {
+      response = await post(ada, BOARD_DUPLICATE_PATH, { boardId: original.id, title: 'Skizze (Kopie)' })
+    } finally {
+      storage.put = put
+    }
+
+    expect(response.status).toBe(500)
+    expect(((await response.json()) as { error: string }).error).toContain('Es wurde nichts angelegt')
+    expect(await boardCount(workspace.id)).toBe(1)
+    expect((await pool.query('select 1 from board_assets where workspace_id = $1', [workspace.id])).rowCount).toBe(2)
+    expect(geschrieben).toHaveLength(1)
+    expect(await storage.get(geschrieben[0] ?? '')).toBeNull()
   })
 })
 
