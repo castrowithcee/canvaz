@@ -17,6 +17,7 @@ import type { AppContext } from './context.js'
 import { createFolderRoutes } from './folder-routes.js'
 import type { Route } from './http.js'
 import { sendBytes, sendJson } from './http.js'
+import { createLibraryRoutes } from './library-routes.js'
 import { createLocalAuthRoutes } from './local-auth-routes.js'
 import { describeError } from './log.js'
 import { createWorkspaceRoutes } from './workspace-routes.js'
@@ -86,6 +87,7 @@ export function createRoutes(context: AppContext): readonly Route[] {
     },
     ...createAuthRoutes(context),
     ...createLocalAuthRoutes(context),
+    ...createLibraryRoutes(context),
     ...createAdminRoutes(context),
     ...createWorkspaceRoutes(context),
     ...createFolderRoutes(context),

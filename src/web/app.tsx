@@ -78,8 +78,13 @@ function readLoginError(): string | null {
 
 function clearLoginError(): void {
   const url = new URL(window.location.href)
+  // Nur wenn es etwas zu entfernen gibt, und ohne das Fragment anzutasten: darin kommt etwa der Rueckweg aus
+  // dem Bibliothekskatalog (`#addLibrary=`), den erst der Editor liest.
+  if (!url.searchParams.has(LOGIN_ERROR_PARAM)) {
+    return
+  }
   url.searchParams.delete(LOGIN_ERROR_PARAM)
-  window.history.replaceState(window.history.state, '', url.pathname + url.search)
+  window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash)
 }
 
 /** Eine benannte Ansicht statt eines leeren Bildschirms - fuer unbekannte, fremde und fehlende Objekte. */

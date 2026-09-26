@@ -1384,12 +1384,21 @@
     padding-inline: --spacing(2);
   }
 
-  /* Meldungen des Editors schweben unter den Gruppen; die der Board-Sidebar stehen in deren Polsterung. */
+  /*
+   * Meldungen des Editors schweben unter den Gruppen; die der Board-Sidebar stehen in deren Polsterung. Immer
+   * in einer eigenen Zeile am linken Rand: rechts neben den Gruppen laegen sie unter der Seitenleiste des
+   * Editors, etwa der Bibliothek - und gerade deren Meldungen erscheinen, waehrend sie offen ist.
+   */
   .board__notices {
     display: grid;
-    flex: 1 1 100%;
+    flex: 1 0 100%;
     gap: --spacing(2);
+    justify-items: start;
+  }
+
+  .board__notices > * {
     max-width: 40rem;
+    width: 100%;
   }
 
   .board__notices:empty {

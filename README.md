@@ -176,7 +176,7 @@ Sitzung hat Vorrang: wer intern angemeldet ist, handelt als er selbst, auch wenn
 Gastcookie liegt.
 
 Jede Antwort traegt `Content-Security-Policy` (`default-src 'self'`, `frame-ancestors 'none'`,
-`object-src 'none'`, `base-uri 'self'`), `X-Content-Type-Options: nosniff` und `Referrer-Policy: no-referrer`.
+`object-src 'none'`, `base-uri 'self'`, `connect-src 'self' https://libraries.excalidraw.com`), `X-Content-Type-Options: nosniff` und `Referrer-Policy: no-referrer`.
 HSTS setzt bewusst die TLS-Terminierung des Deployments, nicht die Anwendung; in der mitgelieferten
 Produktionsbereitstellung setzt es der Reverse Proxy (`docker/Caddyfile`).
 
@@ -203,6 +203,8 @@ Codeeinloesung, damit es genau einmal gilt.
 | GET | `/api/auth/callback` | oeffentlich, Pfad stammt aus `CANVAZ_OIDC_REDIRECT_URI`; **nur mit OIDC-Konfiguration** |
 | POST | `/api/auth/logout` | angemeldet + CSRF-Token |
 | GET | `/api/me` | angemeldet |
+| GET | `/api/me/library` | angemeldet; nur die eigene Bibliothek |
+| POST | `/api/me/library` | angemeldet + CSRF-Token; ersetzt die eigene Bibliothek auf einer Revision |
 | GET | `/api/admin/users` | angemeldet + Systemadmin |
 | POST | `/api/admin/users/create` | angemeldet + Systemadmin + CSRF-Token |
 | POST | `/api/admin/users/password` | angemeldet + Systemadmin + CSRF-Token |
@@ -694,8 +696,32 @@ Schriftquelle zusaetzlich einen fest verdrahteten CDN-Rueckfall an; er steht hin
 nie benutzt und wird von der Policy blockiert. Beides ist im Browser nachpruefbar: keine Anfrage erreicht
 eine fremde Herkunft, und die Schriften kommen aus dem eigenen Build.
 
+**Einzige Ausnahme ist der oeffentliche Bibliothekskatalog.** `connect-src` erlaubt zusaetzlich
+`https://libraries.excalidraw.com`: waehlt jemand dort "Zu Excalidraw hinzufuegen", kehrt er mit
+`#addLibrary=<Adresse>` zum Board zurueck, und der Editor ruft genau diese Datei ab. Der Adapter nimmt nur
+Adressen dieser Herkunft an; Skripte, Stile und Rahmen bleiben fremden Herkuenften verschlossen.
+
 Der Editor wird erst beim Oeffnen eines Boards nachgeladen. Das haelt den Einstieg klein (rund 215 kB, 67 kB
 gzip) und stellt sicher, dass der eigene Assetpfad vor dem Schriftregister von Excalidraw steht.
+
+### Persoenliche Bibliothek
+
+Jeder interne Nutzer hat **eine** Excalidraw-Bibliothek, die ihm gehoert und keinem Board: eine Zeile in
+`user_library` (Eintraege als `jsonb`, dazu eine Revision). Sie steht auf jedem eigenen Board, nach dem
+Neuladen und in jedem Browser zur Verfuegung. Dateiimport (`.excalidrawlib`), Rueckweg aus dem oeffentlichen
+Katalog, "Zur Bibliothek hinzufuegen" und Entfernen melden sich alle ueber `onLibraryChange` und laufen
+durch denselben Speicherweg. Snapshot, Autosave und Versionen eines Boards beruehrt sie nie.
+
+- Gespeichert wird die ganze Liste auf der zuletzt bestaetigten Revision. Ist die ueberholt, antwortet der
+  Server mit **409** und schreibt nichts; der Editor laedt den neuen Stand, fuehrt eintragsweise zusammen
+  (lokal Entferntes bleibt entfernt, Eintraege des anderen Fensters bleiben erhalten) und benennt das.
+- Der Server prueft Struktur und Groesse (hoechstens `CANVAZ_MAX_SCENE_BYTES`) und lehnt Eintraege mit
+  Bildern oder Dateiverweisen benannt ab: deren Bytes gehoeren dem Board, gespeichert waere nur ein leerer
+  Rahmen. Der Editor nimmt solche Eintraege schon vorher heraus und sagt es.
+- Erst die Antwort des Servers macht eine Aenderung dauerhaft; ein Fehlschlag steht mit *Erneut versuchen*
+  und *Bibliothek exportieren* ueber der Zeichenflaeche.
+- Ein Gast hat keine Bibliothek. Seine Zeichenflaeche haelt eine fuer die laufende Sitzung und sagt, dass
+  sie nicht gespeichert wird.
 
 ### Bildassets
 
@@ -1183,8 +1209,8 @@ Antwortformen von `GET /api/boards/scene` steht - und verzweigt auf `viewer`, st
 Felder zu lesen, die es dort nicht gibt.
 
 Ein Verbindungsverlust ist damit sichtbar und fuehrt nicht zu stillem Datenverlust. Die
-Content-Security-Policy wurde dafuer **nicht** gelockert: `connect-src` faellt auf `default-src 'self'`
-zurueck, und `'self'` deckt die gleichnamige WebSocket-Herkunft ab.
+Content-Security-Policy wurde dafuer **nicht** gelockert: `connect-src` nennt `'self'`, und `'self'` deckt
+die gleichnamige WebSocket-Herkunft ab.
 
 ### Bekannte Grenzen
 

@@ -5,6 +5,7 @@
  * zur Laufzeit.
  */
 
+import type { LibraryItem } from './library.js'
 import type { BinaryFileRef, SceneSnapshot } from './scene.js'
 
 export const API_BASE_PATH = '/api'
@@ -23,6 +24,8 @@ export const AUTH_INVITATION_REDEEM_PATH = `${API_BASE_PATH}/auth/invitation/red
 export const ME_PATH = `${API_BASE_PATH}/me`
 /** Eigenes Erscheinungsbild aendern. Gelesen wird es mit dem Profil (`MeResponse.appearance`). */
 export const ME_APPEARANCE_PATH = `${API_BASE_PATH}/me/appearance`
+/** Eigene Bibliothek: `GET` liest sie, `POST` ersetzt sie auf der genannten Revision. */
+export const ME_LIBRARY_PATH = `${API_BASE_PATH}/me/library`
 export const ADMIN_USERS_PATH = `${API_BASE_PATH}/admin/users`
 export const ADMIN_USER_STATUS_PATH = `${API_BASE_PATH}/admin/users/status`
 /** Kontoanlage durch den Systemadmin: Initialpasswort oder Einladungslink. */
@@ -210,6 +213,24 @@ export type AppearanceView = {
 
 /** Ohne gespeicherte Wahl: der Systemvorgabe folgen, bisherige Akzentfarbe - das Verhalten vor der Wahl. */
 export const DEFAULT_APPEARANCE: AppearanceView = { colorScheme: 'system', accent: 'violett' }
+
+/**
+ * Persoenliche Bibliothek des angemeldeten Nutzers.
+ *
+ * `revision` zaehlt jede bestaetigte Speicherung; `0` heisst, es wurde noch nie etwas gespeichert. Eine
+ * Speicherung nennt die Revision, auf der sie aufsetzt - ist die inzwischen ueberholt, antwortet der Server
+ * mit **409** und ueberschreibt nichts.
+ */
+export type LibraryView = {
+  readonly revision: number
+  readonly items: readonly LibraryItem[]
+}
+
+export type SaveLibraryRequest = LibraryView
+
+export type SaveLibraryResponse = {
+  readonly revision: number
+}
 
 /** Prueft einen Wert gegen die feste Aufzaehlung. `null` heisst: kein gueltiges Erscheinungsbild. */
 export function parseAppearance(value: unknown): AppearanceView | null {

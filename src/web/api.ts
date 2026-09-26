@@ -9,6 +9,9 @@
 import type {
   AddWorkspaceMemberRequest,
   AppearanceView,
+  LibraryView,
+  SaveLibraryRequest,
+  SaveLibraryResponse,
   AdminUsersResponse,
   AuthMethodsResponse,
   ChangePasswordRequest,
@@ -113,6 +116,7 @@ import {
   FOLDER_RENAME_PATH,
   FOLDERS_PATH,
   ME_APPEARANCE_PATH,
+  ME_LIBRARY_PATH,
   ME_PATH,
   WORKSPACE_ID_PARAM,
   WORKSPACE_MEMBER_ADD_PATH,
@@ -174,6 +178,16 @@ function mutation(csrfToken: string, body?: unknown): RequestInit {
 /** Speichert das eigene Erscheinungsbild. Der Server kennt nur die Wahl dessen, der die Sitzung fuehrt. */
 export async function saveAppearance(csrfToken: string, appearance: AppearanceView): Promise<AppearanceView> {
   return request<AppearanceView>(ME_APPEARANCE_PATH, mutation(csrfToken, appearance))
+}
+
+/** Die eigene Bibliothek. Der Server kennt nur die dessen, der die Sitzung fuehrt. */
+export async function fetchLibrary(): Promise<LibraryView> {
+  return request<LibraryView>(ME_LIBRARY_PATH)
+}
+
+/** Ersetzt die eigene Bibliothek auf der genannten Revision. Ein 409 kommt als `ApiError` an. */
+export async function saveLibrary(csrfToken: string, library: SaveLibraryRequest): Promise<SaveLibraryResponse> {
+  return request<SaveLibraryResponse>(ME_LIBRARY_PATH, mutation(csrfToken, library))
 }
 
 export async function logout(csrfToken: string): Promise<LogoutResponse> {

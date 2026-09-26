@@ -7,8 +7,9 @@
 
 import type { Pool, PoolClient } from 'pg'
 
-import type { AppearanceView } from '../contracts/api.js'
+import type { AppearanceView, LibraryView } from '../contracts/api.js'
 import { parseAppearance } from '../contracts/api.js'
+import type { LibraryItem } from '../contracts/library.js'
 
 import type { LocalCredential, UserInvitation, UserInvitationId } from '../domain/identity/local-auth.js'
 import type {
@@ -340,6 +341,40 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Identit
                  updated_at = now()`,
           [userId, appearance.colorScheme, appearance.accent],
         )
+      },
+    },
+
+    libraries: {
+      async findByUserId(userId: UserId): Promise<LibraryView | null> {
+        const result = await db.query<{ items: LibraryItem[]; revision: number }>(
+          'select items, revision from user_library where user_id = $1',
+          [userId],
+        )
+        const row = result.rows[0]
+        return row === undefined ? null : { revision: row.revision, items: row.items }
+      },
+
+      async replace(userId: UserId, items: readonly LibraryItem[], expectedRevision: number): Promise<number | null> {
+        const serialized = JSON.stringify(items)
+        // Die Revision ist die Sperre: geschrieben wird nur, wenn der Stand noch der genannte ist. Die erste
+        // Speicherung legt die Zeile an; laeuft eine zweite erste Speicherung dagegen, gewinnt genau eine.
+        const result =
+          expectedRevision === 0
+            ? await db.query<{ revision: number }>(
+                `insert into user_library (user_id, items, revision)
+                 values ($1, $2::jsonb, 1)
+                 on conflict (user_id) do nothing
+                 returning revision`,
+                [userId, serialized],
+              )
+            : await db.query<{ revision: number }>(
+                `update user_library
+                    set items = $2::jsonb, revision = revision + 1, updated_at = now()
+                  where user_id = $1 and revision = $3
+                  returning revision`,
+                [userId, serialized, expectedRevision],
+              )
+        return result.rows[0]?.revision ?? null
       },
     },
 
