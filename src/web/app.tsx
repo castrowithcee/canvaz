@@ -37,11 +37,12 @@
 import { Suspense, useCallback, useEffect, useState } from 'react'
 import { ChevronsUpDown, CircleUserRound, LogOut, PanelLeft, RotateCcw } from 'lucide-react'
 
-import type { LoginErrorCode, MeResponse, WorkspaceView } from '../contracts/api.js'
+import type { AppearanceView, LoginErrorCode, MeResponse, WorkspaceView } from '../contracts/api.js'
 import { GUEST_APP_PATH, INVITE_APP_PATH, LOGIN_ERROR_PARAM } from '../contracts/api.js'
-import { InviteApp, LoginView, PasswordSettings } from './account.js'
+import { AppearanceSettings, InviteApp, LoginView, PasswordSettings } from './account.js'
 import { AdminUsers } from './admin-users.js'
 import { ApiError, fetchMe, fetchWorkspaces, logout } from './api.js'
+import { applyAppearance } from './appearance.js'
 import { BoardEditor } from './board/lazy-editor.js'
 import { BoardTrash } from './board-trash.js'
 import { Boards } from './boards.js'
@@ -332,6 +333,7 @@ function Content({
   explorer,
   onWorkspacesChanged,
   onProfileChanged,
+  onAppearanceChanged,
   onBoardsChanged,
 }: {
   readonly me: MeResponse
@@ -342,6 +344,7 @@ function Content({
   readonly explorer: Explorer
   readonly onWorkspacesChanged: () => void
   readonly onProfileChanged: () => void
+  readonly onAppearanceChanged: (appearance: AppearanceView) => void
   readonly onBoardsChanged: () => void
 }) {
   switch (route.kind) {
@@ -387,6 +390,7 @@ function Content({
             {me.user.email === null ? '' : ` (${me.user.email})`}
             {me.user.isSystemAdmin && ' · Systemadmin'}
           </p>
+          <AppearanceSettings me={me} onChanged={onAppearanceChanged} />
           <PasswordSettings me={me} onChanged={onProfileChanged} />
         </section>
       )
@@ -405,10 +409,12 @@ function Shell({
   me,
   onSignedOut,
   onReload,
+  onAppearanceChanged,
 }: {
   readonly me: MeResponse
   readonly onSignedOut: () => void
   readonly onReload: () => void
+  readonly onAppearanceChanged: (appearance: AppearanceView) => void
 }) {
   const route = useRoute()
   const [workspaces, setWorkspaces] = useState<readonly WorkspaceView[] | null>(null)
@@ -633,6 +639,7 @@ function Shell({
           explorer={explorer}
           onWorkspacesChanged={load}
           onProfileChanged={onReload}
+          onAppearanceChanged={onAppearanceChanged}
           onBoardsChanged={explorer.reload}
         />
       </main>
@@ -673,6 +680,22 @@ function MemberApp() {
 
   useEffect(load, [load])
 
+  // Das Erscheinungsbild folgt dem Profil: angemeldet die Wahl des Kontos, abgemeldet die Standardwahl.
+  // Waehrend des Ladens bleibt stehen, was schon gilt - sonst blitzte ein Neuladen auf.
+  const appearance = state.kind === 'authenticated' ? state.me.appearance : state.kind === 'anonymous' ? null : undefined
+  useEffect(() => {
+    if (appearance !== undefined) {
+      applyAppearance(appearance)
+    }
+  }, [appearance])
+
+  /** Eine gespeicherte Wahl gilt sofort; das Profil wird dafuer nicht neu geladen. */
+  const changeAppearance = useCallback((next: AppearanceView) => {
+    setState((current) =>
+      current.kind === 'authenticated' ? { kind: 'authenticated', me: { ...current.me, appearance: next } } : current,
+    )
+  }, [])
+
   if (state.kind === 'loading') {
     return (
       <main className="shell">
@@ -692,7 +715,7 @@ function MemberApp() {
   if (state.kind === 'anonymous') {
     return <LoginView error={state.error} onSignedIn={load} />
   }
-  return <Shell me={state.me} onSignedOut={load} onReload={load} />
+  return <Shell me={state.me} onSignedOut={load} onReload={load} onAppearanceChanged={changeAppearance} />
 }
 
 export function App() {

@@ -12,8 +12,23 @@
  * Nutzer bekommt einen Code, den die Oberflaeche in einen Satz mit Wiederholungsweg uebersetzt.
  */
 
-import type { AuthMethodsResponse, LoginErrorCode, LogoutResponse, MeResponse } from '../contracts/api.js'
-import { AUTH_LOGIN_PATH, AUTH_LOGOUT_PATH, AUTH_METHODS_PATH, LOGIN_ERROR_PARAM, ME_PATH } from '../contracts/api.js'
+import type {
+  AppearanceView,
+  AuthMethodsResponse,
+  LoginErrorCode,
+  LogoutResponse,
+  MeResponse,
+} from '../contracts/api.js'
+import {
+  AUTH_LOGIN_PATH,
+  AUTH_LOGOUT_PATH,
+  AUTH_METHODS_PATH,
+  DEFAULT_APPEARANCE,
+  LOGIN_ERROR_PARAM,
+  ME_APPEARANCE_PATH,
+  ME_PATH,
+  parseAppearance,
+} from '../contracts/api.js'
 import type { UserId } from '../domain/identity/model.js'
 import type { IdentityClaims, ProvisioningDecision } from '../domain/identity/provisioning.js'
 import { decideProvisioning } from '../domain/identity/provisioning.js'
@@ -23,7 +38,7 @@ import type { AppContext } from './context.js'
 import { clearFlowCookie, openFlowState, readFlowCookie, sealFlowState, setFlowCookie } from './flow-state.js'
 import { requireCsrfToken, requireSession, toUserView } from './guard.js'
 import type { Route } from './http.js'
-import { sendJson, sendRedirect } from './http.js'
+import { readJsonBody, sendError, sendJson, sendRedirect } from './http.js'
 import { describeError } from './log.js'
 import type { OidcClient } from './oidc.js'
 import { OidcError } from './oidc.js'
@@ -257,10 +272,41 @@ export function createAuthRoutes(context: AppContext): readonly Route[] {
         if (auth === null) {
           return
         }
+        const appearance = await context.identity.appearances.findByUserId(auth.user.id)
         const body: MeResponse = {
           user: toUserView(auth.user),
           csrfToken: csrfTokenFor(auth.session.id, config.sessionSecret),
+          appearance: appearance ?? DEFAULT_APPEARANCE,
         }
+        sendJson(response, 200, body)
+      },
+    },
+
+    /**
+     * Eigenes Erscheinungsbild aendern.
+     *
+     * Die Route kennt keinen Nutzerparameter: sie schreibt ausschliesslich die Wahl dessen, der die Sitzung
+     * fuehrt. Einen Weg, die Wahl eines anderen zu lesen oder zu aendern, gibt es damit nicht - auch nicht
+     * fuer die Systemadministration. Ein Gast hat keine Sitzung und damit keine Wahl.
+     */
+    {
+      method: 'POST',
+      path: ME_APPEARANCE_PATH,
+      handle: async ({ request, response }) => {
+        const auth = await requireSession(context, request, response)
+        if (auth === null) {
+          return
+        }
+        if (!requireCsrfToken(context, request, response, asRequester(auth))) {
+          return
+        }
+        const appearance = parseAppearance(await readJsonBody(request))
+        if (appearance === null) {
+          sendError(response, 400, 'Unbekanntes Farbschema oder unbekannte Akzentfarbe')
+          return
+        }
+        await context.identity.appearances.set(auth.user.id, appearance)
+        const body: AppearanceView = appearance
         sendJson(response, 200, body)
       },
     },

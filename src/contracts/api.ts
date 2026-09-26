@@ -21,6 +21,8 @@ export const AUTH_LOCAL_PASSWORD_PATH = `${API_BASE_PATH}/auth/local/password`
 /** Einloesen eines Einladungslinks: der Empfaenger setzt sein Passwort selbst. */
 export const AUTH_INVITATION_REDEEM_PATH = `${API_BASE_PATH}/auth/invitation/redeem`
 export const ME_PATH = `${API_BASE_PATH}/me`
+/** Eigenes Erscheinungsbild aendern. Gelesen wird es mit dem Profil (`MeResponse.appearance`). */
+export const ME_APPEARANCE_PATH = `${API_BASE_PATH}/me/appearance`
 export const ADMIN_USERS_PATH = `${API_BASE_PATH}/admin/users`
 export const ADMIN_USER_STATUS_PATH = `${API_BASE_PATH}/admin/users/status`
 /** Kontoanlage durch den Systemadmin: Initialpasswort oder Einladungslink. */
@@ -181,6 +183,43 @@ export type MeResponse = {
   readonly user: UserView
   /** An die Session gebundenes Token fuer zustandsaendernde Anfragen. */
   readonly csrfToken: string
+  /** Das eigene Erscheinungsbild; ohne gespeicherte Wahl `DEFAULT_APPEARANCE`. */
+  readonly appearance: AppearanceView
+}
+
+/**
+ * Farbschema der Produktschale. `system` folgt der Vorgabe des Betriebssystems und auch deren spaeterer
+ * Aenderung; `light` und `dark` legen es fest.
+ */
+export const COLOR_SCHEMES = ['system', 'light', 'dark'] as const
+export type ColorScheme = (typeof COLOR_SCHEMES)[number]
+
+/**
+ * Die waehlbaren Akzentfarben. Bewusst eine feste, kleine Palette und keine freie Eingabe: jede Farbe ist in
+ * Hell und Dunkel auf Kontrast geprueft (Werte in `web/styles.css`). `violett` ist die bisherige
+ * Canvaz-Farbe.
+ */
+export const ACCENT_COLORS = ['violett', 'blau', 'petrol', 'fuchsia', 'graphit'] as const
+export type AccentColor = (typeof ACCENT_COLORS)[number]
+
+/** Persoenliches Erscheinungsbild. Gilt nur fuer die Produktschale, nie fuer Boardinhalte. */
+export type AppearanceView = {
+  readonly colorScheme: ColorScheme
+  readonly accent: AccentColor
+}
+
+/** Ohne gespeicherte Wahl: der Systemvorgabe folgen, bisherige Akzentfarbe - das Verhalten vor der Wahl. */
+export const DEFAULT_APPEARANCE: AppearanceView = { colorScheme: 'system', accent: 'violett' }
+
+/** Prueft einen Wert gegen die feste Aufzaehlung. `null` heisst: kein gueltiges Erscheinungsbild. */
+export function parseAppearance(value: unknown): AppearanceView | null {
+  if (typeof value !== 'object' || value === null) {
+    return null
+  }
+  const { colorScheme, accent } = value as { colorScheme?: unknown; accent?: unknown }
+  const scheme = COLOR_SCHEMES.find((candidate) => candidate === colorScheme)
+  const color = ACCENT_COLORS.find((candidate) => candidate === accent)
+  return scheme === undefined || color === undefined ? null : { colorScheme: scheme, accent: color }
 }
 
 /**

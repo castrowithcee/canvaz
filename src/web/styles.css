@@ -9,8 +9,12 @@
  * gebuendeltes SVG aus dem Build (`lucide-react`). Es gibt keine Web-Font und keine fremde Stildatei; die
  * Content-Security-Policy bleibt unveraendert streng.
  *
- * Das dunkle Erscheinungsbild entsteht ausschliesslich dadurch, dass `prefers-color-scheme: dark` **dieselben
- * Tokennamen** neu belegt. Kein Baustein kennt zwei Farbwelten.
+ * Jeder Farbtoken traegt beide Erscheinungsbilder in einem Wert (`light-dark(hell, dunkel)`); welches gilt,
+ * entscheidet allein `color-scheme` am Wurzelelement. Ohne Wahl ist das die Systemvorgabe, `data-theme` legt
+ * es fest (siehe `appearance.ts`). Kein Baustein kennt zwei Farbwelten.
+ *
+ * Die waehlbare Akzentfarbe (`data-accent`) belegt ausschliesslich die Akzentrollen - Akzent, Hover, weiche
+ * Flaeche und Fokus - neu. Neutrale Flaechen, Text und Statusfarben bleiben davon unberuehrt.
  *
  * ## Grenze zur Zeichenflaeche
  *
@@ -37,25 +41,28 @@
  * verwendet und keine Hilfsklasse. Ohne das faellt eine allein in CSS genutzte Farbe aus dem Ergebnis.
  */
 @theme static {
-  /* Farbe - helles Erscheinungsbild. Unveraendert gegenueber der bisherigen Fassung. */
-  --color-canvas: #f4f4f6;
-  --color-surface: #ffffff;
-  --color-surface-muted: #eeeef2;
-  --color-text: #1b1b1f;
-  --color-text-muted: #5b5b66;
-  --color-border: #d9d9e0;
-  --color-border-strong: #8a8a99;
-  --color-accent: #6965db;
-  --color-accent-hover: #5a56c4;
-  --color-accent-text: #ffffff;
-  --color-accent-soft: #edecfc;
-  --color-danger: #c92a2a;
-  --color-danger-hover: #ab2020;
-  --color-danger-text: #ffffff;
-  --color-danger-soft: #fdecec;
-  --color-success: #2b7a3d;
-  --color-success-soft: #eaf5ec;
-  --color-focus: #6965db;
+  /*
+   * Farbe - hell und dunkel in einem Wert. Die Werte sind unveraendert gegenueber der bisherigen Fassung, die
+   * das dunkle Erscheinungsbild ueber `prefers-color-scheme` neu belegte.
+   */
+  --color-canvas: light-dark(#f4f4f6, #121212);
+  --color-surface: light-dark(#ffffff, #1e1e22);
+  --color-surface-muted: light-dark(#eeeef2, #26262b);
+  --color-text: light-dark(#1b1b1f, #e6e6ea);
+  --color-text-muted: light-dark(#5b5b66, #a5a5b0);
+  --color-border: light-dark(#d9d9e0, #37373f);
+  --color-border-strong: light-dark(#8a8a99, #6c6c7a);
+  --color-accent: light-dark(#6965db, #a8a5ff);
+  --color-accent-hover: light-dark(#5a56c4, #bdbbff);
+  --color-accent-text: light-dark(#ffffff, #14141a);
+  --color-accent-soft: light-dark(#edecfc, #262440);
+  --color-danger: light-dark(#c92a2a, #ff8785);
+  --color-danger-hover: light-dark(#ab2020, #ffa19f);
+  --color-danger-text: light-dark(#ffffff, #1a1113);
+  --color-danger-soft: light-dark(#fdecec, #3a2124);
+  --color-success: light-dark(#2b7a3d, #7bd88f);
+  --color-success-soft: light-dark(#eaf5ec, #16291b);
+  --color-focus: light-dark(#6965db, #a8a5ff);
 
   /* Typografie. */
   --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
@@ -75,10 +82,19 @@
   --radius-xl: 1.5rem;
   --radius-pill: 999px;
 
-  /* Erhebung. */
-  --shadow-control: 0 1px 2px rgb(27 27 31 / 7%);
-  --shadow-sm: 0 1px 2px rgb(27 27 31 / 6%), 0 5px 18px rgb(27 27 31 / 5%);
-  --shadow-md: 0 18px 48px rgb(27 27 31 / 16%), 0 2px 8px rgb(27 27 31 / 8%);
+  /*
+   * Erhebung. `light-dark()` gilt nur fuer Farben; wo sich hell und dunkel auch in der Geometrie
+   * unterscheiden, steht jede Ebene einmal da und ist im jeweils anderen Schema durchsichtig.
+   */
+  --shadow-control: 0 1px 2px light-dark(rgb(27 27 31 / 7%), rgb(0 0 0 / 40%));
+  --shadow-sm:
+    0 1px 2px light-dark(rgb(27 27 31 / 6%), rgb(0 0 0 / 35%)),
+    0 5px 18px light-dark(rgb(27 27 31 / 5%), transparent),
+    0 6px 20px light-dark(transparent, rgb(0 0 0 / 20%));
+  --shadow-md:
+    0 18px 48px light-dark(rgb(27 27 31 / 16%), transparent),
+    0 20px 56px light-dark(transparent, rgb(0 0 0 / 58%)),
+    0 2px 8px light-dark(rgb(27 27 31 / 8%), rgb(0 0 0 / 38%));
 
   /*
    * Kleinstes Beruehrziel. Jede Schaltflaeche, jeder Menuepunkt und jeder Navigationslink halten es ein;
@@ -95,43 +111,71 @@
 }
 
 /*
- * Dunkles Erscheinungsbild: dieselben Namen, andere Werte.
+ * Waehlbare Akzentfarben.
  *
- * Ungeschichtet und damit staerker als der `@theme`-Block, der in `@layer theme` landet.
+ * Eine feste Palette (`ACCENT_COLORS` im Vertrag), jede Farbe hell und dunkel. Geprueft ist fuer jede: Text
+ * auf Akzent und auf dessen Hover mindestens 4.5:1, der Akzent als Link- und Fokusfarbe auf Flaeche,
+ * Hintergrund und gedaempfter Flaeche mindestens 4.5:1, Text auf der weichen Flaeche weit darueber. Der
+ * Text auf dem Akzent (`--color-accent-text`) ist fuer alle derselbe und bleibt deshalb im `@theme`-Block.
+ *
+ * Ungeschichtet und damit staerker als der `@theme`-Block. Der Selektor gilt fuer jedes Element und nicht nur
+ * fuer die Wurzel: ein Farbmuster der Auswahl traegt dasselbe Attribut und zeigt damit seine Farbe im
+ * gerade gueltigen Schema. `violett` wiederholt deshalb die Standardwerte.
  */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --color-canvas: #121212;
-    --color-surface: #1e1e22;
-    --color-surface-muted: #26262b;
-    --color-text: #e6e6ea;
-    --color-text-muted: #a5a5b0;
-    --color-border: #37373f;
-    --color-border-strong: #6c6c7a;
-    --color-accent: #a8a5ff;
-    --color-accent-hover: #bdbbff;
-    --color-accent-text: #14141a;
-    --color-accent-soft: #262440;
-    --color-danger: #ff8785;
-    --color-danger-hover: #ffa19f;
-    --color-danger-text: #1a1113;
-    --color-danger-soft: #3a2124;
-    --color-success: #7bd88f;
-    --color-success-soft: #16291b;
-    --color-focus: #a8a5ff;
-    --shadow-control: 0 1px 2px rgb(0 0 0 / 40%);
-    --shadow-sm: 0 1px 2px rgb(0 0 0 / 35%), 0 6px 20px rgb(0 0 0 / 20%);
-    --shadow-md: 0 20px 56px rgb(0 0 0 / 58%), 0 2px 8px rgb(0 0 0 / 38%);
-  }
+[data-accent='violett'] {
+  --color-accent: light-dark(#6965db, #a8a5ff);
+  --color-accent-hover: light-dark(#5a56c4, #bdbbff);
+  --color-accent-soft: light-dark(#edecfc, #262440);
+  --color-focus: light-dark(#6965db, #a8a5ff);
+}
+
+[data-accent='blau'] {
+  --color-accent: light-dark(#2359d1, #8ab4ff);
+  --color-accent-hover: light-dark(#1c48ad, #a9c8ff);
+  --color-accent-soft: light-dark(#e7eefc, #1c2a44);
+  --color-focus: light-dark(#2359d1, #8ab4ff);
+}
+
+[data-accent='petrol'] {
+  --color-accent: light-dark(#0e7069, #62d0c3);
+  --color-accent-hover: light-dark(#0b5a54, #86ddd2);
+  --color-accent-soft: light-dark(#e2f3f1, #15302d);
+  --color-focus: light-dark(#0e7069, #62d0c3);
+}
+
+[data-accent='fuchsia'] {
+  --color-accent: light-dark(#a3259c, #f0a6ec);
+  --color-accent-hover: light-dark(#861e80, #f5c1f2);
+  --color-accent-soft: light-dark(#f9e8f8, #3a1f3a);
+  --color-focus: light-dark(#a3259c, #f0a6ec);
+}
+
+[data-accent='graphit'] {
+  --color-accent: light-dark(#4f5563, #c3c7cf);
+  --color-accent-hover: light-dark(#3d424d, #d8dbe1);
+  --color-accent-soft: light-dark(#ebecef, #2c2e34);
+  --color-focus: light-dark(#4f5563, #c3c7cf);
 }
 
 /* ------------------------------------------------------------ Grundlagen */
 
 @layer base {
+  /*
+   * Das Farbschema steht ausschliesslich hier, am Wurzelelement: danach richtet sich jedes `light-dark()`.
+   * Ohne Wahl folgt es der Systemvorgabe und auch deren Aenderung waehrend der Sitzung.
+   */
   html {
     color-scheme: light dark;
     min-height: 100%;
     -webkit-text-size-adjust: 100%;
+  }
+
+  html[data-theme='light'] {
+    color-scheme: light;
+  }
+
+  html[data-theme='dark'] {
+    color-scheme: dark;
   }
 
   body {
@@ -709,6 +753,35 @@
     justify-content: center;
     min-height: var(--spacing-touch);
     min-width: var(--spacing-touch);
+  }
+
+  /*
+   * Auswahl aus wenigen festen Werten: native Radios, jede Zeile als ganzes Beruehrziel. Die Beschriftung
+   * umschliesst das Radio, ein Klick irgendwo in der Zeile waehlt es.
+   */
+  .choice-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: --spacing(1) --spacing(4);
+  }
+
+  .choice {
+    align-items: center;
+    cursor: pointer;
+    display: inline-flex;
+    gap: --spacing(2);
+    min-height: var(--spacing-touch);
+  }
+
+  /* Farbmuster einer Akzentfarbe. Es traegt `data-accent` und zeigt die Farbe im gerade gueltigen Schema. */
+  .choice__swatch {
+    background: var(--color-accent);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-pill);
+    display: inline-block;
+    flex: none;
+    height: 1.25rem;
+    width: 1.25rem;
   }
 
   /* Gestapelte Felder: die Grundform jedes Formulars dieser Anwendung. */
