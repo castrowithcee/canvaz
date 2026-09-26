@@ -61,39 +61,29 @@ passphrase_datei() {
     printf '%s' "$datei"
 }
 
-# Assets als tar-Datei - in beiden Speichermodi dieselbe Form. Der Aufrufer sieht keinen Unterschied, und
-# ein Archiv aus dem einen Modus laesst sich deshalb in den anderen zurueckspielen.
-#
-# Im Modus `s3` laeuft der Umweg ueber ein eingehaengtes Spiegelverzeichnis: `mc` bringt den Bucket dorthin,
-# gepackt wird auf dem Host. Das `mc`-Image traegt bewusst nur `mc` und kein `tar`.
+# Assets als tar-Datei - nur im Modus `filesystem`. Im Modus `s3` liegen die Bytes bei einem externen,
+# vom Betreiber selbst gestellten Objektspeicher; diese Instanz liefert dafuer keinen Dienst mehr mit und
+# sichert seinen Inhalt deshalb nicht selbst. Die Sicherung der Assets ist dort Sache des Betreibers bzw.
+# des Anbieters (z. B. dessen eigene Snapshot- oder Replikationsfunktion). Ein Archiv aus dem Modus `s3`
+# enthaelt entsprechend nur Datenbank und Metadaten, kein `assets.tar`.
 assets_lesen() {
-    local ziel="$1" spiegel="$WORK/spiegel"
+    local ziel="$1"
     if [[ "$ADAPTER" == "s3" ]]; then
-        mkdir -p "$spiegel"
-        docker compose run --rm -T --no-deps --volume "$spiegel:/assets" mc \
-            'mc alias set sicherung "$CANVAZ_S3_ENDPOINT" "$CANVAZ_S3_ACCESS_KEY_ID" "$CANVAZ_S3_SECRET_ACCESS_KEY" > /dev/null
-             mc mirror --quiet "sicherung/$CANVAZ_S3_BUCKET" /assets > /dev/null' > /dev/null
-        tar --create --directory "$spiegel" --file "$ziel" .
-        rm --recursive --force "$spiegel"
-    else
-        docker compose run --rm -T --no-deps --entrypoint sh app \
-            -c "tar --create --directory $ASSET_ROOT ." > "$ziel"
+        meldung "Adapter s3: Assets liegen beim externen Objektspeicher, keine lokale Assetsicherung noetig."
+        return 0
     fi
+    docker compose run --rm -T --no-deps --entrypoint sh app \
+        -c "tar --create --directory $ASSET_ROOT ." > "$ziel"
 }
 
 assets_schreiben() {
-    local quelle="$1" spiegel="$WORK/spiegel"
+    local quelle="$1"
     if [[ "$ADAPTER" == "s3" ]]; then
-        mkdir -p "$spiegel"
-        tar --extract --directory "$spiegel" --file "$quelle"
-        docker compose run --rm -T --volume "$spiegel:/assets" mc \
-            'mc alias set sicherung "$CANVAZ_S3_ENDPOINT" "$CANVAZ_S3_ACCESS_KEY_ID" "$CANVAZ_S3_SECRET_ACCESS_KEY" > /dev/null
-             mc mirror --quiet --overwrite /assets "sicherung/$CANVAZ_S3_BUCKET" > /dev/null' > /dev/null
-        rm --recursive --force "$spiegel"
-    else
-        docker compose run --rm -T --no-deps --entrypoint sh app \
-            -c "tar --extract --directory $ASSET_ROOT" < "$quelle"
+        meldung "Adapter s3: Assets liegen beim externen Objektspeicher, keine lokale Wiederherstellung noetig."
+        return 0
     fi
+    docker compose run --rm -T --no-deps --entrypoint sh app \
+        -c "tar --extract --directory $ASSET_ROOT" < "$quelle"
 }
 
 sichern() {
