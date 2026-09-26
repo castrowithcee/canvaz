@@ -1,0 +1,57 @@
+# Lokale Entwicklungsdienste: PostgreSQL und SeaweedFS.
+#
+# Hohe Hostports statt der Standardports: auf Entwicklungsmaschinen laufen haeufig andere Dienste, und die
+# niedrigen Ports 8080, 8088, 8443 und 2022 sind auf dem Referenzhost bereits belegt.
+# Die Zugangsdaten hier sind lokale Entwicklungswerte und keine Secrets; beide Instanzen lauschen nur auf
+# 127.0.0.1 und sind von aussen nicht erreichbar.
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: canvaz
+      POSTGRES_PASSWORD: canvaz
+      POSTGRES_DB: canvaz
+    ports:
+      - '127.0.0.1:55432:5432'
+    volumes:
+      - canvaz-postgres-data:/var/lib/postgresql
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready --username=canvaz --dbname=canvaz']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # SeaweedFS als S3-kompatibler Objektspeicher (Apache-2.0). Er ist der Gegenpart des `s3`-Storage-Adapters
+  # und macht ihn lokal real pruefbar - die gemeinsame Contract-Testsuite laeuft unveraendert gegen ihn.
+  # Die Zugangsidentitaet (Zugangsschluessel/Geheimnis, nur fuer Tests) kommt aus der versionierten
+  # `docker/seaweedfs-init/s3-config.json`; ohne sie gaebe es keine echte Signaturpruefung.
+  seaweedfs:
+    image: chrislusf/seaweedfs:3.97
+    restart: unless-stopped
+    command:
+      [
+        'server',
+        '-dir=/data',
+        '-s3',
+        '-s3.port=9000',
+        '-s3.config=/etc/seaweedfs/s3.json',
+        '-filer=true',
+        '-ip.bind=0.0.0.0',
+      ]
+    ports:
+      - '127.0.0.1:59000:9000'
+    volumes:
+      - ./docker/seaweedfs-init/s3-config.json:/etc/seaweedfs/s3.json:ro
+      - canvaz-seaweedfs-data:/data
+    healthcheck:
+      test: ['CMD', 'nc', '-z', '127.0.0.1', '9000']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  canvaz-postgres-data:
+  canvaz-seaweedfs-data:
