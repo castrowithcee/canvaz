@@ -1,0 +1,9 @@
+{
+  "identities": [
+    {
+      "name": "canvaz",
+      "credentials": [{ "accessKey": "canvaz", "secretKey": "canvaz-seaweedfs-dev" }],
+      "actions": ["Admin", "Read", "Write"]
+    }
+  ]
+}
