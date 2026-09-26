@@ -2,13 +2,14 @@
  * Gemeinsame Contract-Testsuite des Storage-Ports.
  *
  * **Das Kernartefakt dieses Pakets.** Es gibt genau eine Suite - `assetStorageContract` -, und sie laeuft
- * unveraendert gegen beide Adapter: gegen das Dateisystem und gegen ein echtes MinIO. Innerhalb der Suite
- * gibt es keine Fallunterscheidung, keine Bedingung und keinen Adapternamen; sie kennt ausschliesslich
+ * unveraendert gegen beide Adapter: gegen das Dateisystem und gegen ein echtes SeaweedFS. Innerhalb der
+ * Suite gibt es keine Fallunterscheidung, keine Bedingung und keinen Adapternamen; sie kennt ausschliesslich
  * `AssetStoragePort`. Genau das ist der Nachweis, dass die beiden Adapter denselben fachlichen Vertrag
  * erfuellen und ein Konfigurationswechsel nichts an der Bedeutung aendert.
  *
  * Der s3-Adapter wird nicht gegen eine Attrappe geprueft: eine selbst gebaute Signatur waere gegen eine
- * Attrappe wertlos. Er spricht mit dem MinIO aus `compose.yml`.
+ * Attrappe wertlos. Er spricht mit dem SeaweedFS aus `compose.yml`, das echte AWS-Signaturen prueft (siehe
+ * die Gegenprobe mit falschem Geheimnis unten).
  */
 
 import { readFile, rm, symlink } from 'node:fs/promises'
@@ -20,7 +21,7 @@ import type { AssetStoragePort } from '../../src/domain/storage/asset-storage-po
 import { InvalidStorageKeyError } from '../../src/domain/storage/asset-storage-port.js'
 import { createFilesystemAssetStorage } from '../../src/persistence/asset-storage-filesystem.js'
 import { createS3AssetStorage, ensureS3Bucket } from '../../src/persistence/asset-storage-s3.js'
-import { MISSING_MINIO_HINT, TEST_S3, createFilesystemRoot } from '../support/asset-storage-env.js'
+import { MISSING_TEST_S3_HINT, TEST_S3, createFilesystemRoot } from '../support/asset-storage-env.js'
 
 /** Frischer Schluesselraum je Testfall, damit die Faelle einander nicht sehen. */
 let laufendeNummer = 0
@@ -132,7 +133,7 @@ beforeAll(async () => {
   try {
     await ensureS3Bucket(TEST_S3)
   } catch (error) {
-    throw new Error(MISSING_MINIO_HINT, { cause: error })
+    throw new Error(MISSING_TEST_S3_HINT, { cause: error })
   }
 })
 
@@ -144,8 +145,20 @@ describe('Storage-Port, Adapter filesystem', () => {
   assetStorageContract(() => createFilesystemAssetStorage(dateisystemWurzel))
 })
 
-describe('Storage-Port, Adapter s3 (MinIO)', () => {
+describe('Storage-Port, Adapter s3 (SeaweedFS)', () => {
   assetStorageContract(() => createS3AssetStorage(TEST_S3))
+})
+
+/* ---------------------------------------------------------------------------------------------------- */
+/* Gegenprobe: SeaweedFS prueft die Signatur wirklich                                                    */
+/* ---------------------------------------------------------------------------------------------------- */
+
+describe('s3-Adapter, Gegenprobe auf die Signaturpruefung', () => {
+  it('lehnt einen Zugriff mit falschem Geheimnis ab', async () => {
+    const falscheZugangsdaten = createS3AssetStorage({ ...TEST_S3, secretAccessKey: 'ein-falsches-geheimnis' })
+
+    await expect(falscheZugangsdaten.put(frischerSchluessel(), bytes('darf nicht ankommen'))).rejects.toThrow()
+  })
 })
 
 /* ---------------------------------------------------------------------------------------------------- */
