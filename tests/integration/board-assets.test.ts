@@ -3,7 +3,7 @@
  *
  * Es gibt keinen verkuerzten Weg an den Guards vorbei: jeder Test meldet sich ueber den echten OIDC-Fluss
  * an und spricht dieselben HTTP-Endpunkte an wie die SPA - samt CSRF-Token und Session-Cookie. Der
- * Neustart-Nachweis laeuft fuer `filesystem` und fuer `s3` (MinIO); alles andere ist adapterunabhaengig und
+ * Neustart-Nachweis laeuft fuer `filesystem` und fuer `s3` (SeaweedFS); alles andere ist adapterunabhaengig und
  * wird deshalb einmal geprueft, gegen den Adapter, den die Standardkonfiguration faehrt.
  */
 
@@ -50,7 +50,7 @@ import { ensureS3Bucket } from '../../src/persistence/asset-storage-s3.js'
 import { migrate } from '../../src/persistence/migrate.js'
 import { createPool } from '../../src/persistence/pool.js'
 import {
-  MISSING_MINIO_HINT,
+  MISSING_TEST_S3_HINT,
   TEST_S3,
   createFilesystemRoot,
   filesystemEnv,
@@ -86,7 +86,7 @@ beforeAll(async () => {
   try {
     await ensureS3Bucket(TEST_S3)
   } catch (error) {
-    throw new Error(MISSING_MINIO_HINT, { cause: error })
+    throw new Error(MISSING_TEST_S3_HINT, { cause: error })
   }
   provider = await startTestProvider()
   wurzel = await createFilesystemRoot()
@@ -773,7 +773,7 @@ describe('Derselbe Inhalt unter zwei Dateikennungen', () => {
     }
   })
 
-  it('haelt beide Dateien abrufbar: Adapter s3 (MinIO)', async () => {
+  it('haelt beide Dateien abrufbar: Adapter s3 (SeaweedFS)', async () => {
     await zweiKennungen(s3Env())
   })
 })
@@ -830,7 +830,7 @@ describe('Neustart der Anwendung', () => {
     }
   })
 
-  it('haelt ein Bild ueber einen Neustart hinweg: Adapter s3 (MinIO)', async () => {
+  it('haelt ein Bild ueber einen Neustart hinweg: Adapter s3 (SeaweedFS)', async () => {
     await ueberlebtNeustart(s3Env())
   })
 })
