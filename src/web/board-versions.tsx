@@ -1,9 +1,15 @@
 /**
- * Versionsverlauf, Export und Import eines Boards.
+ * Versionsverlauf, Export und Import eines Boards - als eigenes Overlay.
  *
- * Ein Abschnitt im Fluss seiner Umgebung und kein eigener Dialog - dieselbe Entscheidung wie bei den
- * Freigaben: kein Fokuskaefig, keine eigene Escape-Behandlung, jede Ueberschrift bleibt in der
- * Dokumentstruktur. Der Abschnitt steht im Bereich "Versionen" der Informationsleiste (`board-panel.tsx`).
+ * Kein Abschnitt der Informationsleiste mehr: der Verlauf ist breiter, als es dort schmal neben der
+ * Zeichenflaeche Platz haette, und braucht dafuer keinen zweiten Ort. Ausgeloest wird er ueber ein
+ * benanntes Symbol der schwebenden Gruppe (`board/board-view.tsx`); geoeffnet und geschlossen wird er wie
+ * jeder andere Dialog dieser Anwendung - Fokusfang, `Escape` und Fokusrueckgabe kommen von der Plattform
+ * (`overlays.tsx`).
+ *
+ * Die Liste selbst bleibt kompakt: eine Zeile je Version, das senkrechte Drei-Punkte-Menue traegt "Ansehen"
+ * und - nur mit dem Recht - "Wiederherstellen". Export, Import, aktueller Stand und Aufbewahrungsgrenze
+ * gehoeren fachlich zum selben Verlauf und stehen deshalb im selben Overlay.
  *
  * Die Ansicht entscheidet nichts. Ob wiederhergestellt werden darf, sagt die Serverantwort (`mayRestore`);
  * ob importiert werden darf, sagt die Rolle des Boards ueber `mayChangeBoard` - dieselbe Funktion, mit der
@@ -18,6 +24,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
+import { EllipsisVertical, Eye, RotateCcw } from 'lucide-react'
 
 import type { BoardSceneVersionView, BoardView, MeResponse } from '../contracts/api.js'
 import type { EffectiveBoardRole } from '../domain/board/policy.js'
@@ -29,7 +36,8 @@ import {
   importBoardScene,
   restoreBoardVersion,
 } from './api.js'
-import { Empty, Loading, Notice } from './ui.js'
+import { Dialog, Menu, MenuItem } from './overlays.js'
+import { Badge, Button, Empty, Loading, Notice, useRowSelection } from './ui.js'
 
 /** Uebersetzt eine Serverantwort in einen Satz. 404 und 403 bekommen bewusst eigene Texte. */
 function messageOf(cause: unknown, fallback: string): string {
@@ -81,84 +89,70 @@ function offerDownload(fileName: string, content: string): void {
   URL.revokeObjectURL(url)
 }
 
+/**
+ * Welche Zeilenhandlungen eine Version traegt.
+ *
+ * Reine Rechnung ohne Zustand: "Ansehen" gibt es immer, "Wiederherstellen" nur mit dem Recht dazu und nie
+ * auf den aktuellen Stand selbst - eine Wiederherstellung auf sich selbst waere ohne Wirkung.
+ */
+export function versionRowActions(
+  current: boolean,
+  restorable: boolean,
+): { readonly view: true; readonly restore: boolean } {
+  return { view: true, restore: restorable && !current }
+}
+
+type RowSelection = ReturnType<ReturnType<typeof useRowSelection>>
+
 function VersionRow({
-  me,
-  board,
   version,
+  current,
   restorable,
+  selection,
   onPreview,
-  onRestored,
-  onConflict,
-  onError,
+  onRequestRestore,
 }: {
-  readonly me: MeResponse
-  readonly board: BoardView
   readonly version: BoardSceneVersionView
+  readonly current: boolean
   readonly restorable: boolean
+  readonly selection: RowSelection
   readonly onPreview: (version: number) => void
-  readonly onRestored: (version: number) => void
-  /** Der Stand hat sich unter der Ansicht geaendert; nichts wurde geschrieben. */
-  readonly onConflict: () => void
-  readonly onError: (message: string) => void
+  readonly onRequestRestore: (version: number) => void
 }) {
-  const [busy, setBusy] = useState(false)
-  const current = version.version === board.sceneVersion
+  const actions = versionRowActions(current, restorable)
+  const label = `Version ${String(version.version)}`
 
   return (
-    <tr>
-      <th scope="row" data-label="Version">
-        Version {String(version.version)}
-        {current && <> (aktueller Stand)</>}
-      </th>
-      <td data-label="Gespeichert">{formatMoment(version.createdAt)}</td>
-      <td data-label="Von">{version.authorDisplayName ?? 'Gastzugang'}</td>
-      <td data-label="Elemente">{String(version.elementCount)}</td>
-      <td data-label="Groesse">{formatBytes(version.byteSize)}</td>
-      <td data-label="Aktion">
-        <span className="actions">
-        <button
-          type="button"
-          onClick={() => {
-            onPreview(version.version)
-          }}
-        >
-          Version {String(version.version)} ansehen
-        </button>
-        {restorable && !current && (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => {
-              setBusy(true)
-              onError('')
-              // Der gezeigte Stand ist die Ausgangsversion. Weicht er ab, lehnt der Server ab und
-              // schreibt nichts - die Bestaetigung ist dann ein zweiter Klick auf dem neuen Stand.
-              restoreBoardVersion(me.csrfToken, {
-                boardId: board.id,
-                version: version.version,
-                baseVersion: board.sceneVersion,
-              })
-                .then((response) => {
-                  onRestored(response.version)
-                })
-                .catch((cause: unknown) => {
-                  if (cause instanceof ApiError && cause.status === 409) {
-                    onConflict()
-                    return
-                  }
-                  onError(messageOf(cause, 'Die Version konnte nicht wiederhergestellt werden.'))
-                })
-                .finally(() => {
-                  setBusy(false)
-                })
-            }}
-          >
-            Version {String(version.version)} wiederherstellen
-          </button>
-        )}
-        </span>
-      </td>
-    </tr>
+    <li className={`${selection.className} version-row`} onClick={selection.onClick}>
+      <span className="row__label">
+        {label}
+        {current && <Badge tone="accent">Aktueller Stand</Badge>}
+      </span>
+      <span className="version-row__meta">
+        <span>{formatMoment(version.createdAt)}</span>
+        <span>{version.authorDisplayName ?? 'Gastzugang'}</span>
+        <span>{String(version.elementCount)} Elemente</span>
+        <span>{formatBytes(version.byteSize)}</span>
+      </span>
+      <span className="row__actions">
+        <Menu label={`Aktionen fuer ${label}`} icon={EllipsisVertical}>
+          <MenuItem icon={Eye} title={`${label} im Nur-Lesen-Modus ansehen`} onSelect={() => { onPreview(version.version) }}>
+            Ansehen
+          </MenuItem>
+          {actions.restore && (
+            <MenuItem
+              icon={RotateCcw}
+              title={`${label} als neuen Stand wiederherstellen`}
+              onSelect={() => {
+                onRequestRestore(version.version)
+              }}
+            >
+              Wiederherstellen
+            </MenuItem>
+          )}
+        </Menu>
+      </span>
+    </li>
   )
 }
 
@@ -169,7 +163,7 @@ type Loaded = {
   readonly mayRestore: boolean
 }
 
-export function BoardVersions({
+function BoardVersionsContent({
   me,
   boardId,
   workspaceArchived,
@@ -194,6 +188,10 @@ export function BoardVersions({
   const [note, setNote] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [chosen, setChosen] = useState<File | null>(null)
+  /** Version, deren Wiederherstellung gerade bestaetigt wird; `null` heisst: keine Bestaetigung offen. */
+  const [restoreTarget, setRestoreTarget] = useState<number | null>(null)
+  const [restoreBusy, setRestoreBusy] = useState(false)
+  const rowSelection = useRowSelection()
 
   const load = useCallback(() => {
     fetchBoardVersions(boardId)
@@ -221,25 +219,16 @@ export function BoardVersions({
   }
 
   if (state.kind === 'loading') {
-    return (
-      <section aria-labelledby="board-versions-heading">
-        <h5 id="board-versions-heading">Versionen</h5>
-        <Loading text="Versionen werden geladen …" />
-      </section>
-    )
+    return <Loading text="Versionen werden geladen …" />
   }
   if (state.kind === 'failed') {
-    return (
-      <section aria-labelledby="board-versions-heading">
-        <h5 id="board-versions-heading">Versionen</h5>
-        <Notice text={state.message} />
-      </section>
-    )
+    return <Notice text={state.message} />
   }
 
   const { board, versions, retention, mayRestore } = state.loaded
   /** Ein Import schreibt eine neue Szenenversion; er verlangt deshalb genau das Schreibrecht der Szene. */
   const importable = !workspaceArchived && board.status === 'active' && mayChangeBoard(viewerRoleOf(board))
+  const restorable = mayRestore && !workspaceArchived && board.status === 'active'
 
   function importChosenFile(file: File): void {
     setBusy(true)
@@ -281,9 +270,42 @@ export function BoardVersions({
       })
   }
 
+  function confirmRestore(): void {
+    if (restoreTarget === null) {
+      return
+    }
+    setRestoreBusy(true)
+    setActionError(null)
+    // Der gezeigte Stand ist die Ausgangsversion. Weicht er ab, lehnt der Server ab und schreibt nichts -
+    // die Bestaetigung ist dann ein zweiter Klick auf dem neuen Stand.
+    restoreBoardVersion(me.csrfToken, { boardId, version: restoreTarget, baseVersion: board.sceneVersion })
+      .then((response) => {
+        setRestoreTarget(null)
+        setNote(
+          `Wiederhergestellt als Version ${String(response.version)}. ` +
+            'Der bisherige Stand bleibt als eigene Version erhalten.',
+        )
+        reload()
+      })
+      .catch((cause: unknown) => {
+        if (cause instanceof ApiError && cause.status === 409) {
+          setRestoreTarget(null)
+          setNote(
+            'Dieses Board wurde inzwischen gespeichert. Es wurde nichts ueberschrieben, und die Liste ist ' +
+              'neu geladen. Ein erneuter Klick stellt auf dem jetzt angezeigten Stand wieder her.',
+          )
+          reload()
+          return
+        }
+        setActionError(messageOf(cause, 'Die Version konnte nicht wiederhergestellt werden.'))
+      })
+      .finally(() => {
+        setRestoreBusy(false)
+      })
+  }
+
   return (
-    <section aria-labelledby="board-versions-heading">
-      <h5 id="board-versions-heading">Versionen von {board.title}</h5>
+    <div className="stack">
       <p>
         Aktueller Stand:{' '}
         <strong>{board.sceneVersion === 0 ? 'noch nie gespeichert' : `Version ${String(board.sceneVersion)}`}</strong>.
@@ -301,27 +323,25 @@ export function BoardVersions({
         <Notice kind="success">
           <p>{note}</p>
           <p className="actions">
-            <button
-              type="button"
+            <Button
               onClick={() => {
                 setNote(null)
               }}
             >
               Hinweis ausblenden
-            </button>
+            </Button>
           </p>
         </Notice>
       )}
 
-      <h6>Export</h6>
+      <h3>Export</h3>
       <p>
         Der Export ist eine einzelne <code>.excalidraw</code>-Datei im offenen Format, mit allen Bildern des
         Boards darin. Sie laesst sich in jeder Excalidraw-Installation oeffnen und hier wieder importieren.
       </p>
       <p>
-        <button
-          type="button"
-          disabled={busy}
+        <Button
+          busy={busy}
           onClick={() => {
             setBusy(true)
             setActionError(null)
@@ -338,10 +358,10 @@ export function BoardVersions({
           }}
         >
           {board.title} als .excalidraw-Datei exportieren
-        </button>
+        </Button>
       </p>
 
-      <h6>Import</h6>
+      <h3>Import</h3>
       {!importable ? (
         <Empty text="Importieren darf, wer die Szene dieses Boards speichern darf - in einem aktiven Arbeitsbereich und einem nicht archivierten Board." />
       ) : (
@@ -373,61 +393,101 @@ export function BoardVersions({
               />
             </div>
             <p>
-              <button className="button--primary" type="submit" disabled={busy || chosen === null}>
+              <Button variant="primary" type="submit" disabled={busy || chosen === null}>
                 Datei importieren
-              </button>
+              </Button>
             </p>
           </form>
         </>
       )}
 
-      <h6>Verlauf</h6>
+      <h3>Verlauf</h3>
       {versions.length === 0 ? (
         <Empty text="Zu diesem Board wurde noch nichts gespeichert. Sobald jemand zeichnet, entstehen hier Versionen." />
       ) : (
-        <div className="table-wrap">
-          <table className="table">
-            <caption className="visually-hidden">Aufbewahrte Versionen von {board.title}</caption>
-            <thead>
-              <tr>
-                <th scope="col">Version</th>
-                <th scope="col">Gespeichert</th>
-                <th scope="col">Von</th>
-                <th scope="col">Elemente</th>
-                <th scope="col">Groesse</th>
-                <th scope="col">Aktion</th>
-              </tr>
-            </thead>
-            <tbody>
-              {versions.map((version) => (
-                <VersionRow
-                  key={version.version}
-                  me={me}
-                  board={board}
-                  version={version}
-                  restorable={mayRestore && !workspaceArchived && board.status === 'active'}
-                  onPreview={onPreview}
-                  onRestored={(created) => {
-                    setNote(
-                      `Wiederhergestellt als Version ${String(created)}. ` +
-                        'Der bisherige Stand bleibt als eigene Version erhalten.',
-                    )
-                    reload()
-                  }}
-                  onConflict={() => {
-                    setNote(
-                      'Dieses Board wurde inzwischen gespeichert. Es wurde nichts ueberschrieben, und die ' +
-                        'Liste ist neu geladen. Ein erneuter Klick stellt auf dem jetzt angezeigten Stand wieder her.',
-                    )
-                    reload()
-                  }}
-                  onError={setActionError}
-                />
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ul className="rows">
+          {versions.map((version) => (
+            <VersionRow
+              key={version.version}
+              version={version}
+              current={version.version === board.sceneVersion}
+              restorable={restorable}
+              selection={rowSelection(String(version.version))}
+              onPreview={onPreview}
+              onRequestRestore={setRestoreTarget}
+            />
+          ))}
+        </ul>
       )}
-    </section>
+
+      <Dialog
+        open={restoreTarget !== null}
+        title={restoreTarget === null ? 'Version wiederherstellen' : `Version ${String(restoreTarget)} wiederherstellen`}
+        onClose={() => {
+          setRestoreTarget(null)
+        }}
+      >
+        {restoreTarget !== null && (
+          <div className="stack">
+            <p>
+              Version {String(restoreTarget)} wird als <strong>neue Version</strong> wiederhergestellt. Der
+              aktuelle Stand ({board.sceneVersion === 0 ? 'noch nie gespeichert' : `Version ${String(board.sceneVersion)}`})
+              bleibt dabei als eigene Version in der Historie erhalten und laesst sich jederzeit selbst wieder
+              herstellen.
+            </p>
+            <p className="actions">
+              <Button variant="primary" busy={restoreBusy} onClick={confirmRestore}>
+                Ja, Version {String(restoreTarget)} wiederherstellen
+              </Button>
+              <Button
+                disabled={restoreBusy}
+                onClick={() => {
+                  setRestoreTarget(null)
+                }}
+              >
+                Abbrechen
+              </Button>
+            </p>
+          </div>
+        )}
+      </Dialog>
+    </div>
+  )
+}
+
+export function BoardVersionsOverlay({
+  me,
+  boardId,
+  boardTitle,
+  workspaceArchived,
+  open,
+  onPreview,
+  onChanged,
+  onClose,
+}: {
+  readonly me: MeResponse
+  readonly boardId: string
+  /** Titel der Kopfzeile - der Editor kennt ihn bereits, ein eigener Ladevorgang dafuer waere doppelt. */
+  readonly boardTitle: string
+  readonly workspaceArchived: boolean
+  readonly open: boolean
+  /** Oeffnet die Read-only-Vorschau genau einer Version. */
+  readonly onPreview: (version: number) => void
+  readonly onChanged: () => void
+  readonly onClose: () => void
+}) {
+  return (
+    <Dialog open={open} title={`Versionsverlauf von ${boardTitle}`} wide onClose={onClose}>
+      {/* Frischer Ladevorgang bei jedem Oeffnen statt eines Stands, der waehrend der Schliesszeit veraltet. */}
+      {open && (
+        <BoardVersionsContent
+          me={me}
+          boardId={boardId}
+          workspaceArchived={workspaceArchived}
+          onPreview={onPreview}
+          onChanged={onChanged}
+        />
+      )}
+    </Dialog>
   )
 }

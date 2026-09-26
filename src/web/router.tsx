@@ -19,10 +19,13 @@ import { DASHBOARD_FILTER_PARAM } from '../contracts/api.js'
 import { parseDashboardFilter } from '../domain/board/model.js'
 
 /**
- * Bereiche der Informationsleiste.
+ * Werte des `panel`-Parameters an einem Board.
  *
- * Drei statt einer langen Rolle: die Uebersicht traegt Ablage und Lebenszyklus, die Freigaben das interne
- * und oeffentliche Teilen, die Versionen Verlauf, Vorschau, Import und Export.
+ * Nur `uebersicht` und `freigaben` sind Bereiche der Informationsleiste: die Uebersicht traegt Ablage und
+ * Lebenszyklus, die Freigaben das interne und oeffentliche Teilen. `versionen` ist **kein** Bereich dieser
+ * Leiste mehr, sondern oeffnet das eigene, breitere Overlay des Versionsverlaufs (`board-versions.tsx`) -
+ * er steht trotzdem hier, weil derselbe Adressparameter ihn traegt und ein alter Direktlink
+ * (`?bereich=versionen`) weiterhin dorthin fuehren soll.
  */
 export type BoardPanelView = 'uebersicht' | 'freigaben' | 'versionen'
 

@@ -83,6 +83,7 @@ export function Dialog({
   open,
   title,
   danger = false,
+  wide = false,
   onClose,
   children,
 }: {
@@ -90,6 +91,8 @@ export function Dialog({
   readonly title: string
   /** Nur fuer das, was sich nicht zuruecknehmen laesst. */
   readonly danger?: boolean
+  /** Mehr Breite fuer Inhalte, die in der gewoehnlichen Dialogbreite zu eng stuenden - etwa eine Liste. */
+  readonly wide?: boolean
   readonly onClose: () => void
   readonly children: ReactNode
 }) {
@@ -110,10 +113,18 @@ export function Dialog({
     }
   }, [open, ref])
 
+  const className = [
+    'dialog',
+    danger ? 'dialog--danger' : null,
+    wide ? 'dialog--wide' : null,
+  ]
+    .filter((entry): entry is string => entry !== null)
+    .join(' ')
+
   return (
     <dialog
       ref={ref}
-      className={danger ? 'dialog dialog--danger' : 'dialog'}
+      className={className}
       aria-labelledby={titleId}
       onClose={() => {
         reportClose(selbstGeschlossen, onClose)
@@ -240,12 +251,15 @@ export function MenuItem({
   icon: Icon,
   danger = false,
   disabled = false,
+  title,
   onSelect,
   children,
 }: {
   readonly icon?: LucideIcon
   readonly danger?: boolean
   readonly disabled?: boolean
+  /** Kurzhinweis am Eintrag - etwa fuer eine Nebenbedeutung, die der sichtbare Text nicht traegt. */
+  readonly title?: string
   readonly onSelect: () => void
   readonly children: ReactNode
 }) {
@@ -258,6 +272,7 @@ export function MenuItem({
         role="menuitem"
         className={danger ? 'menu__item menu__item--danger' : 'menu__item'}
         disabled={disabled}
+        title={title}
         onClick={() => {
           close?.()
           onSelect()

@@ -1077,6 +1077,11 @@
     border-color: var(--color-danger);
   }
 
+  /* Mehr Breite fuer Inhalte, die in 40rem zu eng stuenden - etwa der Versionsverlauf mit seiner Liste. */
+  .dialog--wide {
+    max-width: min(64rem, calc(100vw - --spacing(6)));
+  }
+
   .dialog__head {
     align-items: center;
     border-bottom: 1px solid var(--color-border);
@@ -1807,6 +1812,29 @@
     display: flex;
     flex: none;
     gap: --spacing(1);
+  }
+
+  /*
+   * Zeile des Versionsverlaufs: anders als die Explorerzeile darf sie umbrechen - Zeitpunkt, Autor,
+   * Elementzahl und Groesse sollen auf schmalen Fenstern lesbar bleiben statt abgeschnitten zu werden.
+   */
+  .version-row {
+    flex-wrap: wrap;
+  }
+
+  /* Der Titel ist hier reiner Text und kein Link - die geerbte Verlinkungsoptik waere irrefuehrend. */
+  .version-row .row__label:hover {
+    text-decoration: none;
+  }
+
+  .version-row__meta {
+    color: var(--color-text-muted);
+    display: flex;
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    font-size: var(--text-sm);
+    gap: --spacing(1) --spacing(3);
+    min-width: 0;
   }
 
   /*

@@ -26,20 +26,23 @@
  *
  * Ueber der Zeichenflaeche ist keine Zeile reserviert. Zwei kompakte Gruppen schweben darueber: oben links
  * Rueckweg, Titel und Boardmenue (darin "Umbenennen" mit einem kurzen Dialog), oben rechts Presence, **ein**
- * verdichteter Zustand (`board-status.ts`), die Freigabe als Symbolaktion und der Ausloeser der
- * Informationen. Sie wiederholen nicht, was schon dasteht - was in Ordnung ist, steht nur als Symbol mit
- * Namen und Kurzhinweis da; ausformuliert wird nur, was Aufmerksamkeit verlangt, und nur das wird
- * Hilfsmitteln angekuendigt. Uhrzeit und Verbindung stehen ausgeschrieben unter "Informationen".
+ * verdichteter Zustand (`board-status.ts`), die Freigabe, der Versionsverlauf und der Ausloeser der
+ * Informationen - je als Symbolaktion. Sie wiederholen nicht, was schon dasteht - was in Ordnung ist, steht
+ * nur als Symbol mit Namen und Kurzhinweis da; ausformuliert wird nur, was Aufmerksamkeit verlangt, und nur
+ * das wird Hilfsmitteln angekuendigt. Uhrzeit und Verbindung stehen ausgeschrieben unter "Informationen".
  * Hervorgehoben ist hoechstens **eine** Aktion (`boardActions`): verlangt die Lage eine Handlung - zurueck
- * zum aktuellen Stand, neu laden, jetzt speichern -, ist sie es, und die Freigabe tritt zurueck; sonst ist
- * die Freigabe die Hauptaktion.
+ * zum aktuellen Stand, neu laden, jetzt speichern -, ist sie es, und Freigabe wie Versionsverlauf treten
+ * zurueck; sonst ist die Freigabe die Hauptaktion. Der Versionsverlauf ist nie hervorgehoben.
  * Ihre Hoehe halten die Bedienelemente der Zeichenflaeche frei; die Zeichnung selbst laeuft darunter weiter.
  *
- * Alles Umfangreichere - Ablage, Arbeitsbereichswechsel, Freigaben, Versionen, Import/Export, Archiv und
- * Papierkorb, dazu Speicher- und Verbindungsdetails - steht in der Informationsleiste (`board-panel.tsx`,
- * sichtbar benannt "Informationen") neben der Zeichenflaeche. Sie ist auf jeder
- * Breite derselbe Knoten: breit eine angedockte Spalte, schmal ein modales Sheet mit Fokusfang, Escape und
- * Fokusrueckgabe von der Plattform. Welcher Bereich offen ist, steht in der Adresse; `Zurueck` schliesst.
+ * Der Versionsverlauf oeffnet sein eigenes, breiteres Overlay (`board-versions.tsx`) und keinen Bereich der
+ * Informationsleiste: die kompakte Liste braucht mehr Platz, als dort neben der Zeichenflaeche stuende, und
+ * das Overlay bleibt der einzige Ort dafuer. Alles andere Umfangreichere - Ablage, Arbeitsbereichswechsel,
+ * Freigaben, Archiv und Papierkorb, dazu Speicher- und Verbindungsdetails - steht weiterhin in der
+ * Informationsleiste (`board-panel.tsx`, sichtbar benannt "Informationen") neben der Zeichenflaeche. Sie ist
+ * auf jeder Breite derselbe Knoten: breit eine angedockte Spalte, schmal ein modales Sheet mit Fokusfang,
+ * Escape und Fokusrueckgabe von der Plattform. Welcher Bereich offen ist, steht in der Adresse; `Zurueck`
+ * schliesst.
  *
  * ## Ein Editor fuer Mitglieder und Gaeste
  *
@@ -115,7 +118,9 @@ import {
   saveBoardScene,
   uploadBoardAsset,
 } from '../api.js'
+import type { SidebarPanelView } from '../board-panel.js'
 import { BoardPanel } from '../board-panel.js'
+import { BoardVersionsOverlay } from '../board-versions.js'
 import { Dialog, Drawer, Menu, MenuItem } from '../overlays.js'
 import type { BoardPanelView } from '../router.js'
 import { Badge, Button, ConfirmDialog, describedBy, Field, IconButton, Loading, Notice } from '../ui.js'
@@ -883,7 +888,14 @@ export function BoardEditor({
     preview: state.loaded.previewOf !== null && member !== null,
     shareable,
   })
-  const panelOpen = member !== null && member.panel !== null
+  /**
+   * Der offene Bereich der Informationsleiste - der Versionsverlauf gehoert nicht dazu, er ist ein eigenes
+   * Overlay (`versionsOpen`) und schliesst die Leiste dabei nicht mit ein.
+   */
+  const sidebarPanel: SidebarPanelView | null =
+    member !== null && member.panel !== null && member.panel !== 'versionen' ? member.panel : null
+  const panelOpen = sidebarPanel !== null
+  const versionsOpen = member !== null && member.panel === 'versionen'
   const StatusSymbol = status.symbol === null ? null : STATUS_SYMBOLS[status.symbol]
   /** Was die Gruppe nur als Symbol zeigt, steht in den Informationen ausgeschrieben. */
   const details = sessionDetails({
@@ -900,6 +912,16 @@ export function BoardEditor({
     if (docked) {
       panelTriggerRef.current?.focus()
     }
+  }
+
+  /**
+   * Schliesst das Versionsoverlay.
+   *
+   * Anders als die Informationsleiste ist es auf jeder Breite ein echter modaler Dialog: die Plattform gibt
+   * den Fokus von sich aus an seinen Ausloeser zurueck, und die Ansicht muss dafuer nichts nachholen.
+   */
+  function closeVersions(): void {
+    member?.onPanel(null)
   }
 
   function submitRename(next: string): void {
@@ -961,9 +983,10 @@ export function BoardEditor({
             {title}
           </h1>
           {/*
-            * Das Boardmenue haelt das Seltene: Umbenennen - sein einziger Ort - und die Wege in die Bereiche
-            * der Informationen. Diese sind kein zweiter Ort: jeder Eintrag oeffnet genau den Bereich, in dem
-            * die Handlung ohnehin steht.
+            * Das Boardmenue haelt das Seltene: Umbenennen - sein einziger Ort - und den Weg in die
+            * Informationen. Kein zweiter Ort: der Eintrag oeffnet genau die Uebersicht, die auch das
+            * Informationssymbol der rechten Gruppe oeffnet. Der Versionsverlauf steht hier nicht mehr -
+            * sein einziger Ort ist das eigene Symbol dort.
             */}
           {member !== null && (
             <Menu label={`Boardmenue fuer ${title}`} icon={EllipsisVertical}>
@@ -986,14 +1009,6 @@ export function BoardEditor({
                 }}
               >
                 Uebersicht und Ablage
-              </MenuItem>
-              <MenuItem
-                icon={History}
-                onSelect={() => {
-                  member.onPanel('versionen')
-                }}
-              >
-                Versionen
               </MenuItem>
             </Menu>
           )}
@@ -1083,6 +1098,20 @@ export function BoardEditor({
               variant={actions.primary === 'share' ? 'primary' : 'normal'}
               onClick={() => {
                 member.onPanel('freigaben')
+              }}
+            />
+          )}
+          {/*
+            * Der einzige Ort fuer den Versionsverlauf: ein benanntes Symbol, das das Overlay oeffnet
+            * (`board-versions.tsx`). Nie hervorgehoben - er ist nie die dringendere Handlung.
+            */}
+          {member !== null && (
+            <IconButton
+              label="Versionsverlauf"
+              icon={History}
+              variant="normal"
+              onClick={() => {
+                member.onPanel('versionen')
               }}
             />
           )}
@@ -1180,18 +1209,17 @@ export function BoardEditor({
             className="board__panel"
             onClose={closePanel}
           >
-            {member.panel !== null && (
+            {sidebarPanel !== null && (
               <BoardPanel
                 me={member.me}
                 workspace={member.workspace}
                 workspaces={member.workspaces}
                 boardId={boardId}
-                section={member.panel}
+                section={sidebarPanel}
                 revision={panelRevision}
                 onSection={member.onPanel}
                 onChanged={member.onChanged}
                 onBoard={applyBoard}
-                onPreview={member.onPreview}
                 session={{ state: status.detail, ...details }}
               />
             )}
@@ -1206,6 +1234,24 @@ export function BoardEditor({
           />
         </div>
       </div>
+
+      {/*
+        * Der Versionsverlauf als eigenes, breiteres Overlay - ausserhalb der schwebenden Ebene und der
+        * Informationsleiste. Ein echter modaler Dialog auf jeder Breite: die Plattform gibt Fokusfang,
+        * Escape und Fokusrueckgabe an seinen Ausloeser von selbst.
+        */}
+      {member !== null && (
+        <BoardVersionsOverlay
+          me={member.me}
+          boardId={boardId}
+          boardTitle={title}
+          workspaceArchived={workspaceArchived}
+          open={versionsOpen}
+          onPreview={member.onPreview}
+          onChanged={member.onChanged}
+          onClose={closeVersions}
+        />
+      )}
 
       {/*
         * Umbenennen als kurzer Dialog. Er steht ausserhalb der schwebenden Ebene, die keine Zeigerereignisse

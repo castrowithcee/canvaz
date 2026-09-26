@@ -1029,14 +1029,18 @@ inhaltsadressiert aus Boardkennung, Dateikennung und Pruefsumme, und die Dateike
 Form haben wie beim Upload. Die Groesse eines Imports ist mit `CANVAZ_MAX_IMPORT_BYTES` begrenzt (Standard
 20 MiB) - deutlich mehr als ein Snapshot, weil Base64 die Bytes um rund ein Drittel aufblaeht.
 
-**In der Oberflaeche** steht das alles als Abschnitt im Fluss der Boardliste, direkt neben den Freigaben und
-aus derselben Boardzeile erreichbar - dieselbe Entscheidung wie ueberall in dieser SPA: kein Dialog, kein
-Fokuskaefig, jede Ueberschrift bleibt in der Dokumentstruktur. Der Abschnitt zeigt den aktuellen Stand und
-die Aufbewahrungsgrenze, dann Export, dann Import mit dem Hinweis, dass er den Inhalt ersetzt und der
-bisherige Stand erhalten bleibt, und zuletzt den Verlauf mit _Ansehen_ und _Wiederherstellen_ je Zeile. Die
-Vorschau oeffnet denselben Editor auf der ganzen Flaeche und benennt im Kopf, dass sie eine Vorschau ist.
-Angeboten wird, was der Server ohnehin traegt (`mayRestore` der Antwort, `mayChangeBoard` fuer den Import) -
-Bequemlichkeit und keine Grenze.
+**In der Oberflaeche** steht das alles in einem eigenen, breiten Overlay statt in einem Abschnitt der
+Informationsleiste - anders als Uebersicht und Freigaben braucht der Verlauf mehr Platz, als dort schmal
+neben der Zeichenflaeche stuende. Geoeffnet wird er ueber ein benanntes Symbol der schwebenden Gruppe am
+Board (Kurzhinweis, Tastatur- und Touch-Zugang); `Escape`, Fokusfang und Fokusrueckgabe an den Ausloeser
+kommen von der Plattform, wie bei jedem Dialog dieser SPA. Das Overlay zeigt den aktuellen Stand und die
+Aufbewahrungsgrenze, dann Export, dann Import mit dem Hinweis, dass er den Inhalt ersetzt und der bisherige
+Stand erhalten bleibt, und zuletzt den Verlauf als kompakte Liste: Zeitpunkt, Autor, Elementzahl und Groesse
+je Zeile. Ein senkrechtes Drei-Punkte-Menue an der gehoverten, ausgewaehlten oder fokussierten Zeile fuehrt
+zu _Ansehen_ und - nur mit `mayRestore` - _Wiederherstellen_; eine Wiederherstellung fragt zuvor mit
+Versionsnummer und Folge nach, bevor sie schreibt. Die Vorschau oeffnet denselben Editor auf der ganzen
+Flaeche und benennt im Kopf, dass sie eine Vorschau ist. Angeboten wird, was der Server ohnehin traegt
+(`mayRestore` der Antwort, `mayChangeBoard` fuer den Import) - Bequemlichkeit und keine Grenze.
 
 ### Editor und Content-Security-Policy
 

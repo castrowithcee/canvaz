@@ -1,28 +1,33 @@
 /**
- * Die Informationsleiste (sichtbar "Informationen"): alle umfangreicheren Aufgaben genau eines Boards, neben
+ * Die Informationsleiste (sichtbar "Informationen"): die umfangreicheren Aufgaben genau eines Boards, neben
  * seiner Zeichenflaeche.
  *
- * Sie loest die fruehere Detailseite ab. Ablage, Arbeitsbereichswechsel, Freigaben, Versionen,
- * Import/Export, Archiv und Papierkorb standen dort weit weg vom Board; jetzt stehen sie daneben, und der
- * Boardkontext bleibt waehrend der Handlung sichtbar. Fuer dieselbe Handlung gibt es damit **einen** Ort -
- * die alte Adresse fuehrt hierher (siehe `router.tsx`).
+ * Sie loest die fruehere Detailseite ab. Ablage, Arbeitsbereichswechsel, Freigaben, Archiv und Papierkorb
+ * standen dort weit weg vom Board; jetzt stehen sie daneben, und der Boardkontext bleibt waehrend der
+ * Handlung sichtbar. Fuer dieselbe Handlung gibt es damit **einen** Ort - die alte Adresse fuehrt hierher
+ * (siehe `router.tsx`).
  *
- * Drei Bereiche, weil sie drei verschiedene Fragen beantworten: **Uebersicht** (wo liegt das Board, wem
- * gehoert es, wie steht es um Speicherung und Verbindung, wie geht es weg), **Freigaben** (wer darf es) und
- * **Versionen** (was war frueher, was geht rein und raus). Der offene Bereich steht in der Adresse;
- * geschlossen wird ueber `closeLayer` (`router.tsx`), das Board bleibt dabei offen.
+ * Zwei Bereiche, weil sie zwei verschiedene Fragen beantworten: **Uebersicht** (wo liegt das Board, wem
+ * gehoert es, wie steht es um Speicherung und Verbindung, wie geht es weg) und **Freigaben** (wer darf es).
+ * Der offene Bereich steht in der Adresse; geschlossen wird ueber `closeLayer` (`router.tsx`), das Board
+ * bleibt dabei offen.
+ *
+ * Der Versionsverlauf ist **kein** Bereich dieser Leiste mehr: er ist breiter, als hier schmal neben der
+ * Zeichenflaeche Platz haette, und steht deshalb als eigenes Overlay ueber einem Symbol der schwebenden
+ * Gruppe (`board-versions.tsx`, `board/board-view.tsx`). Ein alter Direktlink auf `versionen` fuehrt weiterhin
+ * dorthin - nur eben ins Overlay statt in diese Leiste.
  *
  * Die Ansicht entscheidet nichts. Was sie anbietet, leitet sie aus der vom Server genannten Rolle mit
  * **denselben** Funktionen ab, mit denen der Server entscheidet (`mayChangeBoard`, `mayManageBoard`,
- * `mayRestoreBoard`); jede Ablehnung erscheint als Text. Freigaben und Versionen kommen unveraendert aus
- * `board-share.tsx` und `board-versions.tsx` - hier entsteht keine zweite Fachlogik.
+ * `mayRestoreBoard`); jede Ablehnung erscheint als Text. Freigaben kommen unveraendert aus `board-share.tsx`
+ * - hier entsteht keine zweite Fachlogik.
  *
  * Ein Gast erreicht diese Sidebar nicht: sie wird nur im Mitgliedskontext gerendert, und jeder ihrer
  * Endpunkte verlangt ohnehin eine interne Sitzung.
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { Archive, ArchiveRestore, History, Info, Share2, Trash2 } from 'lucide-react'
+import { Archive, ArchiveRestore, Info, Share2, Trash2 } from 'lucide-react'
 
 import type { BoardRoleView, BoardView, FolderView, MeResponse, WorkspaceView } from '../contracts/api.js'
 import type { EffectiveBoardRole } from '../domain/board/policy.js'
@@ -37,7 +42,6 @@ import {
   trashBoard,
 } from './api.js'
 import { BoardShare } from './board-share.js'
-import { BoardVersions } from './board-versions.js'
 import { FolderSelect } from './folders.js'
 import type { BoardPanelView } from './router.js'
 import { navigate } from './router.js'
@@ -49,10 +53,12 @@ const ROLE_LABELS: Readonly<Record<BoardRoleView, string>> = {
   viewer: 'Viewer',
 }
 
-const SECTIONS: readonly { readonly id: BoardPanelView; readonly label: string }[] = [
+/** Die beiden Bereiche dieser Leiste - der Versionsverlauf ist ein eigenes Overlay und keiner mehr. */
+export type SidebarPanelView = Exclude<BoardPanelView, 'versionen'>
+
+const SECTIONS: readonly { readonly id: SidebarPanelView; readonly label: string }[] = [
   { id: 'uebersicht', label: 'Uebersicht' },
   { id: 'freigaben', label: 'Freigaben' },
-  { id: 'versionen', label: 'Versionen' },
 ]
 
 /** Uebersetzt eine Serverantwort in einen Satz. 404 und 403 bekommen bewusst eigene Texte. */
@@ -448,7 +454,6 @@ export function BoardPanel({
   onSection,
   onChanged,
   onBoard,
-  onPreview,
   session,
 }: {
   readonly me: MeResponse
@@ -456,16 +461,14 @@ export function BoardPanel({
   readonly workspace: WorkspaceView
   readonly workspaces: readonly WorkspaceView[]
   readonly boardId: string
-  readonly section: BoardPanelView
+  readonly section: SidebarPanelView
   /** Zaehler des Editors: er steigt, wenn dort etwas am Board geaendert wurde (etwa der Titel). */
   readonly revision: number
-  readonly onSection: (section: BoardPanelView) => void
+  readonly onSection: (section: SidebarPanelView) => void
   /** Meldet der Huelle, dass sich an den Boards etwas geaendert hat. */
   readonly onChanged: () => void
   /** Meldet dem Editor den frisch geladenen Stand des Boards - Titel und Archivzustand haengen daran. */
   readonly onBoard: (board: BoardView) => void
-  /** Oeffnet die Read-only-Vorschau genau einer Version. */
-  readonly onPreview: (version: number) => void
   /** Speicher- und Verbindungsdetails des Editors. */
   readonly session: BoardSessionDetails
 }) {
@@ -518,7 +521,6 @@ export function BoardPanel({
         >
           {entry.id === 'uebersicht' && <Info size={16} aria-hidden="true" />}
           {entry.id === 'freigaben' && <Share2 size={16} aria-hidden="true" />}
-          {entry.id === 'versionen' && <History size={16} aria-hidden="true" />}
           {entry.label}
         </button>
       ))}
@@ -592,18 +594,6 @@ export function BoardPanel({
           {!manageable && <p className="hint">Aendern kann die Freigaben der Owner dieses Boards.</p>}
           <BoardShare me={me} boardId={board.id} onChanged={load} />
         </>
-      )}
-      {section === 'versionen' && (
-        <BoardVersions
-          me={me}
-          boardId={board.id}
-          workspaceArchived={workspace.status !== 'active'}
-          onPreview={onPreview}
-          onChanged={() => {
-            load()
-            onChanged()
-          }}
-        />
       )}
     </>
   )

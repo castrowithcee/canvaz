@@ -8,8 +8,9 @@
  * Umweg ueber die Einstellungen oder die Detailansicht.
  *
  * Die Liste ist eine kompakte Zeilenliste und keine Tabelle: verglichen werden hier keine Spalten, es wird
- * gesucht und geoeffnet. Die Detailansicht bleibt fuer Freigaben, Versionen und den Wechsel des
- * Arbeitsbereichs erreichbar - als Eintrag im Kontextmenue und nicht als Zwischenstation zum Board.
+ * gesucht und geoeffnet. Die Detailansicht bleibt fuer Freigaben und den Wechsel des Arbeitsbereichs
+ * erreichbar - als Eintrag im Kontextmenue und nicht als Zwischenstation zum Board. Der Versionsverlauf hat
+ * dort keinen Eintrag mehr: sein einziger Ort ist das Overlay am Board selbst (`board-versions.tsx`).
  *
  * Gefiltert wird ueber dem geladenen Explorerstand (`explorer.tsx`) und nicht mit einer zweiten Abfrage:
  * Baum und Sammlung zeigen so nie zwei verschiedene Staende. Die Archivansicht ist die eine Ausnahme - sie
@@ -171,7 +172,7 @@ function EntryMenu({
             }}
           >
             <Info size={16} aria-hidden="true" />
-            Details, Freigaben und Versionen
+            Details und Freigaben
           </Link>
         </MenuLinkItem>
       )}
