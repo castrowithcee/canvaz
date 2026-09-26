@@ -12,19 +12,19 @@ import { join } from 'node:path'
 
 import type { S3StorageConfig } from '../../src/persistence/asset-storage-s3.js'
 
-/** MinIO aus `compose.yml`. Lokale Entwicklungswerte, keine Secrets. */
+/** SeaweedFS aus `compose.yml`. Lokale Entwicklungswerte, keine Secrets. */
 export const TEST_S3: S3StorageConfig = {
   endpoint: process.env['CANVAZ_TEST_S3_ENDPOINT'] ?? 'http://127.0.0.1:59000',
   region: 'us-east-1',
   bucket: process.env['CANVAZ_TEST_S3_BUCKET'] ?? 'canvaz-assets-test',
   accessKeyId: process.env['CANVAZ_TEST_S3_ACCESS_KEY_ID'] ?? 'canvaz',
-  secretAccessKey: process.env['CANVAZ_TEST_S3_SECRET_ACCESS_KEY'] ?? 'canvaz-minio-dev',
-  // MinIO kennt keine Bucket-Subdomains.
+  secretAccessKey: process.env['CANVAZ_TEST_S3_SECRET_ACCESS_KEY'] ?? 'canvaz-seaweedfs-dev',
+  // SeaweedFS kennt keine Bucket-Subdomains.
   forcePathStyle: true,
 }
 
-export const MISSING_MINIO_HINT =
-  `Kein MinIO unter ${TEST_S3.endpoint}. Zuerst "npm run db:up" ausfuehren - der s3-Adapter wird gegen ` +
+export const MISSING_TEST_S3_HINT =
+  `Kein SeaweedFS unter ${TEST_S3.endpoint}. Zuerst "npm run db:up" ausfuehren - der s3-Adapter wird gegen ` +
   'eine echte Instanz geprueft, nicht gegen eine Attrappe.'
 
 export async function createFilesystemRoot(): Promise<string> {

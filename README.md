@@ -31,9 +31,9 @@ npm run start:server      # API und gebaute SPA auf Port 3000
 npm run dev               # alternativ: Vite auf Port 5173 mit Proxy auf /api
 ```
 
-`npm run db:up` startet PostgreSQL und MinIO aus `compose.yml`. Die Hostports sind bewusst **55432** und
+`npm run db:up` startet PostgreSQL und SeaweedFS aus `compose.yml`. Die Hostports sind bewusst **55432** und
 **59000** statt 5432 und 9000, damit sie nicht mit anderen lokalen Diensten kollidieren. Die Datenbank
-`canvaz_test` wird beim ersten Start mit angelegt und gehoert den Integrationstests; MinIO ist der
+`canvaz_test` wird beim ersten Start mit angelegt und gehoert den Integrationstests; SeaweedFS ist der
 Gegenpart des `s3`-Storage-Adapters und wird nur fuer dessen Pruefung gebraucht.
 
 Der Server startet nicht mit unvollstaendiger Konfiguration; fehlende Umgebungsvariablen werden beim Start
@@ -597,14 +597,14 @@ delete(key: string): Promise<void>
 | Adapter | Umsetzung | Zusagen |
 | --- | --- | --- |
 | `filesystem` | `src/persistence/asset-storage-filesystem.ts` | Schreibt ausschliesslich unter `CANVAZ_STORAGE_FILESYSTEM_ROOT`. Geschrieben wird in eine temporaere Datei im Zielverzeichnis und dann per `rename` gezogen - ein Abbruch hinterlaesst nie eine halbe Datei unter dem gueltigen Schluessel. |
-| `s3` | `src/persistence/asset-storage-s3.ts` | Spricht S3 und MinIO ueber signierte HTTP-Anfragen (AWS Signature Version 4, `node:crypto` und `fetch`). Ein einzelnes `PUT` ist die atomare Einheit des Objektspeichers. |
+| `s3` | `src/persistence/asset-storage-s3.ts` | Spricht S3 und SeaweedFS ueber signierte HTTP-Anfragen (AWS Signature Version 4, `node:crypto` und `fetch`). Ein einzelnes `PUT` ist die atomare Einheit des Objektspeichers. |
 
 **Kein S3-SDK.** Gebraucht werden drei Aufrufe auf genau einem Bucket. `@aws-sdk/client-s3` braechte
 Paginierung, Multipart, Presigning, Retry-Strategien, eine Credential-Provider-Kette und einen
 Middleware-Stack mit - nichts davon wird hier verwendet, und es waeren mehrere Dutzend zusaetzliche Pakete
 in einer selbst gehosteten Anwendung. Der einzige nicht triviale Teil ist die Signatur; sie ist
-vollstaendig spezifiziert und in wenigen Zeilen geschrieben. Belegt wird das gegen ein echtes MinIO, nicht
-gegen eine Attrappe.
+vollstaendig spezifiziert und in wenigen Zeilen geschrieben. Belegt wird das gegen ein echtes SeaweedFS,
+nicht gegen eine Attrappe.
 
 Der Speicherschluessel ist **inhaltsadressiert und traegt die Dateikennung**:
 `boards/<boardId>/<fileId>/<sha256>`. Dieselbe Datei im selben Board ergibt denselben Schluessel, ein
@@ -627,7 +627,7 @@ adapterspezifische Pflichtwerte fuehren zum Startfehler, gesammelt wie jeder and
 | `CANVAZ_S3_REGION` | `s3` | Region der Signatur |
 | `CANVAZ_S3_BUCKET` | `s3` | Bucket, vom Betreiber angelegt |
 | `CANVAZ_S3_ACCESS_KEY_ID`, `CANVAZ_S3_SECRET_ACCESS_KEY` | `s3` | Zugangsdaten |
-| `CANVAZ_S3_FORCE_PATH_STYLE` | `s3` | `true` fuer MinIO, Standard `false` (AWS) |
+| `CANVAZ_S3_FORCE_PATH_STYLE` | `s3` | `true` fuer SeaweedFS, Standard `false` (AWS) |
 
 Fuer das Wurzelverzeichnis gibt es bewusst **keinen** Standardwert: es muss ein persistentes Volume sein.
 Ein Ersatzpfad im Containerlayer saehe aus wie Persistenz und waere beim naechsten Neustart weg.
@@ -1288,13 +1288,14 @@ npm run test:unit     # nur ohne Datenbank
 npm audit --audit-level=high
 ```
 
-Die Integrationstests brauchen eine laufende Datenbank **und ein laufendes MinIO** (`npm run db:up`). Die
-Verbindungen lassen sich ueber `CANVAZ_TEST_DATABASE_URL` und `CANVAZ_TEST_S3_ENDPOINT` uebersteuern.
+Die Integrationstests brauchen eine laufende Datenbank **und ein laufendes SeaweedFS** (`npm run db:up`).
+Die Verbindungen lassen sich ueber `CANVAZ_TEST_DATABASE_URL` und `CANVAZ_TEST_S3_ENDPOINT` uebersteuern.
 
 `tests/integration/asset-storage.test.ts` enthaelt die **gemeinsame Contract-Testsuite des Storage-Ports**:
 genau eine Suite (`assetStorageContract`), zweimal ausgefuehrt - einmal gegen `filesystem`, einmal gegen
-`s3` vor einem echten MinIO. Innerhalb der Suite gibt es keine Fallunterscheidung und keinen Adapternamen;
-sie kennt ausschliesslich `AssetStoragePort`. Der Neustart-Nachweis in
+`s3` vor einem echten SeaweedFS, das AWS-Signaturen tatsaechlich prueft (Gegenprobe mit falschem Geheimnis
+inklusive). Innerhalb der Suite gibt es keine Fallunterscheidung und keinen Adapternamen; sie kennt
+ausschliesslich `AssetStoragePort`. Der Neustart-Nachweis in
 `tests/integration/board-assets.test.ts` laeuft ebenfalls fuer beide Adapter: hochladen, den
 Anwendungsprozess vollstaendig ersetzen, abrufen, Bytes vergleichen.
 
