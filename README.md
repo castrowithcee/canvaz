@@ -413,8 +413,8 @@ Ein Upgrade mit fremdem `Origin` wird abgewiesen, weil der CSRF-Header beim Hand
 
 ### Echte Client-Adresse erkennen
 
-Die Ratengrenze oben und eine spaetere IP-Sperre nach gehaeuften Fehlanmeldungen brauchen dieselbe
-Voraussetzung: die Anwendung muss die Adresse des tatsaechlichen Clients sehen, nicht die eines
+Die Ratengrenze oben und die Absenderabwehr nach gehaeuften Fehlanmeldungen (naechster Abschnitt) brauchen
+dieselbe Voraussetzung: die Anwendung muss die Adresse des tatsaechlichen Clients sehen, nicht die eines
 dazwischenliegenden Docker-Netzes oder Reverse Proxy. Das haengt vom Deployment ab und wird deshalb erkannt,
 nicht angenommen.
 
@@ -452,9 +452,118 @@ sich die Meldung nicht; erst eine Erholung und ein erneuter Einbruch loesen sie 
 vom aktiven Healthcheck eines beliebigen davorstehenden Reverse Proxy oder von Monitoring stammen, sonst
 wuerde eine kleine Instanz mit wenig echtem Verkehr allein durch diese wiederkehrenden Anfragen als
 "ueberwiegend intern" gelten. Die Ausnahme haengt ausschliesslich an diesen drei Pfaden, nie an einem
-bestimmten Proxy. Diese Erkennung ist zugleich die Voraussetzung fuer eine spaetere IP-Sperre nach
-gehaeuften Fehlanmeldungen: ohne plausible Adressen entstuende sonst eine Sperre auf eine Adresse, die gar
-nicht die des tatsaechlichen Absenders ist.
+bestimmten Proxy. Diese Erkennung ist zugleich die Voraussetzung fuer die Absenderabwehr im naechsten
+Abschnitt: ohne plausible Adressen entstuende sonst eine Sperre auf eine Adresse, die gar nicht die des
+tatsaechlichen Absenders ist.
+
+### Absenderabwehr gegen gehaeufte Fehlanmeldungen
+
+Zusaetzlich zu den Ratengrenzen oben erkennt die Anwendung einen Absender, der die anonymen Anmeldewege mit
+Fehlversuchen ueberzieht, und sperrt ihn vorlaeufig - bevor Passwort oder Code geprueft werden, mit derselben
+kontoneutralen Antwort fuer jeden dieser Wege. Eine dauerhafte Sperre setzt die Anwendung **nie selbst**; sie
+greift auch nie auf eine Firewall oder einen Reverse Proxy zu - das bleibt Sache des Betreibers (siehe
+Hostbefehle und Datenschutzhinweis unten).
+
+**Zweck.** Ausschliesslich die Sicherheit der Anmeldewege, gestuetzt auf das berechtigte Interesse des
+Betreibers (Art. 6 Abs. 1 lit. f DSGVO - siehe Datenschutzhinweis unten). Die Daten dienen keinem anderen
+Zweck und werden nie mit einem Konto verknuepft; eine erfolgreiche Anmeldung zaehlt nie.
+
+**Gezaehlte Fehlschlaege** je Absender: falsches Passwort oder unbekannte Adresse bei Anmeldung und
+Passwortwechsel, falscher TOTP- oder Ersatzcode bei der Bestaetigung des zweiten Faktors einer Anmeldung,
+jede Ruecksetzungsanfrage und jeder ungueltige Einloesewert (Einladung, Recovery, Reset, Adressbestaetigung).
+Gezaehlt wird je Absender - eine IPv4-Adresse einzeln, eine IPv6-Adresse je /64-Praefix - in einem
+24-Stunden-Fenster. Gespeichert wird dafuer nur ein HMAC mit einem taeglich wechselnden Schluessel, der
+ausschliesslich im Prozessspeicher lebt und nirgends abgelegt wird; die Adresse selbst steht in dieser
+Zaehlung nie.
+
+**Voraussetzung: echte Client-Adresse.** Ohne die im vorigen Abschnitt beschriebene Erkennung entstuende
+eine Sperre auf eine falsche Adresse. Deshalb sperrt die Anwendung nur, solange
+`GET /api/admin/client-address` (bzw. der dahinterliegende Plausibilitaetshinweis) ueberwiegend plausible,
+oeffentliche Adressen sieht; bei `unbekannt` oder `unplausibel` wird weiter gezaehlt, aber nie gesperrt.
+
+**Ab der Schwelle** (Standard 20 Fehlschlaege in 24 Stunden) speichert die Anwendung die Adresse - bzw. das
+/64-Praefix - **im Klartext** mit Grund, Zaehlerstand, Zeitpunkten und Ablauf, und lehnt danach 24 Stunden
+lang jeden anonymen Anmeldeweg von dort mit einer allgemeinen 429-Antwort ab, die kein Konto nennt. Eine
+**zweite** Sperre derselben Adresse binnen 30 Tagen erzeugt zusaetzlich einen Vorschlag fuer eine dauerhafte
+Sperre (siehe Hostbefehle).
+
+**Ausnahmen - nie gesperrt:**
+
+- eine Adresse aus der Allowlist eigener Netze (`CANVAZ_LOGIN_BLOCK_ALLOWLIST`);
+- private, Loopback- und Proxyadressen (dieselben Klassen wie unter "Echte Client-Adresse erkennen").
+
+**Fristen.** Zaehlwerte verfallen nach 24 Stunden; ein Sperreintrag wird 30 Tage nach seinem Ablauf entfernt;
+ein Vorschlag verschwindet nach der Betreiberentscheidung, spaetestens nach 12 Monaten. Ein eigenstaendiger,
+stuendlicher Lauf im Anwendungsprozess raeumt das opportunistisch bei jedem Fehlschlag mit auf - keine dieser
+Fristen braucht ein zusaetzliches Werkzeug.
+
+**Variablen** (alle optional, mit sicherem Standard):
+
+| Variable                                     | Standard    | Bedeutung                                                                          |
+| --------------------------------------------- | ----------- | ----------------------------------------------------------------------------------- |
+| `CANVAZ_LOGIN_BLOCK_ALLOWLIST`                | *(keiner)*  | CIDR-Liste eigener Netze, kommagetrennt, z. B. `10.0.0.0/8,2001:db8:1::/48` - nie gesperrt |
+| `CANVAZ_LOGIN_BLOCK_THRESHOLD`                | `20`        | Fehlschlaege eines Absenders in 24 h, ab denen vorlaeufig gesperrt wird              |
+| `CANVAZ_LOGIN_BLOCK_DURATION_HOURS`           | `24`        | Dauer einer vorlaeufigen Sperre                                                      |
+| `CANVAZ_LOGIN_BLOCK_PROPOSAL_WINDOW_DAYS`     | `30`        | Zweite Sperre derselben Adresse binnen dieser Frist erzeugt einen Vorschlag          |
+| `CANVAZ_LOGIN_BLOCK_RETENTION_DAYS`           | `30`        | Aufbewahrung eines Sperreintrags nach seinem Ablauf                                  |
+| `CANVAZ_LOGIN_BLOCK_PROPOSAL_RETENTION_DAYS`  | `365`       | Hoechste Aufbewahrung eines Vorschlags (rund 12 Monate), auch ohne Entscheidung      |
+
+**Hostbefehle.** Wie `admin:recover` gibt es dafuer keinen HTTP-Endpunkt - ausfuehren darf sie nur, wer
+Shellzugang zum Host hat. Keine der drei Ausgaben wird geloggt.
+
+```sh
+# Aktive Sperren und offene Vorschlaege auflisten. Ein IPv6-Praefix erscheint als CIDR in kanonischer Form
+# (z. B. 2001:db8:0:1::/64), eine IPv4-Adresse unveraendert - beides direkt uebernehmbar in eine Firewallregel.
+npm run sender-block -- list
+# Produktion: docker compose --env-file .env.production -f compose.prod.yml exec app node dist/server/sender-block-cli.js list
+```
+
+```
+Aktive Sperren (1):
+  198.51.100.77  Grund: login-failures  Zaehler: 27  seit 2026-09-26T02:59:18.118Z  bis 2026-09-27T02:59:18.118Z
+Offene Vorschlaege fuer eine dauerhafte Sperre (1):
+  f6c205ae-9924-4f77-a9f3-7aefa8980fb4  198.51.100.77  Grund: login-failures  erste Sperre 2026-09-06T02:59:18.118Z  zweite Sperre 2026-09-26T02:59:18.118Z
+```
+
+```sh
+# Eine vorlaeufige Sperre vorzeitig aufheben - jede Adresse aus demselben /64-Netz findet dieselbe Sperre.
+npm run sender-block -- unblock 198.51.100.77
+
+# Einen Vorschlag als uebernommen oder verworfen markieren; die Zeile danach ist der Vermerk (Datum, Adresse,
+# Grund) fuer die eigene Dokumentation der dauerhaften Sperre. Der Eintrag verschwindet spaetestens beim
+# naechsten stuendlichen Aufraeumlauf.
+npm run sender-block -- decide f6c205ae-9924-4f77-a9f3-7aefa8980fb4 accepted
+```
+
+**Grenzen.** Ein Neustart der Anwendung erzeugt einen neuen Tagesschluessel und macht bestehende Zaehlwerte
+damit unauffindbar - die Zaehlung beginnt dann faktisch neu; das ist eine bewusste Vereinfachung und kein
+Fehler. Die Anwendung sperrt nie dauerhaft und fasst nie eine Firewall oder einen Proxy an: das empfohlene
+Vorgehen fuer eine dauerhafte Sperre steht im Datenschutzhinweis direkt darunter.
+
+#### Datenschutzhinweis fuer den Betreiber
+
+Die folgenden Angaben sind eine **Information, keine Rechtsberatung**, und sollen dem Betreiber als
+Grundlage fuer sein eigenes Verarbeitungsverzeichnis und seinen Datenschutzhinweis dienen. Verantwortlicher
+im Sinne der DSGVO ist der jeweilige Betreiber der Instanz, nicht dieses Projekt.
+
+- **Zweck:** Erkennung und Abwehr gehaeufter Fehlanmeldungen zum Schutz der Anmeldewege vor automatisiertem
+  Durchprobieren.
+- **Moegliche Rechtsgrundlage:** Art. 6 Abs. 1 lit. f DSGVO (berechtigtes Interesse an der Sicherheit der
+  angebotenen Dienste). Ob sie im Einzelfall traegt, entscheidet der Betreiber.
+- **Datenarten:** pseudonymisierte Zaehlwerte (ein HMAC, keine Adresse) fuer die laufende Zaehlung; die
+  Adresse selbst im Klartext ausschliesslich bei einer ausgeloesten vorlaeufigen Sperre oder einem daraus
+  entstandenen Vorschlag.
+- **Fristen:** Zaehlwerte 24 Stunden, ein Sperreintrag 30 Tage nach seinem Ablauf, ein Vorschlag nach der
+  Entscheidung des Betreibers, spaetestens nach 12 Monaten.
+- **Zugriff:** ausschliesslich mit Shellzugang zum Host, ueber die Hostbefehle oben. Es gibt keinen
+  HTTP-Endpunkt und keine Anzeige in der Anwendung.
+- **Keine Verknuepfung, kein anderer Zweck:** die Daten werden nie einem Konto zugeordnet und zu keinem
+  anderen Zweck ausgewertet, etwa fuer Statistik oder Nutzungsanalyse.
+- **Empfohlenes Vorgehen fuer eine dauerhafte Sperre:** die Anwendung selbst sperrt nie dauerhaft. Nimmt der
+  Betreiber einen Vorschlag an, richtet er die dauerhafte Sperre mit den Mitteln seiner eigenen Umgebung ein,
+  etwa an der Firewall des Hosts, vermerkt dabei Datum und Grund (die Ausgabe von `sender-block decide` dafuer)
+  und ueberprueft die Sperre spaetestens nach sechs Monaten erneut. Diese Dokumentation setzt dafuer kein
+  bestimmtes Werkzeug voraus.
 
 ## Arbeitsbereiche und Rollen
 

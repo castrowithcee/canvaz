@@ -40,6 +40,7 @@ import type {
   NewSenderBlock,
   NewSenderBlockProposal,
   NewSession,
+  SenderBlockProposalRecord,
   SenderBlockRecord,
   SenderDefenseRetention,
 } from '../domain/identity/repositories.js'
@@ -151,6 +152,18 @@ type SenderBlockRow = {
   expires_at: Date
 }
 
+type SenderBlockProposalRow = {
+  id: string
+  address: string
+  address_kind: 'ipv4' | 'ipv6-64'
+  reason: string
+  first_blocked_at: Date
+  second_blocked_at: Date
+  created_at: Date
+  status: 'pending' | 'accepted' | 'rejected'
+  decided_at: Date | null
+}
+
 const SELF_RECOVERY_COLUMNS = 'user_id, allowed, email, verified_at'
 const RECOVERY_TOKEN_COLUMNS = 'id, user_id, purpose, email, created_at, expires_at, redeemed_at, revoked_at'
 
@@ -166,6 +179,20 @@ function toSenderBlock(row: SenderBlockRow): SenderBlockRecord {
     failureCount: row.failure_count,
     createdAt: row.created_at,
     expiresAt: row.expires_at,
+  }
+}
+
+function toSenderBlockProposal(row: SenderBlockProposalRow): SenderBlockProposalRecord {
+  return {
+    id: row.id,
+    address: row.address,
+    kind: row.address_kind,
+    reason: row.reason,
+    firstBlockedAt: row.first_blocked_at,
+    secondBlockedAt: row.second_blocked_at,
+    createdAt: row.created_at,
+    status: row.status,
+    decidedAt: row.decided_at,
   }
 }
 
@@ -503,6 +530,16 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Identit
           return row === undefined ? null : toSenderBlock(row)
         },
 
+        async listActive(now: Date): Promise<readonly SenderBlockRecord[]> {
+          const result = await db.query<SenderBlockRow>(
+            `select address, address_kind, reason, failure_count, created_at, expires_at from sender_block
+             where expires_at > $1
+             order by created_at desc`,
+            [now],
+          )
+          return result.rows.map(toSenderBlock)
+        },
+
         async upsert(entry: NewSenderBlock, now: Date, durationHours: number, proposalWindowDays: number) {
           // qatlas-dev: kein Zeilenlock ueber zwei Anweisungen - der Vorschlag ist eine Betreiberhilfe, keine
           // Sicherheitskontrolle; ein seltenes gleichzeitiges Ueberschreiten der Schwelle durch zwei Anfragen
@@ -533,6 +570,11 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Identit
               : null
           return { record, priorBlockWithinProposalWindow }
         },
+
+        async liftActive(address: string, now: Date): Promise<boolean> {
+          const result = await db.query('delete from sender_block where address = $1 and expires_at > $2', [address, now])
+          return (result.rowCount ?? 0) > 0
+        },
       },
 
       proposals: {
@@ -543,12 +585,37 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Identit
             [entry.address, entry.kind, entry.reason, entry.firstBlockedAt, entry.secondBlockedAt],
           )
         },
+
+        async listPending(): Promise<readonly SenderBlockProposalRecord[]> {
+          const result = await db.query<SenderBlockProposalRow>(
+            `select id, address, address_kind, reason, first_blocked_at, second_blocked_at, created_at, status, decided_at
+             from sender_block_proposal
+             where status = 'pending'
+             order by created_at desc`,
+          )
+          return result.rows.map(toSenderBlockProposal)
+        },
+
+        async decide(id: string, status: 'accepted' | 'rejected', decidedAt: Date): Promise<SenderBlockProposalRecord | null> {
+          const result = await db.query<SenderBlockProposalRow>(
+            `update sender_block_proposal set status = $2, decided_at = $3
+             where id = $1 and status = 'pending'
+             returning id, address, address_kind, reason, first_blocked_at, second_blocked_at, created_at, status, decided_at`,
+            [id, status, decidedAt],
+          )
+          const row = result.rows[0]
+          return row === undefined ? null : toSenderBlockProposal(row)
+        },
       },
 
       async purgeExpired(retention: SenderDefenseRetention): Promise<void> {
         await db.query('delete from sender_failure_counter where window_started_at < $1', [retention.counterWindowStart])
         await db.query('delete from sender_block where expires_at < $1', [retention.blockRetentionCutoff])
-        await db.query('delete from sender_block_proposal where created_at < $1', [retention.proposalRetentionCutoff])
+        // Ueberalt ODER bereits entschieden: eine Entscheidung ist keine offene Frage mehr und wartet nicht
+        // bis zur Hoechstfrist von zwoelf Monaten.
+        await db.query("delete from sender_block_proposal where created_at < $1 or status <> 'pending'", [
+          retention.proposalRetentionCutoff,
+        ])
       },
     },
 

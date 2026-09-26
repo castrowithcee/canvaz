@@ -13,6 +13,7 @@ import type { Pool } from 'pg'
 import { AUTH_LOCAL_LOGIN_PATH, AUTH_SECOND_FACTOR_VERIFY_PATH, CSRF_HEADER } from '../../src/contracts/api.js'
 import { migrate } from '../../src/persistence/migrate.js'
 import { createPool } from '../../src/persistence/pool.js'
+import { resolveSenderAddress, senderAddressAsCidr } from '../../src/server/sender-defense.js'
 import { createJar } from '../support/browser-client.js'
 import { TEST_PASSWORD, localLogin, profileOf, signedInAsSystemAdmin } from '../support/local-accounts.js'
 import { startTestApp } from '../support/test-app.js'
@@ -272,5 +273,89 @@ describe('Absenderabwehr (#35)', () => {
       expect((await falscherZweiterFaktor(absender)).status).toBe(400)
     }
     expect((await falscherZweiterFaktor(absender)).status).toBe(429)
+  })
+})
+
+describe('Hostbefehl sender-block (#35, Meilenstein 2)', () => {
+  it('list zeigt eine aktive Sperre und einen offenen Vorschlag, IPv6 als CIDR', async () => {
+    app = await engeInstanz()
+    machePlausibel(app)
+    const jetzt = new Date()
+    app.setNow(jetzt)
+    const absender = '2001:db8:1::5'
+    for (let i = 0; i < SCHWELLE; i += 1) {
+      await versuch(app, absender)
+    }
+    expect((await versuch(app, absender)).status).toBe(429)
+
+    // Eine zweite Sperre binnen 30 Tagen erzeugt zugleich den Vorschlag, den `list` mit anzeigen soll.
+    app.setNow(new Date(jetzt.getTime() + 25 * 3600_000))
+    for (let i = 0; i < SCHWELLE; i += 1) {
+      await versuch(app, absender)
+    }
+    expect((await versuch(app, absender)).status).toBe(429)
+
+    const now = app.context.now()
+    const [blocks, proposals] = await Promise.all([
+      app.context.identity.senderDefense.blocks.listActive(now),
+      app.context.identity.senderDefense.proposals.listPending(),
+    ])
+    expect(blocks).toHaveLength(1)
+    expect(senderAddressAsCidr(blocks[0]!)).toBe('2001:db8:1::/64')
+    expect(proposals).toHaveLength(1)
+    expect(senderAddressAsCidr(proposals[0]!)).toBe('2001:db8:1::/64')
+  })
+
+  it('unblock entfernt die Sperre, danach kein 429 mehr', async () => {
+    app = await engeInstanz()
+    machePlausibel(app)
+    const absender = '198.51.100.18'
+    for (let i = 0; i < SCHWELLE; i += 1) {
+      await versuch(app, absender)
+    }
+    expect((await versuch(app, absender)).status).toBe(429)
+
+    const resolved = resolveSenderAddress(absender)
+    const aufgehoben = await app.context.identity.senderDefense.blocks.liftActive(resolved!.address, app.context.now())
+    expect(aufgehoben).toBe(true)
+
+    expect((await versuch(app, absender)).status).toBe(401)
+  })
+
+  it('decide markiert einen Vorschlag, der naechste Aufraeumlauf loescht ihn', async () => {
+    app = await engeInstanz()
+    machePlausibel(app)
+    const jetzt = new Date()
+    app.setNow(jetzt)
+    const absender = '198.51.100.19'
+    for (let i = 0; i < SCHWELLE; i += 1) {
+      await versuch(app, absender)
+    }
+    expect((await versuch(app, absender)).status).toBe(429)
+    app.setNow(new Date(jetzt.getTime() + 25 * 3600_000))
+    for (let i = 0; i < SCHWELLE; i += 1) {
+      await versuch(app, absender)
+    }
+    expect((await versuch(app, absender)).status).toBe(429)
+
+    const [vorher] = await app.context.identity.senderDefense.proposals.listPending()
+    expect(vorher).toBeDefined()
+
+    const entschieden = await app.context.identity.senderDefense.proposals.decide(
+      vorher!.id,
+      'accepted',
+      app.context.now(),
+    )
+    expect(entschieden?.status).toBe('accepted')
+
+    // Der eigenstaendige Aufraeumlauf entfernt jeden entschiedenen Vorschlag, unabhaengig von seinem Alter.
+    await app.context.identity.senderDefense.purgeExpired({
+      counterWindowStart: app.context.now(),
+      blockRetentionCutoff: app.context.now(),
+      proposalRetentionCutoff: app.context.now(),
+    })
+
+    const nachher = await pool.query('select 1 from sender_block_proposal where id = $1', [vorher!.id])
+    expect(nachher.rowCount).toBe(0)
   })
 })

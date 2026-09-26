@@ -88,7 +88,7 @@ export function createSenderDefenseKeyring(): SenderDefenseKeyring {
   }
 }
 
-type SenderKey = { readonly hashInput: string; readonly address: string; readonly kind: SenderBlockAddressKind }
+export type SenderKey = { readonly hashInput: string; readonly address: string; readonly kind: SenderBlockAddressKind }
 
 /** Netzpraefix der ersten 64 Bit (vier Gruppen) einer IPv6-Adresse, als stabile Kennung - keine gueltige Adresse. */
 function ipv6NetworkPrefix64(address: string): string {
@@ -111,14 +111,18 @@ function ipv6NetworkPrefix64(address: string): string {
  * Clients hinter einer fehlkonfigurierten Weiterleitung in einen Topf werfen. `unknown` ist keine gueltige
  * Adresse. Beides zaehlt deshalb nicht mit; eine Sperre waere fuer beide Klassen ohnehin ausgeschlossen.
  */
-function senderKey(address: ClientAddress): SenderKey | null {
-  if (address.class === 'proxy' || address.class === 'unknown') {
-    return null
-  }
+/**
+ * Normalisiert eine Rohadresse (IPv4-gemappt -> IPv4) und bildet daraus die gespeicherte Form: eine
+ * IPv4-Adresse unveraendert, eine IPv6-Adresse als /64-Praefix. `null`, wenn es keine gueltige Adresse ist.
+ *
+ * Getrennt von `senderKey`, weil der Hostbefehl `sender-block unblock` (`sender-block-cli.ts`) dieselbe
+ * Bildung fuer eine vom Betreiber eingegebene Adresse braucht, aber keine `ClientAddress` mit Klasse hat.
+ */
+export function resolveSenderAddress(rawAddress: string): SenderKey | null {
   // Normalisieren vor jeder Auswertung: `resolveClientAddress` liefert bei einem Dual-Stack-Socket ohne Proxy
   // die ungemappte Form `::ffff:a.b.c.d`. Ohne diesen Schritt wuerde `isIP` sie als IPv6 lesen und alle
   // IPv4-Absender landeten unter demselben /64-Praefix `0000:0000:0000:0000`.
-  const normalized = normalizeAddress(address.address)
+  const normalized = normalizeAddress(rawAddress)
   const family = isIP(normalized)
   if (family === 4) {
     return { hashInput: `ipv4:${normalized}`, address: normalized, kind: 'ipv4' }
@@ -130,8 +134,36 @@ function senderKey(address: ClientAddress): SenderKey | null {
   return null
 }
 
+function senderKey(address: ClientAddress): SenderKey | null {
+  if (address.class === 'proxy' || address.class === 'unknown') {
+    return null
+  }
+  return resolveSenderAddress(address.address)
+}
+
 function hashSenderKey(key: Buffer, hashInput: string): string {
   return createHmac('sha256', key).update(hashInput).digest('hex')
+}
+
+/**
+ * Ein gespeicherter Absender als CIDR-Netz in kanonischer Schreibweise - fuer den Hostbefehl
+ * `sender-block list`, damit der Betreiber den Wert unveraendert in seine Firewall uebernehmen kann.
+ *
+ * Eine IPv4-Adresse bleibt, wie sie ist. Ein IPv6-/64-Praefix steht als vier Gruppen (`ipv6NetworkPrefix64`)
+ * mit fuehrenden Nullen; das kanonische `::` ersetzt hier immer die impliziten vier Nullgruppen dahinter und
+ * jede Nullgruppe unmittelbar davor, sodass z. B. `2001:0db8:0000:0001` zu `2001:db8:0:1::/64` wird.
+ */
+export function senderAddressAsCidr(record: { readonly address: string; readonly kind: SenderBlockAddressKind }): string {
+  if (record.kind === 'ipv4') {
+    return record.address
+  }
+  const groups = record.address.split(':').map((group) => group.replace(/^0+(?=.)/, ''))
+  let end = groups.length
+  while (end > 0 && groups[end - 1] === '0') {
+    end -= 1
+  }
+  const head = groups.slice(0, end).join(':')
+  return `${head}::/64`
 }
 
 function buildAllowlist(ranges: LoginBlockConfig['allowlist']): BlockList {

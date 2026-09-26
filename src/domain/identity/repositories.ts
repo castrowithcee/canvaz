@@ -160,6 +160,8 @@ export type SenderBlockUpsertResult = {
  */
 export interface SenderBlockRepository {
   findActive(address: string, now: Date): Promise<SenderBlockRecord | null>
+  /** Alle noch aktiven Sperren, juengste zuerst - Grundlage des Hostbefehls `sender-block list`. */
+  listActive(now: Date): Promise<readonly SenderBlockRecord[]>
   /**
    * Legt eine neue Sperre an oder ersetzt eine bestehende. Liefert zugleich, ob es eine fruehere Sperre
    * derselben Adresse innerhalb von `proposalWindowDays` gab - Grundlage des Vorschlags einer dauerhaften
@@ -171,6 +173,11 @@ export interface SenderBlockRepository {
     durationHours: number,
     proposalWindowDays: number,
   ): Promise<SenderBlockUpsertResult>
+  /**
+   * Hebt eine aktive Sperre vorzeitig auf (Hostbefehl `sender-block unblock`). `false` heisst: keine aktive
+   * Sperre dieser Adresse - eine abgelaufene braucht kein Aufheben mehr.
+   */
+  liftActive(address: string, now: Date): Promise<boolean>
 }
 
 export type NewSenderBlockProposal = {
@@ -181,14 +188,36 @@ export type NewSenderBlockProposal = {
   readonly secondBlockedAt: Date
 }
 
+export type SenderBlockProposalStatus = 'pending' | 'accepted' | 'rejected'
+
+export type SenderBlockProposalRecord = {
+  readonly id: string
+  readonly address: string
+  readonly kind: SenderBlockAddressKind
+  readonly reason: string
+  readonly firstBlockedAt: Date
+  readonly secondBlockedAt: Date
+  readonly createdAt: Date
+  readonly status: SenderBlockProposalStatus
+  readonly decidedAt: Date | null
+}
+
 /**
  * Vorschlag einer dauerhaften Sperre.
  *
- * Status und Entscheidungszeitpunkt bedienen die Betreiberentscheidung aus Meilenstein 2; dieser Store legt
- * hier nur die Zeile an.
+ * Status und Entscheidungszeitpunkt bedienen die Betreiberentscheidung aus Meilenstein 2 (Hostbefehl
+ * `sender-block decide`). Ein entschiedener Vorschlag ist keine offene Frage mehr und wird beim naechsten
+ * Aufraeumlauf entfernt (`purgeExpired`), unabhaengig von seinem Alter.
  */
 export interface SenderBlockProposalRepository {
   create(entry: NewSenderBlockProposal): Promise<void>
+  /** Alle noch offenen Vorschlaege, juengste zuerst. */
+  listPending(): Promise<readonly SenderBlockProposalRecord[]>
+  /**
+   * Markiert einen offenen Vorschlag als entschieden. `null` heisst: kein offener Vorschlag mit dieser
+   * Kennung.
+   */
+  decide(id: string, status: 'accepted' | 'rejected', decidedAt: Date): Promise<SenderBlockProposalRecord | null>
 }
 
 export type SenderDefenseRetention = {
@@ -203,7 +232,8 @@ export interface SenderDefenseRepository {
   readonly blocks: SenderBlockRepository
   readonly proposals: SenderBlockProposalRepository
   /**
-   * Entfernt abgelaufene Zaehlwerte, abgelaufene Sperren und ueberalte Vorschlaege.
+   * Entfernt abgelaufene Zaehlwerte, abgelaufene Sperren, ueberalte Vorschlaege und **jeden entschiedenen
+   * Vorschlag** (Status ungleich `pending`), unabhaengig von seinem Alter.
    *
    * `counters.hit` raeumt zusaetzlich bei jedem Fehlschlag opportunistisch auf; ohne weitere Fehlschlaege
    * braucht es trotzdem einen eigenstaendigen Aufruf (`startSenderDefenseRetention` in `sender-defense.ts`),
