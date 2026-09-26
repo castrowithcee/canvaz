@@ -22,7 +22,7 @@ Reconciliation in `src/domain/board/reconcile.ts` ist Eigencode.
 
 ## Lokal starten
 
-`compose.yml` ist der lokale Stack: Anwendung, PostgreSQL und MinIO. Die Anwendung gibt selbst **keinen
+`compose.yml` ist der lokale Stack: Anwendung, PostgreSQL und SeaweedFS. Die Anwendung gibt selbst **keinen
 Hostport** ab - sie haengt an einem Reverse Proxy, der aus seinem eigenen Stack dem Netz `canvaz` beitritt
 und unter dem Namen der Instanz antwortet.
 
@@ -30,7 +30,7 @@ und unter dem Namen der Instanz antwortet.
 npm install
 cp .env.example .env             # Platzhalter ersetzen; .env ist gitignoriert
 docker network create canvaz     # einmalig; der Proxy haengt darin und darf es nicht verlieren
-docker compose up -d --build     # Anwendung, PostgreSQL und MinIO
+docker compose up -d --build     # Anwendung, PostgreSQL und SeaweedFS
 npm run db:migrate
 npm run admin:bootstrap -- --name "Vorname Nachname" --email adresse@example.com   # einmalig
 ```
@@ -41,7 +41,7 @@ haengen an genau dieser Herkunft: ein zweiter Weg auf dieselbe Instanz waere ohn
 Ohne Proxy - oder waehrend der Arbeit an der Oberflaeche - laufen dieselben Teile auf dem Host:
 
 ```sh
-npm run db:up                    # nur PostgreSQL und MinIO aus compose.yml
+npm run db:up                    # nur PostgreSQL und SeaweedFS aus compose.yml
 npm run start:server             # API und gebaute SPA auf Port 3000
 npm run dev                      # alternativ: Vite auf Port 5173 mit Proxy auf /api
 ```
@@ -49,7 +49,7 @@ npm run dev                      # alternativ: Vite auf Port 5173 mit Proxy auf 
 Die Hostports von Datenbank und Objektspeicher sind bewusst **55432** und **59000** statt 5432 und 9000,
 damit sie nicht mit anderen lokalen Diensten kollidieren; sie bleiben am Loopback, weil Testlauf, Migration
 und `admin:bootstrap` auf dem Host laufen und kein HTTP sprechen. Die Datenbank `canvaz_test` wird beim
-ersten Start mit angelegt und gehoert den Integrationstests; MinIO ist der Gegenpart des
+ersten Start mit angelegt und gehoert den Integrationstests; SeaweedFS ist der Gegenpart des
 `s3`-Storage-Adapters und wird nur fuer dessen Pruefung gebraucht.
 
 Der Server startet nicht mit unvollstaendiger Konfiguration; fehlende Umgebungsvariablen werden beim Start
@@ -711,14 +711,14 @@ delete(key: string): Promise<void>
 | Adapter | Umsetzung | Zusagen |
 | --- | --- | --- |
 | `filesystem` | `src/persistence/asset-storage-filesystem.ts` | Schreibt ausschliesslich unter `CANVAZ_STORAGE_FILESYSTEM_ROOT`. Geschrieben wird in eine temporaere Datei im Zielverzeichnis und dann per `rename` gezogen - ein Abbruch hinterlaesst nie eine halbe Datei unter dem gueltigen Schluessel. |
-| `s3` | `src/persistence/asset-storage-s3.ts` | Spricht S3 und MinIO ueber signierte HTTP-Anfragen (AWS Signature Version 4, `node:crypto` und `fetch`). Ein einzelnes `PUT` ist die atomare Einheit des Objektspeichers. |
+| `s3` | `src/persistence/asset-storage-s3.ts` | Spricht AWS S3 und S3-kompatible Server ueber signierte HTTP-Anfragen (AWS Signature Version 4, `node:crypto` und `fetch`). Ein einzelnes `PUT` ist die atomare Einheit des Objektspeichers. Im Betrieb ein externer Anbieter, den der Betreiber selbst stellt; in Entwicklung und CI ist SeaweedFS der Testpartner. |
 
 **Kein S3-SDK.** Gebraucht werden drei Aufrufe auf genau einem Bucket. `@aws-sdk/client-s3` braechte
 Paginierung, Multipart, Presigning, Retry-Strategien, eine Credential-Provider-Kette und einen
 Middleware-Stack mit - nichts davon wird hier verwendet, und es waeren mehrere Dutzend zusaetzliche Pakete
 in einer selbst gehosteten Anwendung. Der einzige nicht triviale Teil ist die Signatur; sie ist
-vollstaendig spezifiziert und in wenigen Zeilen geschrieben. Belegt wird das gegen ein echtes MinIO, nicht
-gegen eine Attrappe.
+vollstaendig spezifiziert und in wenigen Zeilen geschrieben. Belegt wird das gegen ein echtes SeaweedFS als
+Testpartner, nicht gegen eine Attrappe.
 
 Der Speicherschluessel ist **inhaltsadressiert und traegt die Dateikennung**:
 `boards/<boardId>/<fileId>/<sha256>`. Dieselbe Datei im selben Board ergibt denselben Schluessel, ein
@@ -741,7 +741,7 @@ adapterspezifische Pflichtwerte fuehren zum Startfehler, gesammelt wie jeder and
 | `CANVAZ_S3_REGION` | `s3` | Region der Signatur |
 | `CANVAZ_S3_BUCKET` | `s3` | Bucket, vom Betreiber angelegt |
 | `CANVAZ_S3_ACCESS_KEY_ID`, `CANVAZ_S3_SECRET_ACCESS_KEY` | `s3` | Zugangsdaten |
-| `CANVAZ_S3_FORCE_PATH_STYLE` | `s3` | `true` fuer MinIO, Standard `false` (AWS) |
+| `CANVAZ_S3_FORCE_PATH_STYLE` | `s3` | `true` fuer Anbieter ohne Bucket-Subdomains (etwa SeaweedFS im Test), Standard `false` (AWS) |
 
 Fuer das Wurzelverzeichnis gibt es bewusst **keinen** Standardwert: es muss ein persistentes Volume sein.
 Ein Ersatzpfad im Containerlayer saehe aus wie Persistenz und waere beim naechsten Neustart weg.
@@ -1238,14 +1238,15 @@ Die automatisierten Tests laufen gegen einen standardkonformen Test-Provider mit
 ## Betrieb auf einem VPS
 
 Zielbild ist ein **einzelner gewoehnlicher Linux-VPS** mit Docker Engine und Compose v2 - kein Cluster, keine
-providerabhaengige Sonderfunktion und keine Host- oder Festplattenverschluesselung. Die Instanz besteht aus
-drei Diensten: einem Reverse Proxy mit TLS, dem Anwendungsserver und PostgreSQL. Der Objektspeicher kommt
-nur dazu, wer den Adapter `s3` faehrt.
+providerabhaengige Sonderfunktion und keine Host- oder Festplattenverschluesselung. Die Instanz besteht
+ausschliesslich aus drei Diensten: einem Reverse Proxy mit TLS, dem Anwendungsserver und PostgreSQL - und
+zwar unabhaengig vom gewaehlten Storage-Adapter. Wer `s3` faehrt, spricht einen externen, selbst gestellten
+Objektspeicher an; diese Instanz liefert dafuer keinen eigenen Dienst mit.
 
 | Datei | Rolle |
 | --- | --- |
 | `Dockerfile` | Zweistufiges Laufzeitimage: gebaute SPA und gebauter Server, ohne Werkzeugkette und ohne Quelltext. Laeuft unprivilegiert. |
-| `compose.prod.yml` | Die Bereitstellung. `compose.yml` daneben bleibt die Entwicklungsumgebung und startet nur Datenbank und MinIO. |
+| `compose.prod.yml` | Die Bereitstellung. `compose.yml` daneben bleibt die Entwicklungsumgebung und startet nur Datenbank und SeaweedFS. |
 | `docker/Caddyfile` | TLS, HSTS, Bereitschaftspruefung des Upstreams, Abriegelung des Metrikendpunkts. |
 | `docker/canvaz-ops.sh` | `backup`, `restore`, `check`. |
 | `.env.production.example` | Vorlage der Laufzeitkonfiguration. Die ausgefuellte `.env.production` bleibt auf dem Host. |
@@ -1281,16 +1282,16 @@ Danach antwortet `https://<CANVAZ_SITE_ADDRESS>/api/ready` mit `200`. Der letzte
 Systemadmin an und gibt dessen Einladungslink aus; er gilt genau einmal und befristet. Feste Zugangsdaten
 gibt es nicht.
 
-Nach aussen offen sind ausschliesslich die beiden Ports des Reverse Proxy. Anwendungsserver, Datenbank und
-ein etwaiges MinIO haben keinen veroeffentlichten Port und sind nur im Compose-Netz erreichbar. Kein
-Geheimnis steht im Repository: alle Werte kommen aus `.env.production`, und der Server startet gar nicht
-erst, wenn einer davon fehlt.
+Nach aussen offen sind ausschliesslich die beiden Ports des Reverse Proxy. Anwendungsserver und Datenbank
+haben keinen veroeffentlichten Port und sind nur im Compose-Netz erreichbar; ein externer Objektspeicher im
+Modus `s3` liegt ohnehin ausserhalb dieses Compose-Netzes. Kein Geheimnis steht im Repository: alle Werte
+kommen aus `.env.production`, und der Server startet gar nicht erst, wenn einer davon fehlt.
 
 ### Getrennte Konfiguration
 
 | Umgebung | Woher | Besonderheit |
 | --- | --- | --- |
-| Entwicklung | `.env` aus `.env.example`, `compose.yml` | Datenbank und MinIO auf hohen Hostports, Klartext-HTTP. |
+| Entwicklung | `.env` aus `.env.example`, `compose.yml` | Datenbank und SeaweedFS auf hohen Hostports, Klartext-HTTP. |
 | Test | `CANVAZ_TEST_DATABASE_URL`, `CANVAZ_TEST_S3_ENDPOINT`, sonst Werte im Testaufbau | eigene Datenbank `canvaz_test`. |
 | Produktion | `.env.production` aus `.env.production.example`, `compose.prod.yml` | TLS, Reverse Proxy, persistente Volumes, `CANVAZ_TRUSTED_PROXY=true`. |
 
@@ -1340,17 +1341,19 @@ Alarm weitergibt.
   Konsistenzzusage: Assets werden nur angelegt, nie geloescht, deshalb liegt ein zwischenzeitlich
   hochgeladenes Bild danach ohne Datensatz im Speicher und stoert niemanden - andersherum verwiese ein
   Datensatz auf Bytes, die im Archiv fehlen.
-- Die Assets als `tar`, im Modus `filesystem` aus dem Volume, im Modus `s3` ueber `mc mirror`. Beide Modi
-  ergeben dieselbe Archivform; ein Stand aus dem einen laesst sich in den anderen zurueckspielen.
+- Die Assets als `tar`, nur im Modus `filesystem` aus dem Volume. Im Modus `s3` liegen die Bytes bei einem
+  externen Objektspeicher, den diese Instanz nicht mitliefert; ihre Sicherung ist Sache des Betreibers bzw.
+  des Anbieters, und das Archiv enthaelt dafuer keinen eigenen Stand.
 - Ein `meta`-Eintrag mit Zeitpunkt, Adapter, Image und angewendeter Schemaversion.
 - Verschluesselt mit `gpg --symmetric` (AES-256) **bevor** das Archiv seinen Platz hat. Die Passphrase steht
   in einer Datei ausserhalb des Repositories (`CANVAZ_BACKUP_PASSPHRASE_FILE`). Aufbewahrung sind 14 Tage;
   aeltere Archive entfernt derselbe Lauf.
 
-`docker/canvaz-ops.sh restore <archiv>` haelt die Anwendung an, spielt Datenbank und Assets zurueck und
-startet sie wieder. Bestaetigt sind **RPO 24 Stunden** (taegliche Sicherung) und **RTO 4 Stunden**; der
-Drill in einer leeren Umgebung - Stack hochfahren, migrieren, wiederherstellen - dauert bei diesem
-Datenumfang Sekunden und ist von der Sicherungsgroesse, nicht vom Verfahren begrenzt.
+`docker/canvaz-ops.sh restore <archiv>` haelt die Anwendung an, spielt die Datenbank zurueck - im Modus
+`filesystem` zusaetzlich die Assets - und startet sie wieder. Bestaetigt sind **RPO 24 Stunden** (taegliche
+Sicherung) und **RTO 4 Stunden**; der Drill in einer leeren Umgebung - Stack hochfahren, migrieren,
+wiederherstellen - dauert bei diesem Datenumfang Sekunden und ist von der Sicherungsgroesse, nicht vom
+Verfahren begrenzt.
 
 ### Assetspeicher wechseln
 
@@ -1359,15 +1362,17 @@ die zugehoerigen Werte. Kein Anwendungscode kennt den Unterschied, und die Daten
 Speicherschluessel sind in beiden Modi dieselben.
 
 ```sh
-docker/canvaz-ops.sh backup                    # Stand im alten Modus
-# CANVAZ_STORAGE_ADAPTER und die S3-Werte in .env.production umstellen
-COMPOSE_PROFILES=s3 docker compose up --detach  # nur fuer das mitgelieferte MinIO
-docker compose run --rm mc 'mc alias set c "$CANVAZ_S3_ENDPOINT" "$CANVAZ_S3_ACCESS_KEY_ID" "$CANVAZ_S3_SECRET_ACCESS_KEY" && mc mb --ignore-existing "c/$CANVAZ_S3_BUCKET"'
-docker/canvaz-ops.sh restore <archiv>          # traegt die Bytes in den neuen Speicher
+docker/canvaz-ops.sh backup                    # Stand im alten Modus, insbesondere die Datenbank
+# CANVAZ_STORAGE_ADAPTER und die S3-Werte in .env.production auf den externen Anbieter umstellen
+docker compose up --detach
+docker/canvaz-ops.sh restore <archiv>          # spielt die Datenbank zurueck
 ```
 
-Den Bucket legt der Betreiber an, nicht die Anwendung: sie braeuchte dafuer dauerhaft Rechte, die sie im
-Betrieb nicht hat. Fehlt er, meldet `/api/ready` `storage: error` und der Proxy haelt den Verkehr zurueck.
+Den Bucket legt der Betreiber beim gewaehlten Anbieter an, nicht die Anwendung: sie braeuchte dafuer
+dauerhaft Rechte, die sie im Betrieb nicht hat. Fehlt er, meldet `/api/ready` `storage: error` und der
+Proxy haelt den Verkehr zurueck. Vorhandene Assetbytes migriert `docker/canvaz-ops.sh` beim Wechsel auf
+`s3` nicht automatisch dorthin - das ist Sache des Betreibers bzw. des Anbieters (siehe
+[Sicherung und Wiederherstellung](#sicherung-und-wiederherstellung)).
 
 ### Update und Rollback
 
@@ -1409,13 +1414,14 @@ npm run test:unit     # nur ohne Datenbank
 npm audit --audit-level=high
 ```
 
-Die Integrationstests brauchen eine laufende Datenbank **und ein laufendes MinIO** (`npm run db:up`). Die
-Verbindungen lassen sich ueber `CANVAZ_TEST_DATABASE_URL` und `CANVAZ_TEST_S3_ENDPOINT` uebersteuern.
+Die Integrationstests brauchen eine laufende Datenbank **und ein laufendes SeaweedFS** (`npm run db:up`).
+Die Verbindungen lassen sich ueber `CANVAZ_TEST_DATABASE_URL` und `CANVAZ_TEST_S3_ENDPOINT` uebersteuern.
 
 `tests/integration/asset-storage.test.ts` enthaelt die **gemeinsame Contract-Testsuite des Storage-Ports**:
 genau eine Suite (`assetStorageContract`), zweimal ausgefuehrt - einmal gegen `filesystem`, einmal gegen
-`s3` vor einem echten MinIO. Innerhalb der Suite gibt es keine Fallunterscheidung und keinen Adapternamen;
-sie kennt ausschliesslich `AssetStoragePort`. Der Neustart-Nachweis in
+`s3` vor einem echten SeaweedFS, das AWS-Signaturen tatsaechlich prueft (Gegenprobe mit falschem Geheimnis
+inklusive). Innerhalb der Suite gibt es keine Fallunterscheidung und keinen Adapternamen; sie kennt
+ausschliesslich `AssetStoragePort`. Der Neustart-Nachweis in
 `tests/integration/board-assets.test.ts` laeuft ebenfalls fuer beide Adapter: hochladen, den
 Anwendungsprozess vollstaendig ersetzen, abrufen, Bytes vergleichen.
 
