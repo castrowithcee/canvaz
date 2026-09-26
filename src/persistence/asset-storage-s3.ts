@@ -1,5 +1,5 @@
 /**
- * S3-Adapter des Storage-Ports (AWS S3 und MinIO).
+ * S3-Adapter des Storage-Ports (AWS S3 und S3-kompatible Server wie SeaweedFS).
  *
  * ## Warum kein SDK
  *
@@ -11,7 +11,7 @@
  * geschrieben. HTTP macht `fetch` aus der Laufzeit.
  *
  * Der Nachweis dafuer ist die gemeinsame Contract-Testsuite: dieselben Faelle laufen unveraendert gegen den
- * Dateisystem-Adapter und gegen diesen Adapter vor einem echten MinIO.
+ * Dateisystem-Adapter und gegen diesen Adapter vor einem echten SeaweedFS.
  *
  * ## Was dieser Adapter nicht tut
  *
@@ -175,7 +175,7 @@ export function createS3AssetStorage(config: S3StorageConfig): AssetStoragePort 
 /**
  * Legt den Bucket an, falls er fehlt.
  *
- * Fuer die lokale Entwicklung und die Tests gegen MinIO. Im Betrieb legt der Betreiber den Bucket an; die
+ * Fuer die lokale Entwicklung und die Tests gegen SeaweedFS. Im Betrieb legt der Betreiber den Bucket an; die
  * Anwendung ruft das nie von selbst auf, weil sie sonst dauerhaft Rechte braeuchte, die sie fuer ihren
  * Betrieb nicht hat.
  */
