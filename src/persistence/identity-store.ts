@@ -37,7 +37,11 @@ import type {
   LinkedIdentity,
   NewInvitation,
   NewRecoveryEmailToken,
+  NewSenderBlock,
+  NewSenderBlockProposal,
   NewSession,
+  SenderBlockRecord,
+  SenderDefenseRetention,
 } from '../domain/identity/repositories.js'
 import { IdentityConflictError } from '../domain/identity/repositories.js'
 
@@ -138,11 +142,31 @@ type RecoveryEmailTokenRow = {
   revoked_at: Date | null
 }
 
+type SenderBlockRow = {
+  address: string
+  address_kind: 'ipv4' | 'ipv6-64'
+  reason: string
+  failure_count: number
+  created_at: Date
+  expires_at: Date
+}
+
 const SELF_RECOVERY_COLUMNS = 'user_id, allowed, email, verified_at'
 const RECOVERY_TOKEN_COLUMNS = 'id, user_id, purpose, email, created_at, expires_at, redeemed_at, revoked_at'
 
 function toSelfRecovery(row: SelfRecoveryRow): SelfRecovery {
   return { userId: row.user_id, allowed: row.allowed, email: row.email, verifiedAt: row.verified_at }
+}
+
+function toSenderBlock(row: SenderBlockRow): SenderBlockRecord {
+  return {
+    address: row.address,
+    kind: row.address_kind,
+    reason: row.reason,
+    failureCount: row.failure_count,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+  }
 }
 
 function toRecoveryEmailToken(row: RecoveryEmailTokenRow): RecoveryEmailToken {
@@ -450,6 +474,81 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Identit
 
       async clear(keyHash: string): Promise<void> {
         await db.query('delete from login_throttle where key_hash = $1', [keyHash])
+      },
+    },
+
+    senderDefense: {
+      counters: {
+        async hit(keyHash: string, now: Date, windowStart: Date): Promise<number> {
+          // Dasselbe Vorgehen wie bei `loginThrottle.hit`: abgelaufene Fenster zuerst weg, dann buchen.
+          await db.query('delete from sender_failure_counter where window_started_at < $1', [windowStart])
+          const result = await db.query<{ attempts: number }>(
+            `insert into sender_failure_counter (key_hash, attempts, window_started_at)
+             values ($1, 1, $2)
+             on conflict (key_hash) do update set attempts = sender_failure_counter.attempts + 1
+             returning attempts`,
+            [keyHash, now],
+          )
+          return requireRow(result.rows[0], 'Fehlschlag konnte nicht gezaehlt werden').attempts
+        },
+      },
+
+      blocks: {
+        async findActive(address: string, now: Date): Promise<SenderBlockRecord | null> {
+          const result = await db.query<SenderBlockRow>(
+            'select address, address_kind, reason, failure_count, created_at, expires_at from sender_block where address = $1 and expires_at > $2',
+            [address, now],
+          )
+          const row = result.rows[0]
+          return row === undefined ? null : toSenderBlock(row)
+        },
+
+        async upsert(entry: NewSenderBlock, now: Date, durationHours: number, proposalWindowDays: number) {
+          // qatlas-dev: kein Zeilenlock ueber zwei Anweisungen - der Vorschlag ist eine Betreiberhilfe, keine
+          // Sicherheitskontrolle; ein seltenes gleichzeitiges Ueberschreiten der Schwelle durch zwei Anfragen
+          // kann hoechstens einen Vorschlag verpassen oder doppelt anlegen, nie eine faellige Sperre.
+          const prior = await db.query<SenderBlockRow>(
+            'select address, address_kind, reason, failure_count, created_at, expires_at from sender_block where address = $1',
+            [entry.address],
+          )
+          const priorRow = prior.rows[0]
+          const expiresAt = new Date(now.getTime() + durationHours * 3_600_000)
+          const result = await db.query<SenderBlockRow>(
+            `insert into sender_block (address, address_kind, reason, failure_count, created_at, expires_at)
+             values ($1, $2, $3, $4, $5, $6)
+             on conflict (address) do update set
+               address_kind = excluded.address_kind,
+               reason = excluded.reason,
+               failure_count = excluded.failure_count,
+               created_at = excluded.created_at,
+               expires_at = excluded.expires_at
+             returning address, address_kind, reason, failure_count, created_at, expires_at`,
+            [entry.address, entry.kind, entry.reason, entry.failureCount, now, expiresAt],
+          )
+          const record = toSenderBlock(requireRow(result.rows[0], 'Sperre konnte nicht angelegt werden'))
+          const proposalCutoff = now.getTime() - proposalWindowDays * 86_400_000
+          const priorBlockWithinProposalWindow =
+            priorRow !== undefined && priorRow.created_at.getTime() >= proposalCutoff
+              ? { createdAt: priorRow.created_at }
+              : null
+          return { record, priorBlockWithinProposalWindow }
+        },
+      },
+
+      proposals: {
+        async create(entry: NewSenderBlockProposal): Promise<void> {
+          await db.query(
+            `insert into sender_block_proposal (address, address_kind, reason, first_blocked_at, second_blocked_at)
+             values ($1, $2, $3, $4, $5)`,
+            [entry.address, entry.kind, entry.reason, entry.firstBlockedAt, entry.secondBlockedAt],
+          )
+        },
+      },
+
+      async purgeExpired(retention: SenderDefenseRetention): Promise<void> {
+        await db.query('delete from sender_failure_counter where window_started_at < $1', [retention.counterWindowStart])
+        await db.query('delete from sender_block where expires_at < $1', [retention.blockRetentionCutoff])
+        await db.query('delete from sender_block_proposal where created_at < $1', [retention.proposalRetentionCutoff])
       },
     },
 

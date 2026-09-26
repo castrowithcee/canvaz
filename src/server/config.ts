@@ -11,6 +11,8 @@
  * Startfehler und kein stiller Verzicht auf den Provider.
  */
 
+import { isIP } from 'node:net'
+
 import { SCENE_VERSION_RETENTION, TRASH_RETENTION_DAYS } from '../domain/board/model.js'
 import { normalizeEmail } from '../domain/identity/local-auth.js'
 import type { AssetStorageAdapter } from '../domain/storage/asset-storage-port.js'
@@ -129,6 +131,28 @@ export type AppConfig = {
    * Clients in einem Eimer landen.
    */
   readonly trustedProxy: boolean
+  /**
+   * Absenderabwehr gegen gehaeufte Fehlanmeldungen (#35, Meilenstein 1): Schwelle, Sperrdauer, Vorschlags-
+   * und Aufbewahrungsfristen sowie eine Allowlist eigener Netze, die nie gesperrt werden.
+   */
+  readonly loginBlock: LoginBlockConfig
+}
+
+export type CidrRange = { readonly address: string; readonly prefix: number; readonly family: 'ipv4' | 'ipv6' }
+
+export type LoginBlockConfig = {
+  /** Eigene Netze, die trotz Schwellenueberschreitung nie gesperrt werden. Ohne Angabe leer. */
+  readonly allowlist: readonly CidrRange[]
+  /** Fehlschlaege eines Absenders in 24 Stunden, ab denen die Anwendung vorlaeufig sperrt. */
+  readonly threshold: number
+  /** Dauer einer vorlaeufigen Sperre in Stunden. */
+  readonly durationHours: number
+  /** Zweite Sperre derselben Adresse innerhalb dieser Frist in Tagen erzeugt einen Vorschlag. */
+  readonly proposalWindowDays: number
+  /** Aufbewahrung eines Sperreintrags nach seinem Ablauf in Tagen. */
+  readonly retentionDays: number
+  /** Hoechste Aufbewahrung eines Vorschlags in Tagen, unabhaengig von einer Betreiberentscheidung. */
+  readonly proposalRetentionDays: number
 }
 
 /** Sammelt alle Konfigurationsprobleme, damit ein Fehlstart nicht Variable fuer Variable aufgeloest wird. */
@@ -342,6 +366,112 @@ const DEFAULT_AUTH_ACCOUNT_WINDOW_MINUTES = 15
 const MIN_AUTH_ACCOUNT_WINDOW_MINUTES = 1
 const MAX_AUTH_ACCOUNT_WINDOW_MINUTES = 1440
 
+/**
+ * Schwelle, ab der die Anwendung einen Absender vorlaeufig sperrt.
+ *
+ * Zwanzig Fehlschlaege eines Absenders in 24 Stunden sind deutlich mehr, als ein Mensch mit vertipptem
+ * Passwort samt zweitem Faktor je erreicht, und wenig genug, dass ein automatisiertes Durchprobieren an der
+ * Sperre endet, bevor es nennenswert Konten trifft.
+ */
+const DEFAULT_LOGIN_BLOCK_THRESHOLD = 20
+const MIN_LOGIN_BLOCK_THRESHOLD = 1
+const MAX_LOGIN_BLOCK_THRESHOLD = 100_000
+
+/** Dauer einer vorlaeufigen Sperre. Kein Dauerlock: nach 24 Stunden ist sie von selbst aufgehoben. */
+const DEFAULT_LOGIN_BLOCK_DURATION_HOURS = 24
+const MIN_LOGIN_BLOCK_DURATION_HOURS = 1
+const MAX_LOGIN_BLOCK_DURATION_HOURS = 24 * 30
+
+/** Zweite Sperre derselben Adresse binnen 30 Tagen erzeugt einen Vorschlag fuer eine dauerhafte Sperre. */
+const DEFAULT_LOGIN_BLOCK_PROPOSAL_WINDOW_DAYS = 30
+const MIN_LOGIN_BLOCK_PROPOSAL_WINDOW_DAYS = 1
+const MAX_LOGIN_BLOCK_PROPOSAL_WINDOW_DAYS = 365
+
+/** Ein abgelaufener Sperreintrag bleibt danach noch 30 Tage nachvollziehbar, dann wird er entfernt. */
+const DEFAULT_LOGIN_BLOCK_RETENTION_DAYS = 30
+const MIN_LOGIN_BLOCK_RETENTION_DAYS = 1
+const MAX_LOGIN_BLOCK_RETENTION_DAYS = 365
+
+/** Ein Vorschlag verschwindet spaetestens nach 12 Monaten, auch ohne Betreiberentscheidung (Meilenstein 2). */
+const DEFAULT_LOGIN_BLOCK_PROPOSAL_RETENTION_DAYS = 365
+const MIN_LOGIN_BLOCK_PROPOSAL_RETENTION_DAYS = 30
+const MAX_LOGIN_BLOCK_PROPOSAL_RETENTION_DAYS = 3650
+
+/**
+ * Eigene Netze, die die Absenderabwehr nie sperrt - etwa ein interner Schwachstellenscan oder ein
+ * Monitoring-Dienst, der absichtlich falsche Anmeldedaten prueft. Bewusst ohne Standardwert: eine geratene
+ * Ausnahme waere schlimmer als gar keine.
+ */
+function readLoginBlockAllowlist(env: Env, problems: string[]): readonly CidrRange[] {
+  const raw = env['CANVAZ_LOGIN_BLOCK_ALLOWLIST']?.trim()
+  if (raw === undefined || raw === '') {
+    return []
+  }
+  const ranges: CidrRange[] = []
+  for (const entry of raw.split(',')) {
+    const candidate = entry.trim()
+    if (candidate === '') {
+      continue
+    }
+    const [address, prefixRaw] = candidate.split('/')
+    const family = address === undefined ? 0 : isIP(address)
+    const prefix = Number(prefixRaw)
+    const maxPrefix = family === 4 ? 32 : 128
+    if (family === 0 || address === undefined || prefixRaw === undefined || !Number.isInteger(prefix) || prefix < 0 || prefix > maxPrefix) {
+      problems.push(`CANVAZ_LOGIN_BLOCK_ALLOWLIST: "${candidate}" ist kein gueltiges CIDR-Netz`)
+      continue
+    }
+    ranges.push({ address, prefix, family: family === 4 ? 'ipv4' : 'ipv6' })
+  }
+  return ranges
+}
+
+function readLoginBlock(env: Env, problems: string[]): LoginBlockConfig {
+  return {
+    allowlist: readLoginBlockAllowlist(env, problems),
+    threshold: readInteger(
+      env,
+      'CANVAZ_LOGIN_BLOCK_THRESHOLD',
+      DEFAULT_LOGIN_BLOCK_THRESHOLD,
+      MIN_LOGIN_BLOCK_THRESHOLD,
+      MAX_LOGIN_BLOCK_THRESHOLD,
+      problems,
+    ),
+    durationHours: readInteger(
+      env,
+      'CANVAZ_LOGIN_BLOCK_DURATION_HOURS',
+      DEFAULT_LOGIN_BLOCK_DURATION_HOURS,
+      MIN_LOGIN_BLOCK_DURATION_HOURS,
+      MAX_LOGIN_BLOCK_DURATION_HOURS,
+      problems,
+    ),
+    proposalWindowDays: readInteger(
+      env,
+      'CANVAZ_LOGIN_BLOCK_PROPOSAL_WINDOW_DAYS',
+      DEFAULT_LOGIN_BLOCK_PROPOSAL_WINDOW_DAYS,
+      MIN_LOGIN_BLOCK_PROPOSAL_WINDOW_DAYS,
+      MAX_LOGIN_BLOCK_PROPOSAL_WINDOW_DAYS,
+      problems,
+    ),
+    retentionDays: readInteger(
+      env,
+      'CANVAZ_LOGIN_BLOCK_RETENTION_DAYS',
+      DEFAULT_LOGIN_BLOCK_RETENTION_DAYS,
+      MIN_LOGIN_BLOCK_RETENTION_DAYS,
+      MAX_LOGIN_BLOCK_RETENTION_DAYS,
+      problems,
+    ),
+    proposalRetentionDays: readInteger(
+      env,
+      'CANVAZ_LOGIN_BLOCK_PROPOSAL_RETENTION_DAYS',
+      DEFAULT_LOGIN_BLOCK_PROPOSAL_RETENTION_DAYS,
+      MIN_LOGIN_BLOCK_PROPOSAL_RETENTION_DAYS,
+      MAX_LOGIN_BLOCK_PROPOSAL_RETENTION_DAYS,
+      problems,
+    ),
+  }
+}
+
 const OIDC_VARIABLES = [
   'CANVAZ_OIDC_ISSUER',
   'CANVAZ_OIDC_CLIENT_ID',
@@ -524,6 +654,7 @@ export function loadConfig(env: Env = process.env): AppConfig {
       problems,
     ),
     trustedProxy: readBoolean(env, 'CANVAZ_TRUSTED_PROXY', false, problems),
+    loginBlock: readLoginBlock(env, problems),
   }
 
   // Die Redirect-URI zeigt auf diese Instanz zurueck. Eine fremde Herkunft waere ein offener Umleitungspunkt

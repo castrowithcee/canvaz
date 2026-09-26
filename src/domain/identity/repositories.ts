@@ -116,6 +116,103 @@ export interface LoginThrottleRepository {
 }
 
 /**
+ * Fehlschlagszaehler eines Absenders innerhalb eines 24-Stunden-Fensters (#35, Meilenstein 1).
+ *
+ * Der Schluessel ist bereits ein HMAC ueber die Adresse (IPv4) bzw. das /64-Praefix (IPv6) mit einem
+ * taeglich rotierenden, ausschliesslich im Prozessspeicher gehaltenen Schluessel - die Persistenz sieht nie
+ * eine Adresse. Dasselbe Prinzip wie bei `LoginThrottleRepository`, nur mit einem fluechtigen statt einem
+ * dauerhaften Schluessel.
+ */
+export interface SenderFailureCounterRepository {
+  /** Zaehlt einen Fehlschlag und liefert die Zahl im laufenden Fenster, diesen eingeschlossen. */
+  hit(keyHash: string, now: Date, windowStart: Date): Promise<number>
+}
+
+export type SenderBlockAddressKind = 'ipv4' | 'ipv6-64'
+
+export type SenderBlockRecord = {
+  readonly address: string
+  readonly kind: SenderBlockAddressKind
+  readonly reason: string
+  readonly failureCount: number
+  readonly createdAt: Date
+  readonly expiresAt: Date
+}
+
+export type NewSenderBlock = {
+  readonly address: string
+  readonly kind: SenderBlockAddressKind
+  readonly reason: string
+  readonly failureCount: number
+}
+
+export type SenderBlockUpsertResult = {
+  readonly record: SenderBlockRecord
+  /** Eine fruehere Sperre derselben Adresse innerhalb des Vorschlagsfensters - Grundlage des Vorschlags. */
+  readonly priorBlockWithinProposalWindow: { readonly createdAt: Date } | null
+}
+
+/**
+ * Vorlaeufige Sperre eines Absenders.
+ *
+ * Anders als beim Fehlschlagszaehler steht die Adresse hier im Klartext: eine ausgeloeste Sperre ist selbst
+ * ein sicherheitsrelevanter Vorgang, den der Betrieb nachvollziehen koennen muss.
+ */
+export interface SenderBlockRepository {
+  findActive(address: string, now: Date): Promise<SenderBlockRecord | null>
+  /**
+   * Legt eine neue Sperre an oder ersetzt eine bestehende. Liefert zugleich, ob es eine fruehere Sperre
+   * derselben Adresse innerhalb von `proposalWindowDays` gab - Grundlage des Vorschlags einer dauerhaften
+   * Sperre.
+   */
+  upsert(
+    entry: NewSenderBlock,
+    now: Date,
+    durationHours: number,
+    proposalWindowDays: number,
+  ): Promise<SenderBlockUpsertResult>
+}
+
+export type NewSenderBlockProposal = {
+  readonly address: string
+  readonly kind: SenderBlockAddressKind
+  readonly reason: string
+  readonly firstBlockedAt: Date
+  readonly secondBlockedAt: Date
+}
+
+/**
+ * Vorschlag einer dauerhaften Sperre.
+ *
+ * Status und Entscheidungszeitpunkt bedienen die Betreiberentscheidung aus Meilenstein 2; dieser Store legt
+ * hier nur die Zeile an.
+ */
+export interface SenderBlockProposalRepository {
+  create(entry: NewSenderBlockProposal): Promise<void>
+}
+
+export type SenderDefenseRetention = {
+  /** Zaehlerzeilen mit einem aelteren Fensterbeginn sind abgelaufen. */
+  readonly counterWindowStart: Date
+  readonly blockRetentionCutoff: Date
+  readonly proposalRetentionCutoff: Date
+}
+
+export interface SenderDefenseRepository {
+  readonly counters: SenderFailureCounterRepository
+  readonly blocks: SenderBlockRepository
+  readonly proposals: SenderBlockProposalRepository
+  /**
+   * Entfernt abgelaufene Zaehlwerte, abgelaufene Sperren und ueberalte Vorschlaege.
+   *
+   * `counters.hit` raeumt zusaetzlich bei jedem Fehlschlag opportunistisch auf; ohne weitere Fehlschlaege
+   * braucht es trotzdem einen eigenstaendigen Aufruf (`startSenderDefenseRetention` in `sender-defense.ts`),
+   * sonst blieben Zaehler, Sperren und Vorschlaege einer sonst untaetigen Instanz ueber ihre Frist liegen.
+   */
+  purgeExpired(retention: SenderDefenseRetention): Promise<void>
+}
+
+/**
  * Persoenliches Erscheinungsbild.
  *
  * Genau eine Zeile je Nutzer oder keine; ohne Zeile gilt die Standardwahl des Vertrags. Das Repository
@@ -275,6 +372,7 @@ export interface IdentityStore {
   readonly invitations: InvitationRepository
   readonly sessions: SessionRepository
   readonly loginThrottle: LoginThrottleRepository
+  readonly senderDefense: SenderDefenseRepository
   readonly secondFactors: SecondFactorRepository
   readonly selfRecovery: SelfRecoveryRepository
   transaction<T>(run: (store: IdentityStore) => Promise<T>): Promise<T>

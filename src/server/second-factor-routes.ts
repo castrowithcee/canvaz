@@ -46,6 +46,8 @@ import type { SignedInSession, User, UserId } from '../domain/identity/model.js'
 import { requiresSecondFactor } from '../domain/identity/model.js'
 import type { IdentityStore } from '../domain/identity/repositories.js'
 import { hasActiveTotp, isEnrollmentOpen } from '../domain/identity/second-factor.js'
+import { resolveClientAddress } from './client-address.js'
+import type { ClientAddress } from './client-address.js'
 import type { AppContext } from './context.js'
 import { requireCsrfToken, requireSignedIn } from './guard.js'
 import type { Route } from './http.js'
@@ -54,6 +56,7 @@ import { clearSecondFactorAttempts, takeSecondFactorAttempt } from './login-thro
 import type { SecondFactorChange } from './mailer.js'
 import { deliver, secondFactorChangedMail } from './mailer.js'
 import { asRequester } from './requester.js'
+import { sendSenderBlockedResponse } from './sender-defense.js'
 import type { SecondFactorInput } from './second-factor.js'
 import {
   createBackupCodes,
@@ -133,8 +136,20 @@ export function createSecondFactorRoutes(context: AppContext): readonly Route[] 
   /**
    * Die frische Bestaetigung: Code lesen, Versuch buchen, pruefen. `true` heisst: bestaetigt; sonst ist die
    * Anfrage bereits beantwortet.
+   *
+   * `senderFailure` zaehlt einen falschen Code als Fehlschlag der Absenderabwehr (#35). Nur die Bestaetigung
+   * des zweiten Faktors einer Anmeldung (`AUTH_SECOND_FACTOR_VERIFY_PATH`) uebergibt es: sie ist der einzige
+   * Aufrufer dieser Funktion ohne eine Sitzung, deren zweiter Faktor schon bestaetigt ist - fachlich also ein
+   * anonymer Anmeldeweg. Einrichtung und neue Ersatzcodes verlangen bereits eine solche Sitzung und zaehlen
+   * deshalb nicht mit.
    */
-  async function confirmWithCurrentFactor(userId: UserId, raw: unknown, response: ServerResponse, now: Date): Promise<boolean> {
+  async function confirmWithCurrentFactor(
+    userId: UserId,
+    raw: unknown,
+    response: ServerResponse,
+    now: Date,
+    senderFailure?: { readonly context: AppContext; readonly address: ClientAddress },
+  ): Promise<boolean> {
     const input = parseSecondFactorInput(raw)
     if (input === null) {
       sendError(response, 400, CODE_EXPECTED)
@@ -151,6 +166,9 @@ export function createSecondFactorRoutes(context: AppContext): readonly Route[] 
     }
     if (outcome === 'invalid') {
       logger('warn', 'auth.second-factor.failed', { userId, method: input.kind })
+      if (senderFailure !== undefined) {
+        await senderFailure.context.senderDefense.recordFailure(senderFailure.context, senderFailure.address)
+      }
       sendError(response, 400, CODE_REJECTED)
       return false
     }
@@ -294,8 +312,21 @@ export function createSecondFactorRoutes(context: AppContext): readonly Route[] 
           sendError(response, 409, 'Fuer dieses Konto ist noch kein zweiter Faktor eingerichtet.')
           return
         }
+        // Absenderabwehr (#35): eine Sitzung ohne bestaetigten zweiten Faktor ist fachlich noch kein
+        // angemeldeter Weg. Die Pruefung laeuft, bevor der Code selbst geprueft wird.
+        const clientAddress = resolveClientAddress(request, config.trustedProxy)
+        if (await context.senderDefense.isBlocked(context, clientAddress)) {
+          logger('warn', 'auth.sender.blocked.rejected', { event: 'second-factor-verify' })
+          sendSenderBlockedResponse(response, config.loginBlock.durationHours)
+          return
+        }
         const now = context.now()
-        if (!(await confirmWithCurrentFactor(userId, (await readJsonBody(request))?.['code'], response, now))) {
+        if (
+          !(await confirmWithCurrentFactor(userId, (await readJsonBody(request))?.['code'], response, now, {
+            context,
+            address: clientAddress,
+          }))
+        ) {
           return
         }
         // Nur diese Sitzung wird ersetzt: andere Geraete mit Nachweis bleiben angemeldet.

@@ -32,8 +32,16 @@ export type ClientAddress = {
 
 const IPV4_MAPPED_PREFIX = '::ffff:'
 
-/** IPv4-gemappte IPv6-Adressen (`::ffff:a.b.c.d`) auf ihre IPv4-Form zurueckfuehren; alles andere bleibt unveraendert. */
-function normalizeAddress(address: string): string {
+/**
+ * IPv4-gemappte IPv6-Adressen (`::ffff:a.b.c.d`) auf ihre IPv4-Form zurueckfuehren; alles andere bleibt
+ * unveraendert.
+ *
+ * Exportiert fuer #35 (`sender-defense.ts`): `resolveClientAddress` liefert bei einem Dual-Stack-Socket ohne
+ * Proxy die ungemappte Rohform, waehrend `class` bereits gegen die normalisierte Form entschieden wurde. Wer
+ * daraus einen Absenderschluessel oder eine Allowlist-Pruefung bildet, muss dieselbe Normalisierung nutzen -
+ * sonst zaehlt jeder IPv4-Client unter einem gemeinsamen IPv6-/64-Praefix.
+ */
+export function normalizeAddress(address: string): string {
   if (address.toLowerCase().startsWith(IPV4_MAPPED_PREFIX)) {
     const candidate = address.slice(IPV4_MAPPED_PREFIX.length)
     if (isIP(candidate) === 4) {

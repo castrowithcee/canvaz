@@ -50,6 +50,7 @@ import {
   selfRecoveryAllowable,
   selfResetTarget,
 } from '../domain/identity/self-recovery.js'
+import { resolveClientAddress } from './client-address.js'
 import type { AppContext } from './context.js'
 import { requireCsrfToken, requireSession } from './guard.js'
 import type { Route } from './http.js'
@@ -71,8 +72,11 @@ import { deliver, recoveryEmailConfirmMail, selfResetDoneMail, selfResetLinkMail
 import { hashPassword, verifyPassword } from './password.js'
 import { asRequester } from './requester.js'
 
-/** Herkunftspruefung und Ratengrenze der unangemeldeten Anmeldestrecken (`local-auth-routes.ts`). */
-export type AuthGuard = (request: IncomingMessage, response: ServerResponse, event: string) => boolean
+/**
+ * Herkunftspruefung, Ratengrenze und Absenderabwehr (#35) der unangemeldeten Anmeldestrecken
+ * (`local-auth-routes.ts`).
+ */
+export type AuthGuard = (request: IncomingMessage, response: ServerResponse, event: string) => Promise<boolean>
 
 const UNAVAILABLE = 'Diese Instanz bietet keine Ruecksetzung per Mail an. Bitte an die Administration wenden.'
 const LINK_INVALID = 'Dieser Link ist ungueltig, abgelaufen oder bereits verbraucht.'
@@ -152,7 +156,7 @@ export function createSelfRecoveryRoutes(context: AppContext, guard: AuthGuard):
       method: 'POST',
       path: AUTH_PASSWORD_RESET_REQUEST_PATH,
       handle: async ({ request, response }) => {
-        if (!guard(request, response, 'password-reset-request')) {
+        if (!(await guard(request, response, 'password-reset-request'))) {
           return
         }
         if (context.mailer === null) {
@@ -166,8 +170,12 @@ export function createSelfRecoveryRoutes(context: AppContext, guard: AuthGuard):
         }
         const accepted: PasswordResetRequestResponse = { status: 'accepted' }
         sendJson(response, 202, accepted)
-        // Ausdruecklich nach der Antwort und ohne sie abzuwarten: so misst niemand an der Antwortzeit, was
-        // danach geschieht. Ein Fehler endet im Protokoll, nie beim Anfragenden.
+        // Jede Anfrage zaehlt (#35) - unabhaengig davon, ob es das Konto gibt. Wie die kontoabhaengige Arbeit
+        // laeuft das nach der Antwort, damit niemand an der Antwortzeit misst, was hier geschieht.
+        const clientAddress = resolveClientAddress(request, config.trustedProxy)
+        void context.senderDefense.recordFailure(context, clientAddress).catch((error: unknown) => {
+          logger('error', 'auth.password-reset.failed', { error: describeError(error) })
+        })
         void issueReset(email).catch((error: unknown) => {
           logger('error', 'auth.password-reset.failed', { error: describeError(error) })
         })
@@ -178,7 +186,7 @@ export function createSelfRecoveryRoutes(context: AppContext, guard: AuthGuard):
       method: 'POST',
       path: AUTH_PASSWORD_RESET_REDEEM_PATH,
       handle: async ({ request, response }) => {
-        if (!guard(request, response, 'password-reset-redeem')) {
+        if (!(await guard(request, response, 'password-reset-redeem'))) {
           return
         }
         const body = await readJsonBody(request)
@@ -231,6 +239,7 @@ export function createSelfRecoveryRoutes(context: AppContext, guard: AuthGuard):
         }
         if (outcome.kind === 'invalid') {
           logger('warn', 'auth.password-reset.rejected', { reason: 'not-redeemable' })
+          await context.senderDefense.recordFailure(context, resolveClientAddress(request, config.trustedProxy))
           sendError(response, 400, LINK_INVALID)
           return
         }
@@ -251,7 +260,7 @@ export function createSelfRecoveryRoutes(context: AppContext, guard: AuthGuard):
       method: 'POST',
       path: AUTH_RECOVERY_EMAIL_CONFIRM_PATH,
       handle: async ({ request, response }) => {
-        if (!guard(request, response, 'recovery-email-confirm')) {
+        if (!(await guard(request, response, 'recovery-email-confirm'))) {
           return
         }
         const token = readString(await readJsonBody(request), 'token')
@@ -281,6 +290,7 @@ export function createSelfRecoveryRoutes(context: AppContext, guard: AuthGuard):
         })
         if (outcome === null) {
           logger('warn', 'auth.recovery-email.rejected', { reason: 'not-redeemable' })
+          await context.senderDefense.recordFailure(context, resolveClientAddress(request, config.trustedProxy))
           sendError(response, 400, LINK_INVALID)
           return
         }

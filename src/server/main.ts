@@ -24,6 +24,7 @@ import { createMetrics } from './metrics.js'
 import { createOidcClient } from './oidc.js'
 import { createRateLimiter } from './rate-limit.js'
 import { createRealtimeGateway } from './realtime.js'
+import { createSenderDefenseGuard, startSenderDefenseRetention } from './sender-defense.js'
 import { startTrashRetention } from './trash.js'
 
 function loadConfigOrExit(): ReturnType<typeof loadConfig> {
@@ -66,6 +67,7 @@ const realtime = createRealtimeGateway({
 })
 const metrics = createMetrics()
 const addressMonitor = createClientAddressMonitor(consoleLogger)
+const senderDefense = createSenderDefenseGuard(config)
 const context: AppContext = {
   config,
   pool,
@@ -83,6 +85,7 @@ const context: AppContext = {
   logger: consoleLogger,
   metrics,
   addressMonitor,
+  senderDefense,
   now: () => new Date(),
 }
 /**
@@ -90,6 +93,11 @@ const context: AppContext = {
  * Betriebsvertrag kennt genau eine Instanz, und ein Intervall darin braucht keine Koordination.
  */
 const stopTrashRetention = startTrashRetention(context)
+/**
+ * Eigenstaendiger Aufraeumlauf der Absenderabwehr (#35): faellige Zaehlwerte, Sperren und Vorschlaege
+ * verschwinden so auch, wenn nach einer Sperre keine weiteren Fehlschlaege mehr auflaufen.
+ */
+const stopSenderDefenseRetention = startSenderDefenseRetention(context)
 
 const server = createServer(
   createRequestListener(createRoutes(context), {
@@ -110,6 +118,8 @@ server.listen(config.port, () => {
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
     stopTrashRetention()
+    senderDefense.stop()
+    stopSenderDefenseRetention()
     server.close(() => {
       // Erst die Raeume: was noch nicht persistiert ist, wird beim geordneten Beenden noch geschrieben.
       void rooms

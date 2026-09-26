@@ -35,6 +35,7 @@ import { createOidcClient } from '../../src/server/oidc.js'
 import { createRateLimiter } from '../../src/server/rate-limit.js'
 import { createRealtimeGateway } from '../../src/server/realtime.js'
 import type { RealtimeGateway, RealtimeOptions } from '../../src/server/realtime.js'
+import { createSenderDefenseGuard, startSenderDefenseRetention } from '../../src/server/sender-defense.js'
 import type { TestProvider } from './oidc-provider.js'
 
 export type LogEntry = { readonly level: LogLevel; readonly event: string; readonly fields: LogFields }
@@ -163,6 +164,7 @@ export async function startTestApp(options: {
   })
   const metrics = createMetrics()
   const addressMonitor = createClientAddressMonitor(logger)
+  const senderDefense = createSenderDefenseGuard(config)
   const context: AppContext = {
     config,
     pool: options.pool,
@@ -177,8 +179,10 @@ export async function startTestApp(options: {
     logger,
     metrics,
     addressMonitor,
+    senderDefense,
     now,
   }
+  const stopSenderDefenseRetention = startSenderDefenseRetention(context)
   server.on(
     'request',
     createRequestListener(createRoutes(context), {
@@ -212,6 +216,8 @@ export async function startTestApp(options: {
       frozenNow = value
     },
     async close(): Promise<void> {
+      senderDefense.stop()
+      stopSenderDefenseRetention()
       await rooms.close()
       await realtime.close()
       await new Promise<void>((resolve) => {

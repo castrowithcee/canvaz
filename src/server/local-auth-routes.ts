@@ -42,6 +42,7 @@ import { isInvitationRedeemable, normalizeEmail, parsePassword } from '../domain
 import type { User, UserId } from '../domain/identity/model.js'
 import { isUserActive } from '../domain/identity/model.js'
 import type { IdentityStore } from '../domain/identity/repositories.js'
+import { resolveClientAddress } from './client-address.js'
 import type { AppContext } from './context.js'
 import type { Route } from './http.js'
 import { readJsonBody, sendError, sendJson } from './http.js'
@@ -49,7 +50,8 @@ import { hashInvitationToken } from './invitations.js'
 import { clearLoginAttempts, clearSecondFactorAttempts, takeLoginAttempt } from './login-throttle.js'
 import { deliver, secondFactorChangedMail } from './mailer.js'
 import { hashPassword, isSamePassword, verifyPassword } from './password.js'
-import { clientKey, createRateLimiter } from './rate-limit.js'
+import { createRateLimiter } from './rate-limit.js'
+import { sendSenderBlockedResponse } from './sender-defense.js'
 import { createSelfRecoveryRoutes } from './self-recovery-routes.js'
 import { setSessionCookie, startSession } from './session.js'
 
@@ -109,17 +111,30 @@ export function createLocalAuthRoutes(context: AppContext): readonly Route[] {
     return origin === undefined || origin === allowedOrigin
   }
 
-  /** Gemeinsamer Vorlauf der unangemeldeten Endpunkte, auch der Selbstwiederherstellung. `false` heisst: die Anfrage ist bereits beantwortet. */
-  function guard(request: IncomingMessage, response: ServerResponse, event: string): boolean {
+  /**
+   * Gemeinsamer Vorlauf der unangemeldeten Endpunkte, auch der Selbstwiederherstellung. `false` heisst: die
+   * Anfrage ist bereits beantwortet.
+   *
+   * Die Absenderabwehr (#35) prueft hier, **bevor** irgendeine Passwort- oder Codepruefung beginnt: eine
+   * vorlaeufige Sperre lehnt die Anfrage mit derselben kontoneutralen 429-Antwort ab wie jeder andere
+   * anonyme Anmeldeweg.
+   */
+  async function guard(request: IncomingMessage, response: ServerResponse, event: string): Promise<boolean> {
     if (!hasAllowedOrigin(request)) {
       logger('warn', 'auth.local.foreign-origin', { event })
       sendError(response, 403, 'Fremde Herkunft')
       return false
     }
-    if (!attempts.take(clientKey(request, config.trustedProxy))) {
+    const clientAddress = resolveClientAddress(request, config.trustedProxy)
+    if (!attempts.take(clientAddress.address)) {
       logger('warn', 'auth.local.rate.exceeded', { event })
       response.setHeader('retry-after', '60')
       sendError(response, 429, 'Zu viele Anmeldeversuche. Bitte spaeter erneut versuchen.')
+      return false
+    }
+    if (await context.senderDefense.isBlocked(context, clientAddress)) {
+      logger('warn', 'auth.sender.blocked.rejected', { event })
+      sendSenderBlockedResponse(response, config.loginBlock.durationHours)
       return false
     }
     return true
@@ -145,7 +160,7 @@ export function createLocalAuthRoutes(context: AppContext): readonly Route[] {
       method: 'POST',
       path: AUTH_LOCAL_LOGIN_PATH,
       handle: async ({ request, response }) => {
-        if (!guard(request, response, 'login')) {
+        if (!(await guard(request, response, 'login'))) {
           return
         }
         const body = await readJsonBody(request)
@@ -163,6 +178,7 @@ export function createLocalAuthRoutes(context: AppContext): readonly Route[] {
           logger('warn', allowed ? 'auth.local.login.failed' : 'auth.local.login.throttled', {
             userId: account?.user.id ?? null,
           })
+          await context.senderDefense.recordFailure(context, resolveClientAddress(request, config.trustedProxy))
           sendError(response, 401, CREDENTIALS_REJECTED)
           return
         }
@@ -200,7 +216,7 @@ export function createLocalAuthRoutes(context: AppContext): readonly Route[] {
       method: 'POST',
       path: AUTH_LOCAL_PASSWORD_PATH,
       handle: async ({ request, response }) => {
-        if (!guard(request, response, 'password-change')) {
+        if (!(await guard(request, response, 'password-change'))) {
           return
         }
         const body = await readJsonBody(request)
@@ -230,6 +246,7 @@ export function createLocalAuthRoutes(context: AppContext): readonly Route[] {
           logger('warn', allowed ? 'auth.local.password.failed' : 'auth.local.password.throttled', {
             userId: account?.user.id ?? null,
           })
+          await context.senderDefense.recordFailure(context, resolveClientAddress(request, config.trustedProxy))
           sendError(response, 401, CREDENTIALS_REJECTED)
           return
         }
@@ -264,7 +281,7 @@ export function createLocalAuthRoutes(context: AppContext): readonly Route[] {
       method: 'POST',
       path: AUTH_INVITATION_REDEEM_PATH,
       handle: async ({ request, response }) => {
-        if (!guard(request, response, 'invitation-redeem')) {
+        if (!(await guard(request, response, 'invitation-redeem'))) {
           return
         }
         const body = await readJsonBody(request)
@@ -322,6 +339,8 @@ export function createLocalAuthRoutes(context: AppContext): readonly Route[] {
         })
         if (outcome.kind === 'invalid') {
           logger('warn', 'auth.invitation.rejected', { reason: 'not-redeemable' })
+          // Ein ungueltiger Einloesewert zaehlt als Fehlschlag (#35): eine falsche Passwortwahl ('weak') nicht.
+          await context.senderDefense.recordFailure(context, resolveClientAddress(request, config.trustedProxy))
           sendError(response, 400, 'Dieser Link ist ungueltig, abgelaufen oder bereits verbraucht.')
           return
         }

@@ -19,6 +19,7 @@ import type { Mailer } from './mailer.js'
 import type { Metrics } from './metrics.js'
 import type { OidcClient } from './oidc.js'
 import type { RealtimeGateway } from './realtime.js'
+import type { SenderDefenseGuard } from './sender-defense.js'
 
 export type AppContext = {
   readonly config: AppConfig
@@ -52,6 +53,11 @@ export type AppContext = {
    * nach gehaeuften Fehlanmeldungen) lesen die Aussage.
    */
   readonly addressMonitor: ClientAddressMonitor
+  /**
+   * Absenderabwehr gegen gehaeufte Fehlanmeldungen (#35, Meilenstein 1). Zaehlt Fehlschlaege je Absender und
+   * sperrt vorlaeufig ab einer Schwelle; siehe `sender-defense.ts`.
+   */
+  readonly senderDefense: SenderDefenseGuard
   /** Injizierbare Uhr: Tests pruefen Ablauf und Widerruf ohne Wartezeit. */
   readonly now: () => Date
 }
