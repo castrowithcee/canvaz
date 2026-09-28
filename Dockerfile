@@ -6,7 +6,7 @@
 # Der Anwendungsserver migriert nicht von selbst. Migrationen laufen als eigener Aufruf desselben Images
 # (`node dist/persistence/migrate-cli.js`), damit ein Neustart nie unbeabsichtigt das Schema aendert.
 
-FROM node:22-alpine AS build
+FROM node:26-alpine AS build
 WORKDIR /app
 # Erst das Manifest: die Abhaengigkeitsschicht bleibt im Cache, solange sich nur Quelltext aendert.
 COPY package.json package-lock.json ./
@@ -14,7 +14,7 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM node:22-alpine AS runtime
+FROM node:26-alpine AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 COPY package.json package-lock.json ./
