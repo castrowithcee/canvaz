@@ -1,0 +1,114 @@
+# Der lokale Stack: Anwendung, PostgreSQL und SeaweedFS.
+#
+# Start:   docker compose up -d --build
+# Zustand: docker compose ps
+# Logs:    docker compose logs -f <dienst>
+# Stop:    docker compose down
+#
+# Erreichbar ist die Anwendung ueber den Reverse Proxy unter http://canvaz.localhost:27000. Der Proxy liegt
+# in einem eigenen Stack und tritt dem Netz dieses Stacks bei; die Anwendung gibt selbst keinen Hostport ab.
+# Einen zweiten Weg zu ihr gibt es nicht.
+#
+# Datenbank und Objektspeicher haengen weiterhin am Loopback: die Testlaeufe, die Migration und
+# `admin:bootstrap` laufen auf dem Host und sprechen kein HTTP, also auch nicht ueber den Proxy. Hohe
+# Hostports statt der Standardports, weil 5432 und 9000 auf dem Referenzhost belegt sind.
+#
+# Die Zugangsdaten hier sind lokale Entwicklungswerte und keine Secrets. Alles, was ein Geheimnis ist, steht
+# in `.env` und ist gitignoriert.
+#
+# `compose.prod.yml` daneben ist die Produktionsvariante fuer einen eigenen Host; sie bringt ihre eigene
+# TLS-Terminierung mit und kennt diesen Proxy nicht.
+
+name: canvaz
+
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    # Kein Hostport: der einzige Weg zur Anwendung fuehrt ueber den Proxy. Die Basis-URL traegt denselben
+    # Namen, weil Sitzungscookie und OIDC-Rueckkehr an genau diese Herkunft gebunden sind.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      CANVAZ_PORT: '3000'
+      CANVAZ_BASE_URL: ${CANVAZ_BASE_URL:-http://canvaz.localhost:27000}
+      CANVAZ_WEB_ROOT: dist/web
+      # Im Netz des Stacks statt am Loopback: der Container erreicht die Datenbank unter ihrem Dienstnamen.
+      DATABASE_URL: postgres://canvaz:canvaz@postgres:5432/canvaz
+      CANVAZ_STORAGE_FILESYSTEM_ROOT: /var/lib/canvaz/assets
+      # Der Proxy setzt `x-forwarded-for`; ohne dieses Bekenntnis landen alle Clients in einem Eimer der
+      # Ratengrenze.
+      CANVAZ_TRUSTED_PROXY: 'true'
+    volumes:
+      - canvaz-assets:/var/lib/canvaz/assets
+    depends_on:
+      postgres:
+        condition: service_healthy
+    stop_grace_period: 30s
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.canvaz.rule=Host(`canvaz.localhost`)
+      - traefik.http.routers.canvaz.entrypoints=web
+      - traefik.http.services.canvaz.loadbalancer.server.port=3000
+
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: canvaz
+      POSTGRES_PASSWORD: canvaz
+      POSTGRES_DB: canvaz
+    ports:
+      - '127.0.0.1:55432:5432'
+    volumes:
+      - canvaz-postgres-data:/var/lib/postgresql
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready --username=canvaz --dbname=canvaz']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # SeaweedFS als S3-kompatibler Objektspeicher (Apache-2.0). Er ist der Gegenpart des `s3`-Storage-Adapters
+  # und macht ihn lokal real pruefbar - die gemeinsame Contract-Testsuite laeuft unveraendert gegen ihn.
+  # Die Zugangsidentitaet (Zugangsschluessel/Geheimnis, nur fuer Tests) kommt aus der versionierten
+  # `docker/seaweedfs-init/s3-config.json`; ohne sie gaebe es keine echte Signaturpruefung.
+  seaweedfs:
+    image: chrislusf/seaweedfs:3.97
+    restart: unless-stopped
+    command:
+      [
+        'server',
+        '-dir=/data',
+        '-s3',
+        '-s3.port=9000',
+        '-s3.config=/etc/seaweedfs/s3.json',
+        '-filer=true',
+        '-ip.bind=0.0.0.0',
+      ]
+    ports:
+      - '127.0.0.1:59000:9000'
+    volumes:
+      - ./docker/seaweedfs-init/s3-config.json:/etc/seaweedfs/s3.json:ro
+      - canvaz-seaweedfs-data:/data
+    healthcheck:
+      test: ['CMD', 'nc', '-z', '127.0.0.1', '9000']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  canvaz-postgres-data:
+  canvaz-seaweedfs-data:
+  canvaz-assets:
+
+# Das Netz des Stacks. Es liegt ausserhalb dieser Datei, weil der Proxy aus seinem eigenen Stack darin
+# haengt: `docker compose down` wuerde ein hier verwaltetes Netz unter dem laufenden Proxy wegziehen.
+# Einmalig anlegen:
+#
+#   docker network create canvaz
+networks:
+  default:
+    name: canvaz
+    external: true

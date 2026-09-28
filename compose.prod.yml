@@ -1,0 +1,95 @@
+# Produktionsvariante der Instanz: Reverse Proxy mit TLS, Anwendungsserver, PostgreSQL.
+#
+# `compose.yml` daneben ist die Entwicklungsumgebung und startet nur Datenbank und SeaweedFS. Diese Datei
+# startet die vollstaendige Instanz und ist auf einen einzelnen Linux-VPS mit Docker Engine und Compose v2
+# ausgelegt - kein Cluster, kein Anbieterdienst, keine Hostverschluesselung.
+#
+# Aufruf immer mit der Produktionsumgebung:
+#
+#   export COMPOSE_FILE=compose.prod.yml
+#   export COMPOSE_ENV_FILES=.env.production
+#   docker compose up --detach
+#
+# `.env.production` entsteht aus `.env.production.example`, bleibt auf dem Host und ist gitignoriert.
+
+# Ein Log ohne Grenze fuellt auf einem VPS irgendwann die Platte - und nimmt dabei die Datenbank mit.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '5'
+
+services:
+  # TLS-Terminierung und einzige nach aussen offene Stelle. Caddy holt und erneuert das Zertifikat selbst;
+  # fuer einen Namen ohne oeffentliches DNS (`localhost`) stellt es eines aus seiner lokalen CA aus.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    logging: *logging
+    ports:
+      - '${CANVAZ_HTTP_PORT:-80}:80'
+      - '${CANVAZ_HTTPS_PORT:-443}:443'
+    environment:
+      CANVAZ_SITE_ADDRESS: ${CANVAZ_SITE_ADDRESS:?CANVAZ_SITE_ADDRESS fehlt in .env.production}
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Ausgestellte Zertifikate und Kontoschluessel. Ohne dieses Volume holt jeder Neustart ein neues
+      # Zertifikat und laeuft irgendwann in die Ratengrenze der CA.
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+
+  app:
+    # Im Betrieb ein veroeffentlichtes, unveraenderliches Image (`ghcr.io/<owner>/canvaz:vX.Y.Z`). `build`
+    # steht daneben, damit dieselbe Datei ohne Registry aus dem Arbeitsstand baut.
+    image: ${CANVAZ_IMAGE:-canvaz:local}
+    build: .
+    restart: unless-stopped
+    logging: *logging
+    env_file: .env.production
+    environment:
+      # Was die Compose-Umgebung selbst festlegt und nicht aus der Datei kommen darf: der Ort im Netz, der
+      # Ort des Volumes und die Tatsache, dass ein Reverse Proxy davorsteht.
+      CANVAZ_PORT: '3000'
+      CANVAZ_WEB_ROOT: dist/web
+      DATABASE_URL: postgres://canvaz:${CANVAZ_DB_PASSWORD:?CANVAZ_DB_PASSWORD fehlt in .env.production}@postgres:5432/canvaz
+      CANVAZ_STORAGE_FILESYSTEM_ROOT: /var/lib/canvaz/assets
+      # Caddy (`docker/Caddyfile`) setzt `x-forwarded-for` auf die tatsaechliche Absenderadresse, egal ob
+      # der Host rootful oder rootless Docker faehrt; nur damit erkennt die Anwendung die echte Client-Adresse
+      # (siehe "Echte Client-Adresse erkennen" in der README) statt der Docker-Netzadresse von Caddy.
+      CANVAZ_TRUSTED_PROXY: 'true'
+    volumes:
+      # Persistentes Volume statt Containerlayer: der `filesystem`-Adapter braucht genau das.
+      - canvaz-assets:/var/lib/canvaz/assets
+    # Beim Beenden schreiben die offenen Boardraeume ihren Stand noch weg; die zehn Sekunden des Standards
+    # sind dafuer knapp.
+    stop_grace_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    expose:
+      - '3000'
+
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      POSTGRES_USER: canvaz
+      POSTGRES_PASSWORD: ${CANVAZ_DB_PASSWORD:?CANVAZ_DB_PASSWORD fehlt in .env.production}
+      POSTGRES_DB: canvaz
+    volumes:
+      - canvaz-postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready --username=canvaz --dbname=canvaz']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    # Kein veroeffentlichter Port: die Datenbank ist ausschliesslich im Compose-Netz erreichbar.
+
+volumes:
+  canvaz-postgres-data:
+  canvaz-assets:
+  caddy-data:
+  caddy-config:

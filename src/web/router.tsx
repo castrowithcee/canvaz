@@ -1,0 +1,345 @@
+/**
+ * Pfadschema und Navigation der angemeldeten Anwendung.
+ *
+ * Eine eigene, schmale Loesung statt einer Routingbibliothek: gebraucht werden das Lesen der Adresse, das
+ * Setzen einer neuen Adresse und die Benachrichtigung der Oberflaeche. Das leistet die History-API mit
+ * `popstate`; eine Abhaengigkeit dafuer waere reiner Zuwachs.
+ *
+ * Die Adressen sind reine Darstellung und entscheiden keine Berechtigung: jede Ansicht laedt ihre Daten
+ * ueber die API, und jede Ablehnung kommt weiterhin serverseitig. Eine Adresse traegt deshalb auch nie ein
+ * Freigabetoken - Gastzugang und Einladung stehen unveraendert unter `GUEST_APP_PATH` und `INVITE_APP_PATH`
+ * und werden vor jedem Sitzungszustand entschieden (siehe `app.tsx`); dieses Modul kennt sie nicht.
+ */
+
+import { useMemo, useSyncExternalStore } from 'react'
+import type { MouseEvent, ReactNode } from 'react'
+
+import type { DashboardFilterView } from '../contracts/api.js'
+import { DASHBOARD_FILTER_PARAM } from '../contracts/api.js'
+import { parseDashboardFilter } from '../domain/board/model.js'
+
+/**
+ * Werte des `panel`-Parameters an einem Board.
+ *
+ * Nur `uebersicht` und `freigaben` sind Bereiche der Informationsleiste: die Uebersicht traegt Ablage und
+ * Lebenszyklus, die Freigaben das interne und oeffentliche Teilen. `versionen` ist **kein** Bereich dieser
+ * Leiste mehr, sondern oeffnet das eigene, breitere Overlay des Versionsverlaufs (`board-versions.tsx`) -
+ * er steht trotzdem hier, weil derselbe Adressparameter ihn traegt und ein alter Direktlink
+ * (`?bereich=versionen`) weiterhin dorthin fuehren soll.
+ */
+export type BoardPanelView = 'uebersicht' | 'freigaben' | 'versionen'
+
+const BOARD_PANELS: readonly BoardPanelView[] = ['uebersicht', 'freigaben', 'versionen']
+
+export type AppRoute =
+  /**
+   * Einstieg nach der Anmeldung: das Dashboard. `filter` ist die aktive Sicht auf seine Liste und steht
+   * damit in der Adresse - sie ist teilbar und uebersteht ein Neuladen. `null` heisst: ungefiltert.
+   */
+  | { readonly kind: 'einstieg'; readonly filter: DashboardFilterView | null }
+  /** Arbeitsbereichsverwaltung: eigene Arbeitsbereiche und das Anlegen eines neuen. */
+  | { readonly kind: 'arbeitsbereiche' }
+  /**
+   * Boards eines Arbeitsbereichs.
+   *
+   * `folder` ist der gewaehlte Ordner und steht damit in der Adresse - sie ist teilbar und uebersteht ein
+   * Neuladen. `null` heisst: alle Boards des Arbeitsbereichs, `root` die ohne Ordner, sonst
+   * genau dieser Ordner. Es sind dieselben drei Werte wie im Endpunkt; die Adresse deutet nichts um.
+   */
+  | { readonly kind: 'arbeitsbereich'; readonly workspaceId: string; readonly folder: string | null }
+  | { readonly kind: 'mitglieder'; readonly workspaceId: string }
+  /** Papierkorb genau eines Arbeitsbereichs. Ein Gast hat ihn nicht; er kennt genau ein Board. */
+  | { readonly kind: 'papierkorb'; readonly workspaceId: string }
+  | { readonly kind: 'einstellungen'; readonly workspaceId: string }
+  /**
+   * Boardeditor im Vollbild. `version` gesetzt heisst: Read-only-Vorschau genau dieser Version.
+   *
+   * `panel` ist der offene Bereich der Informationsleiste und steht damit in der Adresse: er ist teilbar
+   * und uebersteht ein Neuladen. Geschlossen wird sie mit `closeLayer`, das nur dann zurueckgeht, wenn sie
+   * im Board geoeffnet wurde. `null` heisst geschlossen.
+   */
+  | {
+      readonly kind: 'board'
+      readonly workspaceId: string
+      readonly boardId: string
+      readonly version: number | null
+      readonly panel: BoardPanelView | null
+    }
+  /** Eigene Kontoeinstellungen. */
+  | { readonly kind: 'konto' }
+  /** Kontenverwaltung der Systemadministration. */
+  | { readonly kind: 'konten' }
+  /** Keine Ansicht dieser Anwendung. */
+  | { readonly kind: 'unbekannt' }
+
+const WORKSPACES_SEGMENT = 'arbeitsbereiche'
+const BOARDS_SEGMENT = 'boards'
+const MEMBERS_SEGMENT = 'mitglieder'
+const SETTINGS_SEGMENT = 'einstellungen'
+const TRASH_SEGMENT = 'papierkorb'
+const DETAILS_SEGMENT = 'details'
+const ACCOUNT_SEGMENT = 'konto'
+const ADMIN_SEGMENT = 'verwaltung'
+const ADMIN_ACCOUNTS_SEGMENT = 'konten'
+const VERSION_PARAM = 'version'
+const PANEL_PARAM = 'bereich'
+const FOLDER_PARAM = 'ordner'
+
+/** Gewaehlter Ordner aus der Adresse. Ein leerer Wert ist keine Wahl, sondern die ganze Liste. */
+function parseFolder(search: string): string | null {
+  const raw = new URLSearchParams(search).get(FOLDER_PARAM)
+  return raw === null || raw === '' ? null : raw
+}
+
+/**
+ * Aktiver Dashboardfilter aus der Adresse - gelesen mit **derselben** Funktion, mit der auch der Endpunkt
+ * ihn liest. Ein unbekannter Wert ist kein Fehler, sondern kein Filter.
+ */
+function parseFilter(search: string): DashboardFilterView | null {
+  return parseDashboardFilter(new URLSearchParams(search).get(DASHBOARD_FILTER_PARAM))
+}
+
+/** Nummer einer aufbewahrten Version; alles andere ist keine. */
+function parseVersion(search: string): number | null {
+  const raw = new URLSearchParams(search).get(VERSION_PARAM)
+  if (raw === null) {
+    return null
+  }
+  const version = Number(raw)
+  return Number.isInteger(version) && version > 0 ? version : null
+}
+
+/** Offener Bereich der Informationsleiste aus der Adresse. Ein unbekannter Wert heisst: zu. */
+function parseBoardPanel(search: string): BoardPanelView | null {
+  const raw = new URLSearchParams(search).get(PANEL_PARAM)
+  return BOARD_PANELS.find((panel) => panel === raw) ?? null
+}
+
+/**
+ * Liest eine Adresse (`/pfad?abfrage`) als Ansicht. Unbekanntes wird zu `unbekannt` statt zu einem leeren
+ * Bildschirm - die Huelle zeigt dafuer eine benannte Ansicht.
+ */
+export function parseRoute(href: string): AppRoute {
+  const [pathname = '', search = ''] = href.split('?')
+  const segments = pathname.split('/').filter((segment) => segment !== '')
+  const [first, second, third, fourth, fifth] = segments.map((segment) => decodeURIComponent(segment))
+
+  if (first === undefined) {
+    return { kind: 'einstieg', filter: parseFilter(search) }
+  }
+  if (first === ACCOUNT_SEGMENT && second === undefined) {
+    return { kind: 'konto' }
+  }
+  if (first === ADMIN_SEGMENT && second === ADMIN_ACCOUNTS_SEGMENT && third === undefined) {
+    return { kind: 'konten' }
+  }
+  if (first === WORKSPACES_SEGMENT) {
+    if (second === undefined) {
+      return { kind: 'arbeitsbereiche' }
+    }
+    if (third === undefined) {
+      return { kind: 'arbeitsbereich', workspaceId: second, folder: parseFolder(search) }
+    }
+    if (third === MEMBERS_SEGMENT && fourth === undefined) {
+      return { kind: 'mitglieder', workspaceId: second }
+    }
+    if (third === SETTINGS_SEGMENT && fourth === undefined) {
+      return { kind: 'einstellungen', workspaceId: second }
+    }
+    if (third === TRASH_SEGMENT && fourth === undefined) {
+      return { kind: 'papierkorb', workspaceId: second }
+    }
+    if (third === BOARDS_SEGMENT && fourth !== undefined && segments.length === 4) {
+      return {
+        kind: 'board',
+        workspaceId: second,
+        boardId: fourth,
+        version: parseVersion(search),
+        panel: parseBoardPanel(search),
+      }
+    }
+    // Die fruehere Detailseite gibt es nicht mehr; ihre Handlungen stehen in der Informationsleiste. Ein
+    // geteilter alter Link fuehrt deshalb auf dasselbe Board mit geoeffneter Uebersicht.
+    if (third === BOARDS_SEGMENT && fourth !== undefined && fifth === DETAILS_SEGMENT && segments.length === 5) {
+      return { kind: 'board', workspaceId: second, boardId: fourth, version: null, panel: 'uebersicht' }
+    }
+  }
+  return { kind: 'unbekannt' }
+}
+
+/** Die Adresse einer Ansicht. Gegenstueck zu `parseRoute`. */
+export function routeHref(route: AppRoute): string {
+  const workspace = (id: string): string => `/${WORKSPACES_SEGMENT}/${encodeURIComponent(id)}`
+  switch (route.kind) {
+    case 'einstieg':
+      return route.filter === null ? '/' : `/?${DASHBOARD_FILTER_PARAM}=${route.filter}`
+    case 'unbekannt':
+      return '/'
+    case 'arbeitsbereiche':
+      return `/${WORKSPACES_SEGMENT}`
+    case 'arbeitsbereich':
+      return route.folder === null
+        ? workspace(route.workspaceId)
+        : `${workspace(route.workspaceId)}?${FOLDER_PARAM}=${encodeURIComponent(route.folder)}`
+    case 'mitglieder':
+      return `${workspace(route.workspaceId)}/${MEMBERS_SEGMENT}`
+    case 'einstellungen':
+      return `${workspace(route.workspaceId)}/${SETTINGS_SEGMENT}`
+    case 'papierkorb':
+      return `${workspace(route.workspaceId)}/${TRASH_SEGMENT}`
+    case 'board': {
+      const path = `${workspace(route.workspaceId)}/${BOARDS_SEGMENT}/${encodeURIComponent(route.boardId)}`
+      const query = new URLSearchParams()
+      if (route.version !== null) {
+        query.set(VERSION_PARAM, String(route.version))
+      }
+      if (route.panel !== null) {
+        query.set(PANEL_PARAM, route.panel)
+      }
+      const search = query.toString()
+      return search === '' ? path : `${path}?${search}`
+    }
+    case 'konto':
+      return `/${ACCOUNT_SEGMENT}`
+    case 'konten':
+      return `/${ADMIN_SEGMENT}/${ADMIN_ACCOUNTS_SEGMENT}`
+  }
+}
+
+const NAVIGATION_EVENT = 'canvaz:navigation'
+
+/**
+ * Tiefe der von dieser Anwendung erzeugten Historieneintraege.
+ *
+ * Sie steht im Zustand des Eintrags und nicht in einer Variablen: nach einem Neuladen oder einem Sprung
+ * ueber Zurueck und Vorwaerts waere jede Variable falsch. `0` heisst: der Eintrag davor gehoert nicht mehr
+ * dieser Sitzung, ein `history.back()` wuerde die Anwendung verlassen.
+ */
+function historyDepth(): number {
+  const state: unknown = window.history.state
+  if (typeof state === 'object' && state !== null && 'canvazTiefe' in state) {
+    const depth = (state as { readonly canvazTiefe: unknown }).canvazTiefe
+    return typeof depth === 'number' ? depth : 0
+  }
+  return 0
+}
+
+/** Wahr, wenn der aktuelle Eintrag eine Ebene ist, die ueber dem vorigen Eintrag geoeffnet wurde. */
+function isLayer(): boolean {
+  const state: unknown = window.history.state
+  return typeof state === 'object' && state !== null && 'canvazEbene' in state && state.canvazEbene === true
+}
+
+/**
+ * Wechselt die Ansicht.
+ *
+ * `layer` heisst: der neue Eintrag ist eine Ebene ueber dem aktuellen - etwa die Informationsleiste ueber
+ * ihrem Board - und `closeLayer` darf ihn mit `history.back()` wieder verlassen. Ersetzt ein Eintrag eine
+ * Ebene, bleibt er eine; ein ersetzter gewoehnlicher Eintrag wird keine.
+ */
+export function navigate(
+  route: AppRoute,
+  options?: { readonly replace?: boolean; readonly layer?: boolean },
+): void {
+  const href = routeHref(route)
+  const replace = options?.replace === true
+  const layer = options?.layer === true && (!replace || isLayer())
+  const state = { canvazTiefe: historyDepth() + (replace ? 0 : 1), ...(layer ? { canvazEbene: true } : {}) }
+  if (replace) {
+    window.history.replaceState(state, '', href)
+  } else {
+    window.history.pushState(state, '', href)
+  }
+  // `pushState` loest kein `popstate` aus; ohne dieses Ereignis erfuehre die Oberflaeche nichts davon.
+  window.dispatchEvent(new Event(NAVIGATION_EVENT))
+}
+
+/**
+ * Zurueck in die aufrufende Ansicht. Gibt es keine eigene davor - etwa nach einem geteilten Link direkt auf
+ * ein Board -, tritt `fallback` an ihre Stelle, ohne einen weiteren Eintrag zu hinterlassen.
+ */
+export function navigateBack(fallback: AppRoute): void {
+  if (historyDepth() > 0) {
+    window.history.back()
+    return
+  }
+  navigate(fallback, { replace: true })
+}
+
+/**
+ * Schliesst eine Ebene.
+ *
+ * Wurde sie ueber dem vorigen Eintrag geoeffnet, fuehrt `history.back()` genau dorthin zurueck. Sonst - ein
+ * geteilter oder aus einer Liste kommender Link direkt auf die Ebene - wuerde `back()` die Ansicht darunter
+ * verlassen; dann ersetzt `fallback` den Eintrag, und `Zurueck` fuehrt weiter dorthin, woher man kam.
+ */
+export function closeLayer(fallback: AppRoute): void {
+  if (isLayer()) {
+    window.history.back()
+    return
+  }
+  navigate(fallback, { replace: true })
+}
+
+function subscribe(onChange: () => void): () => void {
+  window.addEventListener('popstate', onChange)
+  window.addEventListener(NAVIGATION_EVENT, onChange)
+  return () => {
+    window.removeEventListener('popstate', onChange)
+    window.removeEventListener(NAVIGATION_EVENT, onChange)
+  }
+}
+
+/** Die Adresse als Zeichenkette; sie ist der stabile Wert, aus dem die Ansicht abgeleitet wird. */
+function currentHref(): string {
+  return window.location.pathname + window.location.search
+}
+
+export function useRoute(): AppRoute {
+  const href = useSyncExternalStore(subscribe, currentHref)
+  return useMemo(() => parseRoute(href), [href])
+}
+
+/**
+ * Ein echter Link, der die Ansicht ohne Neuladen wechselt.
+ *
+ * Bewusst ein `<a href>` und kein Button: die Adresse ist teilbar, mit der mittleren Maustaste in einem
+ * neuen Tab zu oeffnen und fuer Hilfsmittel als Link erkennbar. Abgefangen wird nur der schlichte Klick.
+ */
+export function Link({
+  route,
+  children,
+  className,
+  current,
+  role,
+  title,
+}: {
+  readonly route: AppRoute
+  readonly children: ReactNode
+  readonly className?: string
+  /** Kurzhinweis - fuer einen Link, der allein aus einem Symbol und verborgenem Namen besteht. */
+  readonly title?: string
+  /** Wahr, wenn diese Adresse gerade gezeigt wird; sie bekommt dann `aria-current="page"`. */
+  readonly current?: boolean
+  /** Nur fuer einen Link, der zugleich Eintrag eines Menues ist (`menuitem`). */
+  readonly role?: 'menuitem'
+}) {
+  return (
+    <a
+      href={routeHref(route)}
+      className={className}
+      role={role}
+      title={title}
+      aria-current={current === true ? 'page' : undefined}
+      onClick={(event: MouseEvent) => {
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+          return
+        }
+        event.preventDefault()
+        navigate(route)
+      }}
+    >
+      {children}
+    </a>
+  )
+}

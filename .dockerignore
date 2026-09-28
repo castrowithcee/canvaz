@@ -1,0 +1,15 @@
+# Alles, was das Image nicht braucht. Kleiner Kontext, kein versehentlich mitgebautes Geheimnis.
+.git
+.github
+node_modules
+dist
+var
+.env
+.env.*
+*.local
+compose.yml
+compose.prod.yml
+docker
+README.md
+SECURITY.md
+AGENTS.md

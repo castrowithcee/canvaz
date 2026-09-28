@@ -18,6 +18,21 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    services:
+      # Die Repository-Integrationstests laufen gegen eine echte PostgreSQL-Instanz, nicht gegen Attrappen.
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: canvaz
+          POSTGRES_PASSWORD: canvaz
+          POSTGRES_DB: canvaz_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username=canvaz --dbname=canvaz_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -43,6 +58,10 @@ jobs:
         if: ${{ hashFiles('package.json', 'package-lock.json') != '' }}
         run: npm ci
 
+      - name: Audit dependencies
+        if: ${{ hashFiles('package.json', 'package-lock.json') != '' }}
+        run: npm audit --audit-level=high
+
       - name: Lint
         if: ${{ hashFiles('package.json', 'package-lock.json') != '' }}
         run: npm run lint --if-present
@@ -51,8 +70,33 @@ jobs:
         if: ${{ hashFiles('package.json', 'package-lock.json') != '' }}
         run: npm run typecheck --if-present
 
+      # Der s3-Storage-Adapter wird gegen einen echten Objektspeicher geprueft, nicht gegen eine Attrappe.
+      # Kein `services:`-Eintrag: das SeaweedFS-Image braucht ein eigenes Kommando, das dort nicht setzbar ist.
+      # Die Zugangsidentitaet (Zugangsschluessel/Geheimnis, nur fuer Tests) kommt aus der versionierten
+      # `docker/seaweedfs-init/s3-config.json`; SeaweedFS prueft AWS-Signaturen damit tatsaechlich.
+      - name: Start SeaweedFS
+        if: ${{ hashFiles('package.json', 'package-lock.json') != '' }}
+        run: |
+          docker run --detach --name canvaz-seaweedfs \
+            --publish 127.0.0.1:59000:9000 \
+            --volume "$(pwd)/docker/seaweedfs-init/s3-config.json:/etc/seaweedfs/s3.json:ro" \
+            chrislusf/seaweedfs:3.97 server -dir=/data -s3 -s3.port=9000 \
+              -s3.config=/etc/seaweedfs/s3.json -filer=true -ip.bind=0.0.0.0
+          for attempt in $(seq 1 30); do
+            if curl --silent --output /dev/null http://127.0.0.1:59000/; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "SeaweedFS wurde nicht bereit"
+          docker logs canvaz-seaweedfs
+          exit 1
+
       - name: Test
         if: ${{ hashFiles('package.json', 'package-lock.json') != '' }}
+        env:
+          CANVAZ_TEST_DATABASE_URL: postgres://canvaz:canvaz@127.0.0.1:5432/canvaz_test
+          CANVAZ_TEST_S3_ENDPOINT: http://127.0.0.1:59000
         run: npm run test --if-present
 
       - name: Build

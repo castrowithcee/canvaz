@@ -1,0 +1,42 @@
+# Reverse Proxy der Produktionsinstanz.
+#
+# Aufgabe: TLS terminieren, HSTS setzen, Verkehr nur an eine bereite Instanz geben und den Metrikendpunkt
+# nach aussen verschliessen. Alles Fachliche - Sicherheitskopfzeilen, CSP, Ratengrenze, Auth - steht in der
+# Anwendung und wird hier nicht wiederholt.
+#
+# `CANVAZ_SITE_ADDRESS` ist der oeffentliche Name der Instanz, z. B. `canvaz.example.com`. Caddy holt dafuer
+# selbst ein Zertifikat (ACME). Fuer `localhost` stellt es eines aus seiner lokalen CA aus - damit laesst
+# sich dieselbe Konfiguration ohne DNS pruefen.
+
+{
+	# Kein Verwaltungsendpunkt: gebraucht wird er nicht, und er waere eine zweite offene Tuer im Netz.
+	admin off
+}
+
+{$CANVAZ_SITE_ADDRESS} {
+	encode zstd gzip
+
+	header {
+		# HSTS gehoert zur TLS-Terminierung, nicht in die Anwendung.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+
+	# Betriebsmetriken bleiben im Compose-Netz. Sie tragen keine Inhalte, aber auch keinen Zugriffsschutz.
+	respond /api/metrics 404
+
+	reverse_proxy app:3000 {
+		# Die Bereitschaft der Anwendung entscheidet ueber den Verkehr: solange Datenbank oder Assetspeicher
+		# fehlen, antwortet `/api/ready` mit 503, Caddy nimmt die Instanz aus dem Verkehr und beantwortet
+		# Anfragen mit 502 - statt sie in eine halb arbeitsfaehige Instanz zu geben.
+		health_uri /api/ready
+		health_interval 5s
+		health_timeout 3s
+
+		# Die Echtzeitstrecke haelt Verbindungen ueber Stunden offen; der Herzschlag der Anwendung liegt bei
+		# 30 Sekunden.
+		transport http {
+			read_timeout 300s
+		}
+	}
+}
