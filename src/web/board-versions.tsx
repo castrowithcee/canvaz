@@ -334,6 +334,25 @@ function BoardVersionsContent({
         </Notice>
       )}
 
+      <h3>Verlauf</h3>
+      {versions.length === 0 ? (
+        <Empty text="Zu diesem Board wurde noch nichts gespeichert. Sobald jemand zeichnet, entstehen hier Versionen." />
+      ) : (
+        <ul className="rows">
+          {versions.map((version) => (
+            <VersionRow
+              key={version.version}
+              version={version}
+              current={version.version === board.sceneVersion}
+              restorable={restorable}
+              selection={rowSelection(String(version.version))}
+              onPreview={onPreview}
+              onRequestRestore={setRestoreTarget}
+            />
+          ))}
+        </ul>
+      )}
+
       <h3>Export</h3>
       <p>
         Der Export ist eine einzelne <code>.excalidraw</code>-Datei im offenen Format, mit allen Bildern des
@@ -399,25 +418,6 @@ function BoardVersionsContent({
             </p>
           </form>
         </>
-      )}
-
-      <h3>Verlauf</h3>
-      {versions.length === 0 ? (
-        <Empty text="Zu diesem Board wurde noch nichts gespeichert. Sobald jemand zeichnet, entstehen hier Versionen." />
-      ) : (
-        <ul className="rows">
-          {versions.map((version) => (
-            <VersionRow
-              key={version.version}
-              version={version}
-              current={version.version === board.sceneVersion}
-              restorable={restorable}
-              selection={rowSelection(String(version.version))}
-              onPreview={onPreview}
-              onRequestRestore={setRestoreTarget}
-            />
-          ))}
-        </ul>
       )}
 
       <Dialog

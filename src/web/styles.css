@@ -1842,6 +1842,11 @@
     text-decoration: none;
   }
 
+  /* Feste Breite, damit die Spalte Zeitpunkt auch neben dem Abzeichen der aktuellen Zeile fluchtet. */
+  .version-row .row__label {
+    flex: 0 0 16rem;
+  }
+
   .version-row__meta {
     color: var(--color-text-muted);
     display: flex;
