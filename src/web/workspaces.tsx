@@ -25,13 +25,13 @@ import {
   ApiError,
   addWorkspaceMember,
   changeWorkspaceMemberRole,
-  createWorkspace,
   fetchMemberCandidates,
   fetchWorkspaceMembers,
   removeWorkspaceMember,
   renameWorkspace,
   setWorkspaceStatus,
 } from './api.js'
+import { CreateWorkspaceDialog } from './create-workspace.js'
 import { Dialog } from './overlays.js'
 import { Link } from './router.js'
 import { Badge, Button, describedBy, Field, Notice, PageState, TableSkeleton } from './ui.js'
@@ -70,53 +70,6 @@ function RoleBadge({ role }: { readonly role: WorkspaceRoleView | null }) {
 
 function StatusBadge({ status }: { readonly status: WorkspaceView['status'] }) {
   return status === 'active' ? <Badge tone="success">aktiv</Badge> : <Badge>archiviert</Badge>
-}
-
-function CreateWorkspace({ me, onCreated }: { readonly me: MeResponse; readonly onCreated: () => void }) {
-  const [name, setName] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-
-  return (
-    <form
-      className="stack card"
-      onSubmit={(event) => {
-        event.preventDefault()
-        setBusy(true)
-        setError(null)
-        createWorkspace(me.csrfToken, name)
-          .then(() => {
-            setName('')
-            onCreated()
-          })
-          .catch((cause: unknown) => {
-            setError(messageOf(cause, 'Der Arbeitsbereich konnte nicht angelegt werden.'))
-          })
-          .finally(() => {
-            setBusy(false)
-          })
-      }}
-    >
-      <Field id="workspace-name" label="Name des neuen Arbeitsbereichs">
-        <input
-          id="workspace-name"
-          name="name"
-          value={name}
-          maxLength={80}
-          required
-          onChange={(event) => {
-            setName(event.target.value)
-          }}
-        />
-      </Field>
-      <p>
-        <Button variant="primary" type="submit" busy={busy} disabled={name.trim().length === 0}>
-          Arbeitsbereich anlegen
-        </Button>
-      </p>
-      {error !== null && <Notice text={error} />}
-    </form>
-  )
 }
 
 /**
@@ -664,15 +617,35 @@ export function WorkspaceMembers({
 export function WorkspaceOverview({
   me,
   workspaces,
-  onChanged,
+  onCreated,
 }: {
   readonly me: MeResponse
   readonly workspaces: readonly WorkspaceView[]
-  readonly onChanged: () => void
+  readonly onCreated: (workspace: WorkspaceView) => void
 }) {
+  const [creating, setCreating] = useState(false)
+
   return (
     <section aria-labelledby="workspaces-heading">
       <h2 id="workspaces-heading">Arbeitsbereiche</h2>
+      <p>
+        <Button
+          variant="primary"
+          onClick={() => {
+            setCreating(true)
+          }}
+        >
+          Arbeitsbereich anlegen
+        </Button>
+      </p>
+      <CreateWorkspaceDialog
+        me={me}
+        open={creating}
+        onClose={() => {
+          setCreating(false)
+        }}
+        onCreated={onCreated}
+      />
       {workspaces.length === 0 && (
         <PageState
           kind="empty"
@@ -717,9 +690,6 @@ export function WorkspaceOverview({
           </table>
         </div>
       )}
-
-      <h3>Neuen Arbeitsbereich anlegen</h3>
-      <CreateWorkspace me={me} onCreated={onChanged} />
     </section>
   )
 }

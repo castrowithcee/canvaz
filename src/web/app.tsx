@@ -63,7 +63,6 @@ import {
   RECOVERY_APP_PATH,
   RECOVERY_EMAIL_CONFIRM_APP_PATH,
 } from '../contracts/api.js'
-import { MAX_WORKSPACE_NAME_LENGTH } from '../domain/workspace/model.js'
 import {
   AppearanceSettings,
   ConfirmRecoveryEmailApp,
@@ -74,7 +73,7 @@ import {
   RecoveryEmailSettings,
 } from './account.js'
 import { AdminUsers } from './admin-users.js'
-import { ApiError, createWorkspace, fetchMe, fetchWorkspaces, logout } from './api.js'
+import { ApiError, fetchMe, fetchWorkspaces, logout } from './api.js'
 import { applyAppearance } from './appearance.js'
 import { BoardEditor } from './board/lazy-editor.js'
 import { BoardTrash } from './board-trash.js'
@@ -84,7 +83,8 @@ import type { Explorer } from './explorer.js'
 import { ExplorerTree, useExplorer } from './explorer.js'
 import { GuestApp } from './guest.js'
 import { SecondFactorGate, SecondFactorSettings } from './second-factor.js'
-import { Drawer, Menu, MenuItem, MenuLinkItem, NameDialog } from './overlays.js'
+import { CreateWorkspaceDialog } from './create-workspace.js'
+import { Drawer, Menu, MenuItem, MenuLinkItem } from './overlays.js'
 import type { AppRoute, BoardPanelView } from './router.js'
 import { closeLayer, Link, navigate, navigateBack, routeHref, useRoute } from './router.js'
 import { actionClass, Button, IconButton, Loading, Notice, PageState } from './ui.js'
@@ -363,24 +363,13 @@ function Sidebar({
         </>
       )}
 
-      <NameDialog
+      <CreateWorkspaceDialog
+        me={me}
         open={creating}
-        title="Arbeitsbereich anlegen"
-        label="Name des neuen Arbeitsbereichs"
-        maxLength={MAX_WORKSPACE_NAME_LENGTH}
-        submitLabel="Arbeitsbereich anlegen"
-        errorOf={(cause) =>
-          cause instanceof ApiError ? cause.message : 'Der Arbeitsbereich konnte nicht angelegt werden.'
-        }
-        onSubmit={(name) =>
-          createWorkspace(me.csrfToken, name).then((workspace) => {
-            setCreating(false)
-            onWorkspaceCreated(workspace)
-          })
-        }
         onClose={() => {
           setCreating(false)
         }}
+        onCreated={onWorkspaceCreated}
       />
     </nav>
   )
@@ -422,6 +411,7 @@ function Content({
   workspace,
   explorer,
   onWorkspacesChanged,
+  onWorkspaceCreated,
   onProfileChanged,
   onAppearanceChanged,
   onBoardsChanged,
@@ -433,6 +423,7 @@ function Content({
   readonly workspace: WorkspaceView | null
   readonly explorer: Explorer
   readonly onWorkspacesChanged: () => void
+  readonly onWorkspaceCreated: (workspace: WorkspaceView) => void
   readonly onProfileChanged: () => void
   readonly onAppearanceChanged: (appearance: AppearanceView) => void
   readonly onBoardsChanged: () => void
@@ -440,10 +431,16 @@ function Content({
   switch (route.kind) {
     case 'einstieg':
       return (
-        <Dashboard me={me} workspaces={workspaces} filter={route.filter} onBoardsChanged={onBoardsChanged} />
+        <Dashboard
+          me={me}
+          workspaces={workspaces}
+          filter={route.filter}
+          onBoardsChanged={onBoardsChanged}
+          onWorkspaceCreated={onWorkspaceCreated}
+        />
       )
     case 'arbeitsbereiche':
-      return <WorkspaceOverview me={me} workspaces={workspaces} onChanged={onWorkspacesChanged} />
+      return <WorkspaceOverview me={me} workspaces={workspaces} onCreated={onWorkspaceCreated} />
     case 'arbeitsbereich':
     case 'mitglieder':
     case 'einstellungen':
@@ -538,6 +535,14 @@ function Shell({
   }, [])
 
   useEffect(load, [load])
+
+  function handleWorkspaceCreated(workspace: WorkspaceView): void {
+    // Der neue Arbeitsbereich steht sofort in der Liste; sonst meldete die Zielansicht ihn bis zum
+    // Neuladen als unbekannt.
+    setWorkspaces((was) => [...(was ?? []), workspace])
+    navigate({ kind: 'arbeitsbereich', workspaceId: workspace.id, folder: null })
+    load()
+  }
 
   const routeWorkspaceId = 'workspaceId' in route ? route.workspaceId : null
   useEffect(() => {
@@ -725,13 +730,7 @@ function Shell({
             active={activeWorkspace}
             route={route}
             explorer={explorer}
-            onWorkspaceCreated={(workspace) => {
-              // Der neue Arbeitsbereich steht sofort in der Liste; sonst meldete die Zielansicht ihn bis zum
-              // Neuladen als unbekannt.
-              setWorkspaces((was) => [...(was ?? []), workspace])
-              navigate({ kind: 'arbeitsbereich', workspaceId: workspace.id, folder: null })
-              load()
-            }}
+            onWorkspaceCreated={handleWorkspaceCreated}
           />
         </div>
       </Drawer>
@@ -744,6 +743,7 @@ function Shell({
           workspace={routeWorkspace}
           explorer={explorer}
           onWorkspacesChanged={load}
+          onWorkspaceCreated={handleWorkspaceCreated}
           onProfileChanged={onReload}
           onAppearanceChanged={onAppearanceChanged}
           onBoardsChanged={explorer.reload}
