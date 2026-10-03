@@ -439,8 +439,9 @@ nicht angenommen.
 
 **Pruefen:** Die Systemadministration zeigt unter "Client-Adresse dieser Anfrage"
 (`GET /api/admin/client-address`) Adresse und Klasse der eigenen aktuellen Anfrage - oeffentlich, privat,
-Loopback oder die Adresse des Proxys selbst - ohne sie zu speichern. IPv4-gemappte IPv6-Adressen
-(`::ffff:a.b.c.d`) werden dabei auf ihre IPv4-Form zurueckgefuehrt; private Bereiche sind RFC 1918, CGNAT
+Loopback oder die Adresse des Proxys selbst - ohne sie zu speichern. "Erneut ermitteln" fragt neu an und
+bestaetigt den Erfolg mit "Zuletzt ermittelt um ..."; der Zeitpunkt lebt nur in der geoeffneten Ansicht.
+IPv4-gemappte IPv6-Adressen (`::ffff:a.b.c.d`) werden dabei auf ihre IPv4-Form zurueckgefuehrt; private Bereiche sind RFC 1918, CGNAT
 (`100.64.0.0/10`), Link-Local und die IPv6-ULA (`fc00::/7`).
 
 Sieht die Instanz ueber viele Anfragen hinweg ueberwiegend nicht-oeffentliche Adressen, steht dazu beim
