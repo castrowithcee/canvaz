@@ -1337,6 +1337,12 @@
    * Eigenschaften beginnen damit 0.5rem unter der Unterkante der Gruppen - so nah wie moeglich, ohne dass
    * etwas ueberdeckt wird. Gestaltet wird an Excalidraw nichts, und die Zeichnung selbst laeuft unter den
    * Gruppen weiter. Vor der ersten Messung gilt eine Reihe als Vorgabe (0.5rem Rand + 54px Gruppe).
+   *
+   * Die Hoehe des Eigenschaftenpanels begrenzt Excalidraw inline auf `Hoehe - 166px` und rechnet dabei mit
+   * einem Panel, das unter dem Sicherheitsabstand von (fast) null beginnt. Rueckt `--sat` die Reihe nach
+   * unten, reichte das Panel sonst ueber die Zoom- und Undo-Leiste. Die Regel zieht den Abstand ab; das Panel
+   * bleibt bei Platzmangel scrollbar (`overflow-y: auto` von Excalidraw). Nur der Wert wird ersetzt, weil
+   * Excalidraw ihn inline setzt.
    */
   .board {
     --sat: max(
@@ -1348,6 +1354,10 @@
     flex-direction: column;
     height: 100dvh;
     position: relative;
+  }
+
+  .board .excalidraw .App-menu__left {
+    max-height: calc(100dvh - 166px - var(--sat)) !important;
   }
 
   /*
