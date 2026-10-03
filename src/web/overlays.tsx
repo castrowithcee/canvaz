@@ -126,8 +126,11 @@ export function Dialog({
       ref={ref}
       className={className}
       aria-labelledby={titleId}
-      onClose={() => {
-        reportClose(selbstGeschlossen, onClose)
+      onClose={(event) => {
+        // `close` laeuft in React durch den Baum: ein verschachteltes `dialog` darf das aeussere nicht schliessen.
+        if (event.target === event.currentTarget) {
+          reportClose(selbstGeschlossen, onClose)
+        }
       }}
       onClick={(event) => {
         // Ein Klick trifft das `dialog` selbst nur ausserhalb seines Inhalts - das ist die Abdunklung.
@@ -176,8 +179,11 @@ export function Drawer({
       ref={ref}
       className={className}
       aria-label={title}
-      onClose={() => {
-        reportClose(selbstGeschlossen, onClose)
+      onClose={(event) => {
+        // `close` laeuft in React durch den Baum: ein verschachteltes `dialog` darf das aeussere nicht schliessen.
+        if (event.target === event.currentTarget) {
+          reportClose(selbstGeschlossen, onClose)
+        }
       }}
     >
       <div className="drawer__head">
