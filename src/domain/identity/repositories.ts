@@ -174,8 +174,10 @@ export interface SenderBlockRepository {
     proposalWindowDays: number,
   ): Promise<SenderBlockUpsertResult>
   /**
-   * Hebt eine aktive Sperre vorzeitig auf (Hostbefehl `sender-block unblock`). `false` heisst: keine aktive
-   * Sperre dieser Adresse - eine abgelaufene braucht kein Aufheben mehr.
+   * Beendet eine aktive Sperre vorzeitig (Hostbefehl `sender-block unblock`), indem sie ablaeuft. Die Zeile
+   * bleibt als Vorgeschichte bestehen, eine erneute Sperre binnen des Vorschlagsfensters erzeugt also weiter
+   * einen Vorschlag; entfernt wird sie nur ueber die Aufbewahrungsfrist. `false` heisst: keine aktive Sperre
+   * dieser Adresse - eine abgelaufene braucht kein Aufheben mehr.
    */
   liftActive(address: string, now: Date): Promise<boolean>
 }

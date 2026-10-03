@@ -8,9 +8,10 @@
  * - `list` zeigt aktive vorlaeufige Sperren und offene Vorschlaege fuer eine dauerhafte Sperre. Ein
  *   IPv6-Praefix erscheint als CIDR in kanonischer Form (`2001:db8:0:1::/64`), eine IPv4-Adresse
  *   unveraendert - beides direkt uebernehmbar in eine Firewallregel der eigenen Umgebung.
- * - `unblock <adresse>` hebt eine aktive vorlaeufige Sperre vorzeitig auf. Die Adresse wird wie beim
- *   Zaehlen selbst gebildet (IPv4-gemappt -> IPv4, IPv6 -> /64-Praefix): eine beliebige Adresse aus dem
- *   gesperrten /64-Netz findet dieselbe Sperre.
+ * - `unblock <adresse>` beendet eine aktive vorlaeufige Sperre vorzeitig; die Vorgeschichte bleibt bis zur
+ *   Aufbewahrungsfrist erhalten, eine erneute Sperre binnen 30 Tagen erzeugt weiter einen Vorschlag. Die
+ *   Adresse wird wie beim Zaehlen selbst gebildet (IPv4-gemappt -> IPv4, IPv6 -> /64-Praefix): eine
+ *   beliebige Adresse aus dem gesperrten /64-Netz findet dieselbe Sperre.
  * - `decide <id> accepted|rejected` markiert einen Vorschlag als entschieden. Diese Anwendung sperrt dadurch
  *   **nichts** dauerhaft und fasst nie eine Firewall an - eine angenommene Entscheidung ist eine Erinnerung
  *   an den Betreiber, die dauerhafte Sperre selbst mit den Mitteln seiner Umgebung einzurichten (README,
