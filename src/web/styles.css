@@ -1647,6 +1647,7 @@
     background: transparent;
     border: 0;
     border-radius: var(--radius-md);
+    box-shadow: none;
     color: var(--color-text-muted);
     display: flex;
     flex: none;
@@ -1660,6 +1661,10 @@
   /* Kein eigener Hover-Kasten: die Zeile hebt sich als Ganzes ab (`.tree__row:hover`, Medienblock unten). */
   .tree__twisty:hover {
     color: var(--color-text);
+  }
+
+  .tree__twisty[aria-expanded] {
+    background: transparent;
   }
 
   .tree__label {
@@ -1690,11 +1695,15 @@
    * Die aktuelle Auswahl traegt mehr als Farbe: einen Balken am Rand und fettere Schrift. Wer Farben nicht
    * unterscheidet, erkennt sie trotzdem.
    */
+  .sidebar__list a[aria-current='page'],
+  .tree__row:has(> .tree__label[aria-current='page']) {
+    background: var(--color-accent-soft);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 24%, transparent);
+  }
+
   .tree__label[aria-current='page'],
   .sidebar__list a[aria-current='page'] {
-    background: var(--color-accent-soft);
     font-weight: 600;
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 24%, transparent);
   }
 
   /* Der Ausloeser des Arbeitsbereichswechsels traegt seinen Namen und fuellt die Leiste. */
@@ -1818,6 +1827,15 @@
     min-width: 0;
   }
 
+  /* Aktionen stehen stets ganz rechts, das Kontextmenue als letztes Element; Beiwerk liegt links davon. */
+  .row__actions {
+    margin-inline-start: auto;
+  }
+
+  .row__meta + .row__actions {
+    margin-inline-start: 0;
+  }
+
   /* Die Handlungen einer Zeile: haeufige als Symbol, dahinter das Kontextmenue. */
   .row__actions {
     align-items: center;
@@ -1872,11 +1890,11 @@
       background: var(--color-surface-muted);
     }
 
-    .tree__row:hover > .tree__label[aria-current='page'] {
+    .tree__row:hover:has(> .tree__label[aria-current='page']) {
       background: var(--color-accent-soft);
     }
 
-    :is(.row__actions, .tree__row) :is(.button--quiet, .tree__twisty):hover {
+    :is(.row__actions, .tree__row) :is(.button--quiet, .tree__twisty):is(:hover, [aria-expanded]) {
       background: transparent;
     }
 
