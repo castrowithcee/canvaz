@@ -297,11 +297,12 @@ export function TableSkeleton({
 /**
  * Die ausgewaehlte Zeile einer Liste - der Weg zu ihren Aktionen ohne Hover.
  *
- * Zeilenaktionen erscheinen nur an der ausgewaehlten, gehoverten oder fokussierten Zeile (`styles.css`).
- * Beruehrung kennt kein Hover: ein Tipp auf die freie Flaeche einer Zeile waehlt sie deshalb aus, ein
- * zweiter wieder ab. Ein Tipp auf ihren Link oeffnet weiterhin direkt, eine Schaltflaeche handelt wie immer.
- * Tastatur und Hilfsmittel brauchen die Auswahl nicht: die Aktionen bleiben in der Tabulatorfolge und
- * erscheinen mit dem Fokus.
+ * Zeilenaktionen erscheinen mit Zeiger nur an der ausgewaehlten, gehoverten oder fokussierten Zeile
+ * (`styles.css`): ein Klick auf die freie Flaeche einer Zeile waehlt sie aus, ein zweiter wieder ab. Ein
+ * Klick auf ihren Link oeffnet weiterhin direkt, eine Schaltflaeche handelt wie immer. Auf Geraeten ohne
+ * Hover (Touch) gibt es keine Auswahl: dort traegt jede Zeile ihr Menue dauerhaft, und eine Zeile mit Ziel
+ * oeffnet per Tipp. Tastatur und Hilfsmittel brauchen die Auswahl nicht: die Aktionen bleiben in der
+ * Tabulatorfolge und erscheinen mit dem Fokus.
  */
 export function useRowSelection(): (id: string) => {
   readonly className: string
@@ -314,6 +315,7 @@ export function useRowSelection(): (id: string) => {
       // Nur ein Tipp in der Zeile selbst: React reicht auch Klicks aus dem Portal eines Menues hierher.
       const target = event.target
       if (
+        window.matchMedia('(hover: hover)').matches &&
         target instanceof Element &&
         event.currentTarget.contains(target) &&
         target.closest('a, button, input, select, textarea') === null

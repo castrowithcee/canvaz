@@ -24,7 +24,7 @@ import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
-import { Button, describedBy, Field, IconButton } from './ui.js'
+import { type ActionVariant, Button, describedBy, Field, IconButton } from './ui.js'
 
 /**
  * Haelt ein `dialog`-Element im Gleichlauf mit `open`.
@@ -126,8 +126,11 @@ export function Dialog({
       ref={ref}
       className={className}
       aria-labelledby={titleId}
-      onClose={() => {
-        reportClose(selbstGeschlossen, onClose)
+      onClose={(event) => {
+        // `close` laeuft in React durch den Baum: ein verschachteltes `dialog` darf das aeussere nicht schliessen.
+        if (event.target === event.currentTarget) {
+          reportClose(selbstGeschlossen, onClose)
+        }
       }}
       onClick={(event) => {
         // Ein Klick trifft das `dialog` selbst nur ausserhalb seines Inhalts - das ist die Abdunklung.
@@ -176,8 +179,11 @@ export function Drawer({
       ref={ref}
       className={className}
       aria-label={title}
-      onClose={() => {
-        reportClose(selbstGeschlossen, onClose)
+      onClose={(event) => {
+        // `close` laeuft in React durch den Baum: ein verschachteltes `dialog` darf das aeussere nicht schliessen.
+        if (event.target === event.currentTarget) {
+          reportClose(selbstGeschlossen, onClose)
+        }
       }}
     >
       <div className="drawer__head">
@@ -319,6 +325,7 @@ export function Menu({
   label,
   icon,
   text,
+  variant,
   children,
 }: {
   /**
@@ -338,6 +345,8 @@ export function Menu({
    * aktuellen Stand nennt (etwa den gewaehlten Arbeitsbereich); `label` bleibt daneben ihr voller Name.
    */
   readonly text?: string
+  /** Aussehen des reinen Symbol-Ausloesers; `quiet` ohne eigene Flaeche, etwa auf einer Zeile. */
+  readonly variant?: ActionVariant
   readonly children: ReactNode
 }) {
   const [open, setOpen] = useState(false)
@@ -455,6 +464,7 @@ export function Menu({
           id={id}
           label={label}
           icon={icon}
+          {...(variant === undefined ? {} : { variant })}
           aria-haspopup="menu"
           aria-expanded={open}
           aria-controls={open ? menuId : undefined}

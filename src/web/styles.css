@@ -1337,6 +1337,12 @@
    * Eigenschaften beginnen damit 0.5rem unter der Unterkante der Gruppen - so nah wie moeglich, ohne dass
    * etwas ueberdeckt wird. Gestaltet wird an Excalidraw nichts, und die Zeichnung selbst laeuft unter den
    * Gruppen weiter. Vor der ersten Messung gilt eine Reihe als Vorgabe (0.5rem Rand + 54px Gruppe).
+   *
+   * Die Hoehe des Eigenschaftenpanels begrenzt Excalidraw inline auf `Hoehe - 166px` und rechnet dabei mit
+   * einem Panel, das unter dem Sicherheitsabstand von (fast) null beginnt. Rueckt `--sat` die Reihe nach
+   * unten, reichte das Panel sonst ueber die Zoom- und Undo-Leiste. Die Regel zieht den Abstand ab; das Panel
+   * bleibt bei Platzmangel scrollbar (`overflow-y: auto` von Excalidraw). Nur der Wert wird ersetzt, weil
+   * Excalidraw ihn inline setzt.
    */
   .board {
     --sat: max(
@@ -1348,6 +1354,10 @@
     flex-direction: column;
     height: 100dvh;
     position: relative;
+  }
+
+  .board .excalidraw .App-menu__left {
+    max-height: calc(100dvh - 166px - var(--sat)) !important;
   }
 
   /*
@@ -1626,6 +1636,7 @@
 
   .tree__row {
     align-items: center;
+    border-radius: var(--radius-md);
     display: flex;
     gap: --spacing(1);
     position: relative;
@@ -1636,6 +1647,7 @@
     background: transparent;
     border: 0;
     border-radius: var(--radius-md);
+    box-shadow: none;
     color: var(--color-text-muted);
     display: flex;
     flex: none;
@@ -1646,9 +1658,13 @@
     width: var(--spacing-touch);
   }
 
+  /* Kein eigener Hover-Kasten: die Zeile hebt sich als Ganzes ab (`.tree__row:hover`, Medienblock unten). */
   .tree__twisty:hover {
-    background: var(--color-surface-muted);
     color: var(--color-text);
+  }
+
+  .tree__twisty[aria-expanded] {
+    background: transparent;
   }
 
   .tree__label {
@@ -1664,8 +1680,9 @@
     text-decoration: none;
   }
 
-  .tree__label:hover {
-    background: var(--color-surface-muted);
+  .tree__label > svg,
+  .row__label > svg {
+    flex-shrink: 0;
   }
 
   .tree__name {
@@ -1678,11 +1695,15 @@
    * Die aktuelle Auswahl traegt mehr als Farbe: einen Balken am Rand und fettere Schrift. Wer Farben nicht
    * unterscheidet, erkennt sie trotzdem.
    */
+  .sidebar__list a[aria-current='page'],
+  .tree__row:has(> .tree__label[aria-current='page']) {
+    background: var(--color-accent-soft);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 24%, transparent);
+  }
+
   .tree__label[aria-current='page'],
   .sidebar__list a[aria-current='page'] {
-    background: var(--color-accent-soft);
     font-weight: 600;
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 24%, transparent);
   }
 
   /* Der Ausloeser des Arbeitsbereichswechsels traegt seinen Namen und fuellt die Leiste. */
@@ -1763,7 +1784,7 @@
     border-top: 1px solid var(--color-border);
   }
 
-  .row:hover,
+  /* Hover gibt es nur mit Zeiger (Medienblock unten); die Auswahl per Tipp nur dort, nicht auf Touch. */
   .row--selected {
     background: color-mix(in srgb, var(--color-accent-soft) 40%, var(--color-surface));
   }
@@ -1806,6 +1827,15 @@
     min-width: 0;
   }
 
+  /* Aktionen stehen stets ganz rechts, das Kontextmenue als letztes Element; Beiwerk liegt links davon. */
+  .row__actions {
+    margin-inline-start: auto;
+  }
+
+  .row__meta + .row__actions {
+    margin-inline-start: 0;
+  }
+
   /* Die Handlungen einer Zeile: haeufige als Symbol, dahinter das Kontextmenue. */
   .row__actions {
     align-items: center;
@@ -1827,6 +1857,11 @@
     text-decoration: none;
   }
 
+  /* Feste Breite, damit die Spalte Zeitpunkt auch neben dem Abzeichen der aktuellen Zeile fluchtet. */
+  .version-row .row__label {
+    flex: 0 0 16rem;
+  }
+
   .version-row__meta {
     color: var(--color-text-muted);
     display: flex;
@@ -1838,13 +1873,31 @@
   }
 
   /*
-   * Zeilenaktionen - Schnellaktionen, Optionsmenue, Aufklappschalter des Baums - erscheinen nur an der
-   * ausgewaehlten, gehoverten oder fokussierten Zeile; ein offenes Menue und der aktuelle Eintrag des Baums
-   * halten ihre Zeile aktiv. Im Ruhezustand nehmen sie **keine** Breite ein, bleiben aber in der
+   * Zeilenaktionen - Schnellaktionen, Optionsmenue, Aufklappschalter des Baums - erscheinen mit Zeiger nur an
+   * der ausgewaehlten, gehoverten oder fokussierten Zeile; ein offenes Menue und der aktuelle Eintrag des
+   * Baums halten ihre Zeile aktiv. Im Ruhezustand nehmen sie **keine** Breite ein, bleiben aber in der
    * Tabulatorfolge und bei Hilfsmitteln: der Fokus darauf macht die Zeile aktiv und sie sichtbar.
-   * Beruehrung kennt kein Hover (und ein haengengebliebenes waere irrefuehrend); dort waehlt ein Tipp aus.
+   * Beim Hover hebt sich die ganze Zeile als eine Flaeche ab wie in der Tabelle (`.table tbody tr:hover`);
+   * Aktionen und Aufklappschalter liegen darauf und tragen keinen eigenen Hover-Kasten. Der aktuelle
+   * Baumeintrag behaelt seine eigene Hervorhebung (`aria-current`).
    */
   @media (hover: hover) {
+    .row:hover {
+      background: color-mix(in srgb, var(--color-accent-soft) 40%, var(--color-surface));
+    }
+
+    .tree__row:hover {
+      background: var(--color-surface-muted);
+    }
+
+    .tree__row:hover:has(> .tree__label[aria-current='page']) {
+      background: var(--color-accent-soft);
+    }
+
+    :is(.row__actions, .tree__row) :is(.button--quiet, .tree__twisty):is(:hover, [aria-expanded]) {
+      background: transparent;
+    }
+
     :is(.row, .tree__row):not(
         :hover,
         :focus-within,
@@ -1861,19 +1914,39 @@
     }
   }
 
+  /*
+   * Touch kennt kein Hover und waehlt keine Zeilen aus: ein Tipp irgendwo auf eine Zeile mit Ziel oeffnet es
+   * (die Flaeche des Links reicht ueber die ganze Zeile), das Optionsmenue liegt darueber und ist an jeder
+   * Zeile stets sichtbar. Schnellaktionen entfallen - alles steht im Menue. Der Aufklappschalter des Baums
+   * erscheint wie bisher nur bei Fokus oder am aktuellen Eintrag.
+   */
   @media (hover: none) {
-    :is(.row, .tree__row):not(
+    .tree__row:not(
         :focus-within,
-        .row--selected,
         :has([aria-current='page'], [aria-haspopup][aria-expanded='true'])
       )
-      > :is(.row__actions, .tree__twisty) {
+      > .tree__twisty {
       clip-path: inset(50%);
       height: 1px;
       overflow: hidden;
       position: absolute;
       white-space: nowrap;
       width: 1px;
+    }
+
+    .row__quick {
+      display: none;
+    }
+
+    a.row__label::after {
+      content: '';
+      inset: 0;
+      position: absolute;
+    }
+
+    .row__actions {
+      position: relative;
+      z-index: 1;
     }
   }
 

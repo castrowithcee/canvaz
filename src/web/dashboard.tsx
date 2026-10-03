@@ -19,8 +19,9 @@ import type { DashboardBoardView, DashboardFilterView, MeResponse, WorkspaceView
 import { DASHBOARD_FILTERS } from '../contracts/api.js'
 import { MAX_BOARD_TITLE_LENGTH } from '../domain/board/model.js'
 import { ApiError, createBoard, fetchDashboard } from './api.js'
+import { CreateWorkspaceDialog } from './create-workspace.js'
 import { Link, navigate } from './router.js'
-import { Empty, Loading, Notice } from './ui.js'
+import { Button, Empty, Loading, Notice } from './ui.js'
 
 /** Beschriftung der vier Filter. Dieselbe Reihenfolge wie `DASHBOARD_FILTERS`. */
 const FILTER_LABELS: Readonly<Record<DashboardFilterView, string>> = {
@@ -67,6 +68,7 @@ export function Dashboard({
   workspaces,
   filter,
   onBoardsChanged,
+  onWorkspaceCreated,
 }: {
   readonly me: MeResponse
   /** Alle sichtbaren Arbeitsbereiche - Grundlage der Zielauswahl beim Anlegen und des leeren Zustands. */
@@ -74,6 +76,8 @@ export function Dashboard({
   readonly filter: DashboardFilterView | null
   /** Meldet ein neu angelegtes Board, damit die Seitenleiste der Huelle mitzieht. */
   readonly onBoardsChanged: () => void
+  /** Meldet einen aus dem leeren Zustand angelegten Arbeitsbereich an die Huelle. */
+  readonly onWorkspaceCreated: (workspace: WorkspaceView) => void
 }) {
   const [boards, setBoards] = useState<readonly DashboardBoardView[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -84,6 +88,7 @@ export function Dashboard({
   const [targetId, setTargetId] = useState('')
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+  const [creatingWorkspace, setCreatingWorkspace] = useState(false)
 
   const load = useCallback(() => {
     setError(null)
@@ -116,10 +121,23 @@ export function Dashboard({
           deshalb zuerst einen an, danach entsteht dein erstes Board hier.
         </p>
         <p>
-          <Link className="button button--primary" route={{ kind: 'arbeitsbereiche' }}>
+          <Button
+            variant="primary"
+            onClick={() => {
+              setCreatingWorkspace(true)
+            }}
+          >
             Ersten Arbeitsbereich anlegen
-          </Link>
+          </Button>
         </p>
+        <CreateWorkspaceDialog
+          me={me}
+          open={creatingWorkspace}
+          onClose={() => {
+            setCreatingWorkspace(false)
+          }}
+          onCreated={onWorkspaceCreated}
+        />
       </section>
     )
   }

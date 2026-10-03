@@ -127,7 +127,7 @@ function EntryMenu({
   }
 
   return (
-    <Menu id={menuId(targetId(target))} label={`Aktionen fuer ${name}`} icon={EllipsisVertical}>
+    <Menu id={menuId(targetId(target))} label={`Aktionen fuer ${name}`} icon={EllipsisVertical} variant="quiet">
       {editable && (
         <MenuItem
           icon={Pencil}
@@ -195,7 +195,9 @@ function EntryMenu({
  * Die haeufigen Handlungen eines Eintrags, direkt an der Zeile.
  *
  * Sie erscheinen mit dem Kontextmenue an der ausgewaehlten, gehoverten oder fokussierten Zeile, damit die
- * Liste ruhig bleibt; auf Beruehrung waehlt ein Tipp auf die freie Zeilenflaeche aus (`useRowSelection`).
+ * Liste ruhig bleibt; mit Zeiger waehlt ein Klick auf die freie Zeilenflaeche aus (`useRowSelection`).
+ * Auf Beruehrung entfallen sie (`styles.css`): dort oeffnet ein Tipp die Zeile, und das Kontextmenue traegt
+ * alle Handlungen.
  * Keine davon gibt es **nur** hier: Umbenennen steht ebenso im Kontextmenue, und die Freigabe fuehrt in
  * denselben Bereich der Informationsleiste wie die Freigabe im Editor.
  */
@@ -543,7 +545,6 @@ export function Boards({
                 <Folder size={18} aria-hidden="true" />
                 <span>{entry.name}</span>
               </Link>
-              <span className="row__meta">Ordner</span>
               <div className="row__actions">
                 <QuickActions
                   target={{ kind: 'folder', folder: entry }}
