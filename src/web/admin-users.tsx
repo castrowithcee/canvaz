@@ -98,6 +98,9 @@ function ClientAddressCheck() {
   const [result, setResult] = useState<ClientAddressResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
+  // Nur fluechtiger UI-Zustand: macht eine erfolgreiche Aktualisierung erkennbar, auch wenn die Adresse
+  // gleich bleibt und der Ladeindikator bei schneller Antwort kaum sichtbar ist.
+  const [checkedAt, setCheckedAt] = useState<Date | null>(null)
 
   const load = useCallback(() => {
     setPending(true)
@@ -105,6 +108,7 @@ function ClientAddressCheck() {
     fetchClientAddress()
       .then((response) => {
         setResult(response)
+        setCheckedAt(new Date())
       })
       .catch((cause: unknown) => {
         setError(messageOf(cause, 'Die Client-Adresse konnte nicht ermittelt werden.'))
@@ -136,6 +140,10 @@ function ClientAddressCheck() {
           <p>{PLAUSIBILITY_TEXT[result.plausibility]}</p>
         </>
       )}
+      {/* Der Live-Bereich steht immer im Baum, damit jede neue Bestaetigung angesagt wird. */}
+      <p className="hint" role="status">
+        {checkedAt === null ? '' : `Zuletzt ermittelt um ${checkedAt.toLocaleTimeString('de-DE')}.`}
+      </p>
       <p className="actions">
         <Button icon={RotateCcw} onClick={load} busy={pending} aria-label="Client-Adresse erneut ermitteln">
           Erneut ermitteln

@@ -306,20 +306,51 @@ describe('Hostbefehl sender-block (#35, Meilenstein 2)', () => {
     expect(senderAddressAsCidr(proposals[0]!)).toBe('2001:db8:1::/64')
   })
 
-  it('unblock entfernt die Sperre, danach kein 429 mehr', async () => {
+  it('unblock beendet nur die aktive Sperre, die Vorgeschichte erzeugt weiter einen Vorschlag', async () => {
     app = await engeInstanz()
     machePlausibel(app)
+    const jetzt = new Date()
+    app.setNow(jetzt)
     const absender = '198.51.100.18'
     for (let i = 0; i < SCHWELLE; i += 1) {
       await versuch(app, absender)
     }
     expect((await versuch(app, absender)).status).toBe(429)
 
+    const sd = app.context.identity.senderDefense
     const resolved = resolveSenderAddress(absender)
-    const aufgehoben = await app.context.identity.senderDefense.blocks.liftActive(resolved!.address, app.context.now())
-    expect(aufgehoben).toBe(true)
+    expect(await sd.blocks.liftActive(resolved!.address, app.context.now())).toBe(true)
 
+    expect(await sd.blocks.listActive(app.context.now())).toHaveLength(0)
+    const zeile = await pool.query('select 1 from sender_block where address = $1', [resolved!.address])
+    expect(zeile.rowCount).toBe(1)
     expect((await versuch(app, absender)).status).toBe(401)
+
+    // Erneut die Schwelle erreichen, binnen 30 Tagen nach der ersten Sperre: Sperre plus Vorschlag. Der
+    // Zaehler wird durch unblock nicht zurueckgesetzt, schon der 401-Versuch oben kann neu sperren und den
+    // Vorschlag ausloesen; deshalb nur: mindestens ein offener Vorschlag fuer diese Adresse.
+    app.setNow(new Date(jetzt.getTime() + 25 * 3600_000))
+    for (let i = 0; i < SCHWELLE; i += 1) {
+      await versuch(app, absender)
+    }
+    expect((await versuch(app, absender)).status).toBe(429)
+    const offen = await sd.proposals.listPending()
+    expect(offen.length).toBeGreaterThan(0)
+    expect(new Set(offen.map((p) => p.address))).toEqual(new Set([resolved!.address]))
+
+    // Nach der Aufbewahrungsfrist entfernt der Aufraeumlauf die aufgehobene Zeile; eine spaetere Sperre
+    // erzeugt keinen Vorschlag mehr.
+    const spaeter = new Date(jetzt.getTime() + 90 * 86_400_000)
+    expect(await sd.blocks.liftActive(resolved!.address, app.context.now())).toBe(true)
+    await sd.purgeExpired({ counterWindowStart: spaeter, blockRetentionCutoff: spaeter, proposalRetentionCutoff: spaeter })
+    const weg = await pool.query('select 1 from sender_block where address = $1', [resolved!.address])
+    expect(weg.rowCount).toBe(0)
+    app.setNow(spaeter)
+    for (let i = 0; i < SCHWELLE; i += 1) {
+      await versuch(app, absender)
+    }
+    expect((await versuch(app, absender)).status).toBe(429)
+    expect(await sd.proposals.listPending()).toHaveLength(0)
   })
 
   it('decide markiert einen Vorschlag, der naechste Aufraeumlauf loescht ihn', async () => {

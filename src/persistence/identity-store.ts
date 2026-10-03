@@ -572,7 +572,16 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Identit
         },
 
         async liftActive(address: string, now: Date): Promise<boolean> {
-          const result = await db.query('delete from sender_block where address = $1 and expires_at > $2', [address, now])
+          // Beendet nur die aktive Sperre: die Zeile bleibt als Vorgeschichte fuer den Vorschlag bei einer
+          // zweiten Sperre erhalten und faellt erst ueber die Aufbewahrungsfrist weg. created_at wird hoechstens
+          // um eine Millisekunde zurueckgesetzt, damit `expires_at > created_at` auch bei gleicher Uhrzeit gilt.
+          const result = await db.query(
+            `update sender_block
+             set expires_at = $2::timestamptz,
+                 created_at = least(created_at, $2::timestamptz - interval '1 millisecond')
+             where address = $1 and expires_at > $2::timestamptz`,
+            [address, now],
+          )
           return (result.rowCount ?? 0) > 0
         },
       },

@@ -439,8 +439,9 @@ nicht angenommen.
 
 **Pruefen:** Die Systemadministration zeigt unter "Client-Adresse dieser Anfrage"
 (`GET /api/admin/client-address`) Adresse und Klasse der eigenen aktuellen Anfrage - oeffentlich, privat,
-Loopback oder die Adresse des Proxys selbst - ohne sie zu speichern. IPv4-gemappte IPv6-Adressen
-(`::ffff:a.b.c.d`) werden dabei auf ihre IPv4-Form zurueckgefuehrt; private Bereiche sind RFC 1918, CGNAT
+Loopback oder die Adresse des Proxys selbst - ohne sie zu speichern. "Erneut ermitteln" fragt neu an und
+bestaetigt den Erfolg mit "Zuletzt ermittelt um ..."; der Zeitpunkt lebt nur in der geoeffneten Ansicht.
+IPv4-gemappte IPv6-Adressen (`::ffff:a.b.c.d`) werden dabei auf ihre IPv4-Form zurueckgefuehrt; private Bereiche sind RFC 1918, CGNAT
 (`100.64.0.0/10`), Link-Local und die IPv6-ULA (`fc00::/7`).
 
 Sieht die Instanz ueber viele Anfragen hinweg ueberwiegend nicht-oeffentliche Adressen, steht dazu beim
@@ -527,6 +528,8 @@ Offene Vorschlaege fuer eine dauerhafte Sperre (1):
 
 ```sh
 # Eine vorlaeufige Sperre vorzeitig aufheben - jede Adresse aus demselben /64-Netz findet dieselbe Sperre.
+# Das beendet nur die aktive Sperre; die Vorgeschichte bleibt bis zur Aufbewahrungsfrist (30 Tage nach Ablauf)
+# erhalten, eine erneute Sperre derselben Adresse binnen 30 Tagen nach der ersten erzeugt weiter einen Vorschlag.
 npm run sender-block -- unblock 198.51.100.77
 
 # Einen Vorschlag als uebernommen oder verworfen markieren; die Zeile danach ist der Vermerk (Datum, Adresse,
