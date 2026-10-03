@@ -1636,6 +1636,7 @@
 
   .tree__row {
     align-items: center;
+    border-radius: var(--radius-md);
     display: flex;
     gap: --spacing(1);
     position: relative;
@@ -1656,8 +1657,8 @@
     width: var(--spacing-touch);
   }
 
+  /* Kein eigener Hover-Kasten: die Zeile hebt sich als Ganzes ab (`.tree__row:hover`, Medienblock unten). */
   .tree__twisty:hover {
-    background: var(--color-surface-muted);
     color: var(--color-text);
   }
 
@@ -1677,10 +1678,6 @@
   .tree__label > svg,
   .row__label > svg {
     flex-shrink: 0;
-  }
-
-  .tree__label:hover {
-    background: var(--color-surface-muted);
   }
 
   .tree__name {
@@ -1778,7 +1775,7 @@
     border-top: 1px solid var(--color-border);
   }
 
-  .row:hover,
+  /* Hover gibt es nur mit Zeiger (Medienblock unten); die Auswahl per Tipp nur dort, nicht auf Touch. */
   .row--selected {
     background: color-mix(in srgb, var(--color-accent-soft) 40%, var(--color-surface));
   }
@@ -1858,13 +1855,31 @@
   }
 
   /*
-   * Zeilenaktionen - Schnellaktionen, Optionsmenue, Aufklappschalter des Baums - erscheinen nur an der
-   * ausgewaehlten, gehoverten oder fokussierten Zeile; ein offenes Menue und der aktuelle Eintrag des Baums
-   * halten ihre Zeile aktiv. Im Ruhezustand nehmen sie **keine** Breite ein, bleiben aber in der
+   * Zeilenaktionen - Schnellaktionen, Optionsmenue, Aufklappschalter des Baums - erscheinen mit Zeiger nur an
+   * der ausgewaehlten, gehoverten oder fokussierten Zeile; ein offenes Menue und der aktuelle Eintrag des
+   * Baums halten ihre Zeile aktiv. Im Ruhezustand nehmen sie **keine** Breite ein, bleiben aber in der
    * Tabulatorfolge und bei Hilfsmitteln: der Fokus darauf macht die Zeile aktiv und sie sichtbar.
-   * Beruehrung kennt kein Hover (und ein haengengebliebenes waere irrefuehrend); dort waehlt ein Tipp aus.
+   * Beim Hover hebt sich die ganze Zeile als eine Flaeche ab wie in der Tabelle (`.table tbody tr:hover`);
+   * Aktionen und Aufklappschalter liegen darauf und tragen keinen eigenen Hover-Kasten. Der aktuelle
+   * Baumeintrag behaelt seine eigene Hervorhebung (`aria-current`).
    */
   @media (hover: hover) {
+    .row:hover {
+      background: color-mix(in srgb, var(--color-accent-soft) 40%, var(--color-surface));
+    }
+
+    .tree__row:hover {
+      background: var(--color-surface-muted);
+    }
+
+    .tree__row:hover > .tree__label[aria-current='page'] {
+      background: var(--color-accent-soft);
+    }
+
+    :is(.row__actions, .tree__row) :is(.button--quiet, .tree__twisty):hover {
+      background: transparent;
+    }
+
     :is(.row, .tree__row):not(
         :hover,
         :focus-within,
@@ -1881,19 +1896,39 @@
     }
   }
 
+  /*
+   * Touch kennt kein Hover und waehlt keine Zeilen aus: ein Tipp irgendwo auf eine Zeile mit Ziel oeffnet es
+   * (die Flaeche des Links reicht ueber die ganze Zeile), das Optionsmenue liegt darueber und ist an jeder
+   * Zeile stets sichtbar. Schnellaktionen entfallen - alles steht im Menue. Der Aufklappschalter des Baums
+   * erscheint wie bisher nur bei Fokus oder am aktuellen Eintrag.
+   */
   @media (hover: none) {
-    :is(.row, .tree__row):not(
+    .tree__row:not(
         :focus-within,
-        .row--selected,
         :has([aria-current='page'], [aria-haspopup][aria-expanded='true'])
       )
-      > :is(.row__actions, .tree__twisty) {
+      > .tree__twisty {
       clip-path: inset(50%);
       height: 1px;
       overflow: hidden;
       position: absolute;
       white-space: nowrap;
       width: 1px;
+    }
+
+    .row__quick {
+      display: none;
+    }
+
+    a.row__label::after {
+      content: '';
+      inset: 0;
+      position: absolute;
+    }
+
+    .row__actions {
+      position: relative;
+      z-index: 1;
     }
   }
 

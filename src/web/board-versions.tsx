@@ -135,7 +135,7 @@ function VersionRow({
         <span>{formatBytes(version.byteSize)}</span>
       </span>
       <span className="row__actions">
-        <Menu label={`Aktionen fuer ${label}`} icon={EllipsisVertical}>
+        <Menu label={`Aktionen fuer ${label}`} icon={EllipsisVertical} variant="quiet">
           <MenuItem icon={Eye} title={`${label} im Nur-Lesen-Modus ansehen`} onSelect={() => { onPreview(version.version) }}>
             Ansehen
           </MenuItem>
