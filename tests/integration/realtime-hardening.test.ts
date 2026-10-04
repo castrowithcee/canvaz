@@ -200,7 +200,19 @@ describe('Wiederaufnahme nach einem Abbruch', () => {
       const erste = await connect(app, ada)
       await erste.join(board.id)
       const zweite = await connect(app, ada)
-      erste.send(change(board.id, [element(`runde-${String(runde)}`, 3, runde + 1)]))
+      const id = `runde-${String(runde)}`
+      erste.send(change(board.id, [element(id, 3, runde + 1)]))
+      // Der Server uebernimmt eine Aenderung erst nach der Aufloesung der Berechtigung; ohne dieses Warten
+      // kann der Beitritt von `zweite` vorher beantwortet werden, und sein Snapshot zeigt sie noch nicht.
+      // Erst wenn ein Abgleich die Zeichnung zeigt, ist sie im Raum; ab da faellt der Abbruch in den
+      // Abschluss-Checkpoint statt in den Nachrichtenweg.
+      for (;;) {
+        erste.send({ type: 'resync', boardId: board.id })
+        if (ids((await erste.next('snapshot')).scene.elements).includes(id)) {
+          break
+        }
+        await ruhe(1)
+      }
       erste.socket.terminate()
       // Gerade so viel, dass der Server den Abbruch verarbeitet und den Checkpoint beginnt.
       await ruhe(2)
