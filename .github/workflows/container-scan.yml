@@ -40,7 +40,7 @@ jobs:
         run: docker build --pull --tag canvaz:ci .
 
       - name: Scan image
-        uses: docker/scout-action@bacf462e8d090c09660de30a6ccc718035f961e3 # v1.24.0
+        uses: docker/scout-action@221e7f4860634eeb1579e3bd7ca232e577bd1864 # v1.24.0
         if: ${{ hashFiles('Dockerfile') != '' }}
         with:
           command: cves
