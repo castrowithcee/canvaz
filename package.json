@@ -32,7 +32,7 @@
     "@excalidraw/excalidraw": "0.18.1",
     "jose": "^6.2.9",
     "lucide-react": "^1.37.0",
-    "nodemailer": "^10.0.10",
+    "nodemailer": "^10.1.4",
     "openid-client": "^6.8.5",
     "otpauth": "^9.5.2",
     "pg": "^8.16.3",
