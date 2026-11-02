@@ -24,6 +24,7 @@ export type ApiV1ErrorCode =
   | 'forbidden'
   | 'not_found'
   | 'method_not_allowed'
+  | 'conflict'
   | 'rate_limited'
   | 'internal_error'
 
@@ -67,3 +68,28 @@ export type ApiV1WorkspacesResponse = { readonly workspaces: readonly ApiV1Works
 export type ApiV1FoldersResponse = { readonly folders: readonly ApiV1Folder[] }
 export type ApiV1BoardsResponse = { readonly boards: readonly ApiV1Board[] }
 export type ApiV1BoardResponse = { readonly board: ApiV1Board }
+
+/** Write operations: `POST` with a JSON body; ids travel in the body. */
+export const API_V1_BOARD_RENAME_PATH = `${API_V1_BASE_PATH}/boards/rename`
+export const API_V1_BOARD_MOVE_PATH = `${API_V1_BASE_PATH}/boards/move`
+
+/** `POST API_V1_BOARDS_PATH`. Without `folderId` (or `null`) the board lands directly in the workspace. */
+export type ApiV1CreateBoardRequest = {
+  readonly workspaceId: string
+  readonly title: string
+  readonly folderId?: string | null
+}
+
+export type ApiV1RenameBoardRequest = { readonly boardId: string; readonly title: string }
+
+/** `folderId` is required; `null` moves the board directly into the workspace. */
+export type ApiV1MoveBoardRequest = { readonly boardId: string; readonly folderId: string | null }
+
+/** `POST API_V1_FOLDERS_PATH`. Without `parentId` (or `null`) the folder lands directly in the workspace. */
+export type ApiV1CreateFolderRequest = {
+  readonly workspaceId: string
+  readonly name: string
+  readonly parentId?: string | null
+}
+
+export type ApiV1FolderResponse = { readonly folder: ApiV1Folder }

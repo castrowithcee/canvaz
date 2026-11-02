@@ -148,20 +148,32 @@ export function isBoardInApiKeyTarget(
   board: ApiKeyBoardRef,
   folders: readonly Folder[],
 ): boolean {
+  return target.kind === 'board' ? board.id === target.boardId : isPlaceInApiKeyTarget(target, board, folders)
+}
+
+/**
+ * Whether a board or folder placed directly in `folderId` (`null`: the workspace root) lies in the key's
+ * target. A board key's target holds no place, so nothing can be created or moved into it.
+ */
+export function isPlaceInApiKeyTarget(
+  target: ApiKeyTarget,
+  place: { readonly workspaceId: WorkspaceId; readonly folderId: FolderId | null },
+  folders: readonly Folder[],
+): boolean {
   switch (target.kind) {
     case 'workspace':
-      return board.workspaceId === target.workspaceId
+      return place.workspaceId === target.workspaceId
     case 'board':
-      return board.id === target.boardId
+      return false
     case 'folder': {
-      if (board.folderId === null) {
+      if (place.folderId === null) {
         return false
       }
       const root = folders.find((folder) => folder.id === target.folderId)
       return (
         root !== undefined &&
-        root.workspaceId === board.workspaceId &&
-        isInFolderSubtree(folders, board.folderId, target.folderId)
+        root.workspaceId === place.workspaceId &&
+        isInFolderSubtree(folders, place.folderId, target.folderId)
       )
     }
   }

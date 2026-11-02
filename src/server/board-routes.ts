@@ -92,7 +92,9 @@ import { buildAssetStorageKey } from '../domain/storage/asset-storage-port.js'
 import { ALLOWED_IMAGE_TYPES, isAllowedImageType, sniffImageType } from '../domain/storage/image-type.js'
 import type { Workspace, WorkspaceId, WorkspaceRole } from '../domain/workspace/model.js'
 import type { MembershipTarget } from '../domain/workspace/repositories.js'
-import { NOT_FOUND, createBoardGate, withoutBoard } from './board-access.js'
+import { DENIALS, NOT_FOUND, createBoardGate, withoutBoard } from './board-access.js'
+import type { BoardFailure } from './board-operations.js'
+import { createBoardOperations, isBoardFailure, isFolderOfWorkspace, sessionActor } from './board-operations.js'
 import { sceneResponseFor, toBoardView, toDashboardBoardView } from './board-views.js'
 import type { AppContext } from './context.js'
 import { requireCsrfToken, requireRequester, requireSession } from './guard.js'
@@ -245,6 +247,15 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
   // Laden, Sichtbarkeit und Uebersetzung der Ablehnung stehen an einer Stelle - dieselbe, die auch die
   // Routen der Freigabelinks benutzen.
   const { deny, loadVisibleBoard, withLockedBoard } = createBoardGate(context)
+  const operations = createBoardOperations(context)
+
+  function failureReply(failure: BoardFailure): Reply {
+    if (failure.kind === 'folder-not-found') {
+      return fail(404, FOLDER_NOT_FOUND)
+    }
+    const { status, message } = DENIALS[failure.reason]
+    return fail(status, message)
+  }
 
   /**
    * Zielnutzer einer Freigabe oder einer Uebertragung.
@@ -286,11 +297,7 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
     workspaceId: WorkspaceId,
     folderId: FolderId | null,
   ): Promise<Reply | null> {
-    if (folderId === null) {
-      return null
-    }
-    const folder = await tx.folders.find(folderId)
-    return folder !== null && folder.workspaceId === workspaceId ? null : fail(404, FOLDER_NOT_FOUND)
+    return (await isFolderOfWorkspace(tx, workspaceId, folderId)) ? null : fail(404, FOLDER_NOT_FOUND)
   }
 
   /** Nachweis einer Freigabeaenderung. Traegt Rollen und Bezuege, nie Boardinhalt. */
@@ -463,24 +470,11 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
           if (access === null) {
             return fail(404, NOT_FOUND.message)
           }
-          const denial = deny(asRequester(guarded.auth), access.workspace, withoutBoard(access.role), 'board:create')
-          if (denial !== null) {
-            return denial
-          }
-          const unbekannt = await denyUnknownFolder(tx, workspaceId, folderId)
-          if (unbekannt !== null) {
-            return unbekannt
-          }
           // Der Ersteller wird Board-Owner.
-          const board = await tx.boards.create(workspaceId, title, guarded.auth.user.id, folderId)
-          await tx.audit.record({
-            actorId: guarded.auth.user.id,
-            action: 'board.created',
-            targetType: 'board',
-            targetId: board.id,
-            workspaceId,
-            details: { title: board.title, folderId },
-          })
+          const board = await operations.createBoard(tx, sessionActor(guarded.auth), access, title, folderId)
+          if (isBoardFailure(board)) {
+            return failureReply(board)
+          }
           // Frisch geladen statt aus der Anlage zusammengesetzt: die Rolle des Erstellers auf seinem neuen
           // Board entsteht damit auf demselben Weg wie jede andere.
           return ok(201, await reloadedBoardView(tx, asRequester(guarded.auth), board.id))
@@ -664,19 +658,10 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
           if (title === null) {
             return fail(400, `Ein Titel mit 1 bis ${String(MAX_BOARD_TITLE_LENGTH)} Zeichen wird erwartet`)
           }
-          const denial = deny(asRequester(auth), access.workspace, access, 'board:rename')
-          if (denial !== null) {
-            return denial
+          const renamed = await operations.renameBoard(tx, sessionActor(auth), access, title)
+          if (isBoardFailure(renamed)) {
+            return failureReply(renamed)
           }
-          const renamed = await tx.boards.rename(access.board.id, title)
-          await tx.audit.record({
-            actorId: auth.user.id,
-            action: 'board.renamed',
-            targetType: 'board',
-            targetId: renamed.id,
-            workspaceId: renamed.workspaceId,
-            details: { previousTitle: access.board.title, title: renamed.title },
-          })
           return ok(200, toBoardView(asRequester(auth), { ...access, board: renamed }))
         })
       },
@@ -698,23 +683,10 @@ export function createBoardRoutes(context: AppContext): readonly Route[] {
           if (folderId === undefined) {
             return fail(404, FOLDER_NOT_FOUND)
           }
-          const denial = deny(asRequester(auth), access.workspace, access, 'board:move')
-          if (denial !== null) {
-            return denial
+          const moved = await operations.moveBoard(tx, sessionActor(auth), access, folderId)
+          if (isBoardFailure(moved)) {
+            return failureReply(moved)
           }
-          const unbekannt = await denyUnknownFolder(tx, access.workspace.id, folderId)
-          if (unbekannt !== null) {
-            return unbekannt
-          }
-          const moved = await tx.boards.setFolder(access.board.id, folderId)
-          await tx.audit.record({
-            actorId: auth.user.id,
-            action: 'board.moved',
-            targetType: 'board',
-            targetId: moved.id,
-            workspaceId: moved.workspaceId,
-            details: { previousFolderId: access.board.folderId, folderId },
-          })
           return ok(200, toBoardView(asRequester(auth), { ...access, board: moved }))
         })
       },

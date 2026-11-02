@@ -35,14 +35,16 @@ import {
   FOLDERS_PATH,
   WORKSPACE_ID_PARAM,
 } from '../contracts/api.js'
-import type { Folder, FolderId, FolderViolation } from '../domain/folder/model.js'
-import { MAX_FOLDER_DEPTH, MAX_FOLDER_NAME_LENGTH, checkFolderPlacement, normalizeFolderName } from '../domain/folder/model.js'
+import type { Folder, FolderId } from '../domain/folder/model.js'
+import { MAX_FOLDER_NAME_LENGTH, checkFolderPlacement, normalizeFolderName } from '../domain/folder/model.js'
 import type { AuthenticatedSession } from '../domain/identity/model.js'
 import type { Workspace, WorkspaceAccess, WorkspaceId, WorkspaceRole } from '../domain/workspace/model.js'
 import type { DenialReason, WorkspaceAction } from '../domain/workspace/policy.js'
 import { decideWorkspaceAccess } from '../domain/workspace/policy.js'
 import type { WorkspaceStore } from '../domain/workspace/repositories.js'
+import { sessionActor } from './board-operations.js'
 import type { AppContext } from './context.js'
+import { FOLDER_NOT_FOUND, FOLDER_VIOLATIONS as VIOLATIONS, createFolderOperations, isFolderFailure } from './folder-operations.js'
 import { requireSession } from './guard.js'
 import type { Route } from './http.js'
 import { sendError } from './http.js'
@@ -58,25 +60,6 @@ const DENIALS: Readonly<Record<DenialReason, { readonly status: number; readonly
   'user-deactivated': { status: 404, message: 'Arbeitsbereich nicht gefunden' },
   'insufficient-role': { status: 403, message: 'Keine Berechtigung fuer diese Aktion' },
   'workspace-archived': { status: 403, message: 'Der Arbeitsbereich ist archiviert und kann nicht geaendert werden' },
-}
-
-const FOLDER_NOT_FOUND = 'Ordner nicht gefunden'
-
-/**
- * Uebersetzung der vier Invarianten.
- *
- * Ein fremder oder erfundener Elternordner ergibt **404 mit derselben Meldung wie ein unbekannter Ordner**:
- * die Antwort verraet nicht, dass es ihn anderswo gibt. Die drei uebrigen sind echte Konflikte mit dem
- * vorhandenen Baum und nennen ihren Grund - der Anfragende sieht diesen Baum ohnehin.
- */
-const VIOLATIONS: Readonly<Record<FolderViolation, { readonly status: number; readonly message: string }>> = {
-  'fremder-arbeitsbereich': { status: 404, message: FOLDER_NOT_FOUND },
-  zyklus: { status: 409, message: 'Ein Ordner kann nicht unter sich selbst oder einen seiner Unterordner wandern' },
-  'name-doppelt': { status: 409, message: 'An dieser Stelle gibt es bereits einen Ordner mit diesem Namen' },
-  'zu-tief': {
-    status: 409,
-    message: `Ordner lassen sich hoechstens ${String(MAX_FOLDER_DEPTH)} Ebenen tief verschachteln`,
-  },
 }
 
 const NAME_EXPECTED = `Ein Name mit 1 bis ${String(MAX_FOLDER_NAME_LENGTH)} Zeichen wird erwartet`
@@ -116,6 +99,7 @@ function readParentId(raw: unknown): FolderId | null | undefined {
 
 export function createFolderRoutes(context: AppContext): readonly Route[] {
   const { workspaces: store } = context
+  const operations = createFolderOperations(context)
 
   /** Einziger Weg zu einer Entscheidung. `null` heisst erlaubt; sonst steht die Ablehnung bereit. */
   function deny(auth: AuthenticatedSession, access: WorkspaceAccess, action: WorkspaceAction): Reply | null {
@@ -262,25 +246,12 @@ export function createFolderRoutes(context: AppContext): readonly Route[] {
           if (isReply(access)) {
             return access
           }
-          const denial = deny(guarded.auth, access, { kind: 'folder:manage' })
-          if (denial !== null) {
-            return denial
-          }
-          const folders = await tx.folders.listForWorkspace(workspaceId)
-          const violation = checkFolderPlacement(folders, { id: null, workspaceId, parentId, name })
-          if (violation !== null) {
-            const { status, message } = VIOLATIONS[violation]
+          const created = await operations.createFolder(tx, sessionActor(guarded.auth), access, parentId, name)
+          if (isFolderFailure(created)) {
+            const { status, message } =
+              created.kind === 'denied' ? DENIALS[created.reason] : VIOLATIONS[created.violation]
             return fail(status, message)
           }
-          const created = await tx.folders.create(workspaceId, parentId, name)
-          await tx.audit.record({
-            actorId: guarded.auth.user.id,
-            action: 'folder.created',
-            targetType: 'board-folder',
-            targetId: created.id,
-            workspaceId,
-            details: { name: created.name, parentId },
-          })
           return ok(201, toFolderView(created))
         })
         send(response, reply)
