@@ -403,6 +403,7 @@ Codeeinloesung, damit es genau einmal gilt.
 | GET (Upgrade) | `/api/realtime`                      | angemeldet **oder** gueltige Gastsession; WebSocket-Einstieg der Realtime-Strecke                                                                 |
 | POST          | `/api/boards/guest/join`             | oeffentlich, verlangt ein gueltiges Freigabetoken und die eigene Herkunft                                                                         |
 | GET           | `/api/boards/guest/session`          | gueltige Gastsession                                                                                                                              |
+| GET           | `/api/v1/...`                        | ausschliesslich API-Key (`Authorization: Bearer`), kein Cookie; Automations-API, siehe [API.md](API.md)                                           |
 
 Die Endpunkte der Arbeitsbereiche stehen im Abschnitt [Arbeitsbereiche und Rollen](#arbeitsbereiche-und-rollen),
 die der Boards im Abschnitt [Boards und Szenen](#boards-und-szenen).

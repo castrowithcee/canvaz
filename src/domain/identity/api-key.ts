@@ -90,6 +90,11 @@ export function effectiveApiKeyLevel(keyLevel: ApiKeyLevel, access: ApiKeyAccess
   return rank === 2 ? 'edit' : rank === 1 ? 'read' : null
 }
 
+/** Whether the effective level carries an action that needs `required`. */
+export function apiKeyLevelAllows(level: ApiKeyLevel, required: ApiKeyLevel): boolean {
+  return RANK[level] >= RANK[required]
+}
+
 export function isApiKeyLive(key: Pick<ApiKey, 'expiresAt' | 'revokedAt'>, now: Date): boolean {
   return key.revokedAt === null && key.expiresAt.getTime() > now.getTime()
 }

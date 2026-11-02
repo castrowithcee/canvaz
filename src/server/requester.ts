@@ -7,7 +7,9 @@
  * statt als `if` in jeder Route.
  *
  * Der wichtigste Dienst dieser Datei ist `boardSubject`: sie ist die **einzige** Stelle, an der aus einem
- * Anfragenden und einem geladenen Boarddatensatz ein Subjekt fuer `decideBoardAccess` wird. Routen und
+ * Anfragenden und einem geladenen Boarddatensatz ein Subjekt fuer `decideBoardAccess` wird. Ein API-Key ist
+ * kein Anfragender in diesem Sinn (er kennt weder Realtime noch CSRF); sein Subjekt baut `apiKeyBoardSubject`
+ * hier daneben. Routen und
  * Boardraeume bauen es damit nachweislich gleich - eine zweite, leicht abweichende Fassung waere genau die
  * Stelle, an der ein Gast einmal zu viel duerfte.
  */
@@ -18,6 +20,7 @@ import type { BoardRole } from '../domain/board/model.js'
 import type { BoardState, BoardSubject } from '../domain/board/policy.js'
 import { guestSubject } from '../domain/board/policy.js'
 import type { BoardViewer } from '../domain/board/repositories.js'
+import type { ResolvedApiKey } from '../domain/identity/api-key.js'
 import type { AuthenticatedSession, User } from '../domain/identity/model.js'
 import type { WorkspaceRole } from '../domain/workspace/model.js'
 import type { LogFields } from './log.js'
@@ -93,4 +96,15 @@ export function boardSubject(requester: Requester, roles: BoardRoles): BoardSubj
     boardRole: roles.boardRole,
     guestGrant: null,
   }
+}
+
+/**
+ * Subject of an API key for both policies. `key.subject` already carries no system admin elevation, and a
+ * key never holds a guest grant.
+ */
+export function apiKeyBoardSubject(
+  key: ResolvedApiKey,
+  roles: { readonly role: WorkspaceRole | null; readonly boardRole: BoardRole | null },
+): BoardSubject {
+  return { user: key.subject, workspaceRole: roles.role, boardRole: roles.boardRole, guestGrant: null }
 }

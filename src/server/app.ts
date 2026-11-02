@@ -8,6 +8,7 @@
 import { HEALTH_PATH, METRICS_PATH, READY_PATH } from '../contracts/api.js'
 import type { HealthResponse, ReadyResponse } from '../contracts/api.js'
 import { createAdminRoutes } from './admin-routes.js'
+import { createApiV1Routes } from './api-v1-routes.js'
 import { createAuthRoutes } from './auth-routes.js'
 import { createBoardRoutes } from './board-routes.js'
 import { createBoardShareRoutes } from './board-share-routes.js'
@@ -95,5 +96,6 @@ export function createRoutes(context: AppContext): readonly Route[] {
     ...createBoardTrashRoutes(context),
     ...createBoardShareRoutes(context),
     ...createBoardVersionRoutes(context),
+    ...createApiV1Routes(context),
   ]
 }
