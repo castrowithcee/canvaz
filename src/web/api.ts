@@ -26,6 +26,10 @@ import type {
   SelfRecoveryView,
   SetRecoveryEmailRequest,
   SetSelfRecoveryRequest,
+  AdminApiKeysResponse,
+  RevokeApiKeyRequest,
+  RevokeApiKeyResponse,
+  SetApiAccessRequest,
   ResetPasswordRequest,
   SecondFactorBackupCodesResponse,
   SecondFactorEnrollResponse,
@@ -75,6 +79,9 @@ import type {
 } from '../contracts/api.js'
 import {
   ADMIN_CLIENT_ADDRESS_PATH,
+  ADMIN_API_KEY_REVOKE_PATH,
+  ADMIN_API_KEYS_PATH,
+  ADMIN_USER_API_ACCESS_PATH,
   ADMIN_USER_CREATE_PATH,
   ADMIN_USER_INVITATION_PATH,
   ADMIN_USER_INVITATION_REVOKE_PATH,
@@ -290,6 +297,18 @@ export async function revokeUserInvitation(csrfToken: string, userId: string): P
 
 export async function setUserSelfRecovery(csrfToken: string, change: SetSelfRecoveryRequest): Promise<UserView> {
   return request<UserView>(ADMIN_USER_SELF_RECOVERY_PATH, mutation(csrfToken, change))
+}
+
+export async function setUserApiAccess(csrfToken: string, change: SetApiAccessRequest): Promise<UserView> {
+  return request<UserView>(ADMIN_USER_API_ACCESS_PATH, mutation(csrfToken, change))
+}
+
+export async function fetchAdminApiKeys(): Promise<AdminApiKeysResponse> {
+  return request<AdminApiKeysResponse>(ADMIN_API_KEYS_PATH)
+}
+
+export async function revokeAdminApiKey(csrfToken: string, change: RevokeApiKeyRequest): Promise<RevokeApiKeyResponse> {
+  return request<RevokeApiKeyResponse>(ADMIN_API_KEY_REVOKE_PATH, mutation(csrfToken, change))
 }
 
 export async function setUserStatus(csrfToken: string, change: SetUserStatusRequest): Promise<UserView> {

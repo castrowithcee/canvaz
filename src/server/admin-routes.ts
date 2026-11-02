@@ -24,17 +24,25 @@
  */
 
 import type {
+  AdminApiKeysResponse,
+  AdminApiKeyView,
   AdminUserView,
   AdminUsersResponse,
   ClientAddressResponse,
   CreateInvitationResponse,
   CreateUserResponse,
+  ApiKeyAccessView,
+  RevokeApiKeyResponse,
+  SetApiAccessRequest,
   SetSelfRecoveryRequest,
   SetUserStatusRequest,
   UserStatusView,
 } from '../contracts/api.js'
 import {
+  ADMIN_API_KEY_REVOKE_PATH,
+  ADMIN_API_KEYS_PATH,
   ADMIN_CLIENT_ADDRESS_PATH,
+  ADMIN_USER_API_ACCESS_PATH,
   ADMIN_USER_CREATE_PATH,
   ADMIN_USER_INVITATION_PATH,
   ADMIN_USER_INVITATION_REVOKE_PATH,
@@ -43,6 +51,8 @@ import {
   ADMIN_USER_STATUS_PATH,
   ADMIN_USERS_PATH,
 } from '../contracts/api.js'
+import type { ApiKey } from '../domain/identity/api-key.js'
+import { isApiKeyLive } from '../domain/identity/api-key.js'
 import type { UserInvitation } from '../domain/identity/local-auth.js'
 import { invitationExpiry, normalizeDisplayName, normalizeEmail, parsePassword } from '../domain/identity/local-auth.js'
 import type { User, UserId } from '../domain/identity/model.js'
@@ -59,6 +69,8 @@ import { deliver, invitationMail, passwordResetMail } from './mailer.js'
 import { clearLoginAttempts } from './login-throttle.js'
 import { hashPassword } from './password.js'
 import { asRequester } from './requester.js'
+
+const API_ACCESS_LEVELS: readonly ApiKeyAccessView[] = ['off', 'read', 'edit']
 
 const STATUSES: readonly UserStatusView[] = ['active', 'deactivated']
 
@@ -79,6 +91,30 @@ function parseSelfRecoveryRequest(body: Record<string, unknown> | null): SetSelf
   const userId = body?.['userId']
   const allowed = body?.['allowed']
   return typeof userId === 'string' && userId.length > 0 && typeof allowed === 'boolean' ? { userId, allowed } : null
+}
+
+function parseApiAccessRequest(body: Record<string, unknown> | null): SetApiAccessRequest | null {
+  const userId = body?.['userId']
+  const access = API_ACCESS_LEVELS.find((candidate) => candidate === body?.['access'])
+  return typeof userId === 'string' && userId.length > 0 && access !== undefined ? { userId, access } : null
+}
+
+function targetViewOf(target: ApiKey['target']): AdminApiKeyView['target'] {
+  switch (target.kind) {
+    case 'workspace':
+      return { kind: 'workspace', id: target.workspaceId }
+    case 'folder':
+      return { kind: 'folder', id: target.folderId }
+    case 'board':
+      return { kind: 'board', id: target.boardId }
+  }
+}
+
+function apiKeyStateOf(key: ApiKey, now: Date): AdminApiKeyView['state'] {
+  if (key.revokedAt !== null) {
+    return 'revoked'
+  }
+  return isApiKeyLive(key, now) ? 'active' : 'expired'
 }
 
 /** Warum ein Konto nicht freigeschaltet werden kann; der Satz erscheint unveraendert in der Oberflaeche. */
@@ -135,11 +171,12 @@ export function createAdminRoutes(context: AppContext): readonly Route[] {
           return
         }
         const now = context.now()
-        const [users, withPassword, openInvitations, selfRecoveries] = await Promise.all([
+        const [users, withPassword, openInvitations, selfRecoveries, apiAccess] = await Promise.all([
           context.identity.users.list(),
           context.identity.localCredentials.listUserIds(),
           context.identity.invitations.listOpen(now),
           context.identity.selfRecovery.list(),
+          context.identity.apiKeys.listAccess(),
         ])
         const passwords = new Set(withPassword)
         const invitations = new Map(openInvitations.map((invitation) => [invitation.userId, invitation]))
@@ -153,6 +190,7 @@ export function createAdminRoutes(context: AppContext): readonly Route[] {
               invitationExpiresAt: invitation?.expiresAt.toISOString() ?? null,
               selfRecoveryAllowed: recoveries.get(user.id)?.allowed ?? false,
               recoveryEmailVerified: (recoveries.get(user.id)?.email ?? null) !== null,
+              apiKeyAccess: apiAccess.get(user.id) ?? 'off',
             }
           }),
         }
@@ -423,6 +461,130 @@ export function createAdminRoutes(context: AppContext): readonly Route[] {
       },
     },
 
+    /** Sets a user's API key access. Resolution reads it on every use, so a downgrade takes effect at once. */
+    {
+      method: 'POST',
+      path: ADMIN_USER_API_ACCESS_PATH,
+      handle: async ({ request, response }) => {
+        const auth = await requireSession(context, request, response)
+        if (auth === null || !requireCsrfToken(context, request, response, asRequester(auth))) {
+          return
+        }
+        if (!requireSystemAdmin(context, response, auth)) {
+          return
+        }
+        const parsed = parseApiAccessRequest(await readJsonBody(request))
+        if (parsed === null) {
+          sendError(response, 400, 'userId und access (off, read, edit) werden erwartet')
+          return
+        }
+        const target = await context.identity.users.findById(parsed.userId)
+        if (target === null) {
+          sendError(response, 404, 'Unbekannter Nutzer')
+          return
+        }
+        const previous = await context.identity.transaction(async (store) => {
+          const before = await store.apiKeys.getAccess(target.id)
+          if (before !== parsed.access) {
+            await store.apiKeys.setAccess(target.id, parsed.access)
+            await store.userAudit.record({
+              actorId: auth.user.id,
+              action: 'api-key.access-changed',
+              targetType: 'user',
+              targetId: target.id,
+              subjectUserId: target.id,
+              details: { from: before, to: parsed.access },
+            })
+          }
+          return before
+        })
+        logger('info', 'admin.user.api-access.changed', {
+          actorId: auth.user.id,
+          userId: target.id,
+          from: previous,
+          to: parsed.access,
+        })
+        sendJson(response, 200, toUserView(target))
+      },
+    },
+
+    /** All API keys of all users; never the value or hash, the prefix is only for recognition. */
+    {
+      method: 'GET',
+      path: ADMIN_API_KEYS_PATH,
+      handle: async ({ request, response }) => {
+        const auth = await requireSession(context, request, response)
+        if (auth === null || !requireSystemAdmin(context, response, auth)) {
+          return
+        }
+        const now = context.now()
+        const all = await context.identity.apiKeys.listAll()
+        const body: AdminApiKeysResponse = {
+          keys: all.map(({ key, user }): AdminApiKeyView => ({
+            id: key.id,
+            userId: user.id,
+            userDisplayName: user.displayName,
+            name: key.name,
+            prefix: key.prefix,
+            target: targetViewOf(key.target),
+            level: key.level,
+            expiresAt: key.expiresAt.toISOString(),
+            lastUsedAt: key.lastUsedAt?.toISOString() ?? null,
+            state: apiKeyStateOf(key, now),
+          })),
+        }
+        sendJson(response, 200, body)
+      },
+    },
+
+    /** Revokes one key. An already revoked key stays revoked and gets no second audit entry. */
+    {
+      method: 'POST',
+      path: ADMIN_API_KEY_REVOKE_PATH,
+      handle: async ({ request, response }) => {
+        const auth = await requireSession(context, request, response)
+        if (auth === null || !requireCsrfToken(context, request, response, asRequester(auth))) {
+          return
+        }
+        if (!requireSystemAdmin(context, response, auth)) {
+          return
+        }
+        const keyId = (await readJsonBody(request))?.['keyId']
+        if (typeof keyId !== 'string' || keyId.length === 0) {
+          sendError(response, 400, 'keyId wird erwartet')
+          return
+        }
+        // Looking the id up in the list avoids casting a malformed id to uuid in SQL: it is simply not found.
+        const found = (await context.identity.apiKeys.listAll()).find(({ key }) => key.id === keyId)
+        if (found === undefined) {
+          sendError(response, 404, 'Unbekannter API-Key')
+          return
+        }
+        const revoked = await context.identity.transaction(async (store) => {
+          const done = await store.apiKeys.revoke(found.key.id, context.now())
+          if (done) {
+            await store.userAudit.record({
+              actorId: auth.user.id,
+              action: 'api-key.revoked',
+              targetType: 'api-key',
+              targetId: found.key.id,
+              subjectUserId: found.user.id,
+              details: { name: found.key.name, by: 'admin' },
+            })
+          }
+          return done
+        })
+        logger('info', 'admin.api-key.revoked', {
+          actorId: auth.user.id,
+          keyId: found.key.id,
+          userId: found.user.id,
+          revoked,
+        })
+        const body: RevokeApiKeyResponse = { status: 'ok' }
+        sendJson(response, 200, body)
+      },
+    },
+
     {
       method: 'POST',
       path: ADMIN_USER_STATUS_PATH,
@@ -457,6 +619,8 @@ export function createAdminRoutes(context: AppContext): readonly Route[] {
             await store.sessions.revokeAllForUser(parsed.userId, now)
             await store.invitations.revokeOpenForUser(parsed.userId, now)
             await store.selfRecovery.revokeOpenTokens(parsed.userId, now)
+            // API keys end with the account as well.
+            await store.apiKeys.revokeAllForUser(parsed.userId, now)
           })
           context.realtime.closeUser(parsed.userId)
         }

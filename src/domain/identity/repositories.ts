@@ -6,6 +6,7 @@
  */
 
 import type { AppearanceView } from '../../contracts/api.js'
+import type { ApiKey, ApiKeyAccess, ApiKeyId, ApiKeyLevel, ApiKeyTarget, ResolvedApiKey } from './api-key.js'
 import type { InvitationPurpose, LocalCredential, UserInvitation, UserInvitationId } from './local-auth.js'
 import type { TotpFactor } from './second-factor.js'
 import type { RecoveryEmailToken, RecoveryEmailTokenPurpose, SelfRecovery } from './self-recovery.js'
@@ -391,6 +392,60 @@ export interface SelfRecoveryRepository {
   revokeOpenTokens(userId: UserId, revokedAt: Date, purpose?: RecoveryEmailTokenPurpose): Promise<number>
 }
 
+export type NewApiKey = {
+  readonly userId: UserId
+  readonly name: string
+  readonly target: ApiKeyTarget
+  readonly level: ApiKeyLevel
+  readonly expiresAt: Date
+  /** Non-secret start of the value. */
+  readonly prefix: string
+  /** SHA-256 hash; the value itself never reaches persistence. */
+  readonly keyHash: string
+}
+
+export type ApiKeyWithUser = {
+  readonly key: ApiKey
+  readonly user: User
+}
+
+/** API keys and per-user access. `resolveByHash` is the only way to resolve a key value. */
+export interface ApiKeyRepository {
+  create(key: NewApiKey): Promise<ApiKey>
+  /** All keys of all users, newest first. */
+  listAll(): Promise<readonly ApiKeyWithUser[]>
+  listForUser(userId: UserId): Promise<readonly ApiKey[]>
+  /** `false`: unknown or already revoked. */
+  revoke(id: ApiKeyId, revokedAt: Date): Promise<boolean>
+  /** Revokes the user's remaining keys and returns their count. */
+  revokeAllForUser(userId: UserId, revokedAt: Date): Promise<number>
+  /** Keys that are neither revoked nor expired. */
+  countActive(userId: UserId, now: Date): Promise<number>
+  markUsed(id: ApiKeyId, usedAt: Date): Promise<void>
+  /** `null`: unknown, expired, revoked, access off or user inactive. */
+  resolveByHash(keyHash: string, now: Date): Promise<ResolvedApiKey | null>
+  /** Without a row: `off`. */
+  getAccess(userId: UserId): Promise<ApiKeyAccess>
+  /** Only users with an explicit access row; all others count as `off`. */
+  listAccess(): Promise<ReadonlyMap<UserId, ApiKeyAccess>>
+  setAccess(userId: UserId, access: ApiKeyAccess): Promise<void>
+}
+
+export type NewUserAuditEvent = {
+  readonly actorId: UserId | null
+  readonly action: string
+  readonly targetType: 'user' | 'api-key'
+  readonly targetId: string
+  readonly subjectUserId: UserId
+  /** Never key values or token material. */
+  readonly details: Readonly<Record<string, string | number | boolean | null>>
+}
+
+/** Audit trail for user-level events without a workspace. */
+export interface UserAuditRepository {
+  record(event: NewUserAuditEvent): Promise<void>
+}
+
 /**
  * Gebuendelter Zugang zur Identitaetspersistenz. `transaction` gibt dem Aufrufer Atomaritaet ueber mehrere
  * Repositories, ohne dass der Domain-Core die Datenbank kennt: die Provisionierung legt Nutzer, Verknuepfung
@@ -407,5 +462,7 @@ export interface IdentityStore {
   readonly senderDefense: SenderDefenseRepository
   readonly secondFactors: SecondFactorRepository
   readonly selfRecovery: SelfRecoveryRepository
+  readonly apiKeys: ApiKeyRepository
+  readonly userAudit: UserAuditRepository
   transaction<T>(run: (store: IdentityStore) => Promise<T>): Promise<T>
 }
