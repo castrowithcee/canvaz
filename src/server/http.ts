@@ -12,6 +12,8 @@ import { extname, join, normalize, resolve, sep } from 'node:path'
 
 import { API_BASE_PATH, HEALTH_PATH, METRICS_PATH, READY_PATH } from '../contracts/api.js'
 import type { ErrorResponse } from '../contracts/api.js'
+import { API_V1_BASE_PATH } from '../contracts/api-v1.js'
+import type { ApiV1Error, ApiV1ErrorCode } from '../contracts/api-v1.js'
 import type { ClientAddressMonitor } from './client-address.js'
 import { resolveClientAddress } from './client-address.js'
 import { describeError } from './log.js'
@@ -66,6 +68,11 @@ export function sendJson(response: ServerResponse, status: number, body: unknown
 
 export function sendError(response: ServerResponse, status: number, message: string): void {
   const body: ErrorResponse = { error: message }
+  sendJson(response, status, body)
+}
+
+export function sendApiV1Error(response: ServerResponse, status: number, code: ApiV1ErrorCode, message: string): void {
+  const body: ApiV1Error = { code, message }
   sendJson(response, status, body)
 }
 
@@ -273,6 +280,14 @@ export function createRequestListener(routes: readonly Route[], options: Request
       options.metrics.recordResponse(response.statusCode)
     })
     const url = new URL(request.url ?? '/', 'http://localhost')
+    const isApiV1 = url.pathname === API_V1_BASE_PATH || url.pathname.startsWith(`${API_V1_BASE_PATH}/`)
+    const fail = (status: number, code: ApiV1ErrorCode, message: string): void => {
+      if (isApiV1) {
+        sendApiV1Error(response, status, code, message)
+      } else {
+        sendError(response, status, message)
+      }
+    }
     void (async () => {
       const method = request.method ?? 'GET'
       // Nur die API: statische Dateien der SPA kommen beim ersten Laden im Dutzend und sind kein Angriffsweg.
@@ -290,7 +305,7 @@ export function createRequestListener(routes: readonly Route[], options: Request
           // der Anwendung soll keine zweite Sammlung davon werden.
           options.logger('warn', 'http.rate.exceeded', { path: url.pathname })
           response.setHeader('retry-after', '1')
-          sendError(response, 429, 'Zu viele Anfragen')
+          fail(429, 'rate_limited', 'Zu viele Anfragen')
           return
         }
       }
@@ -300,14 +315,15 @@ export function createRequestListener(routes: readonly Route[], options: Request
       if (candidates.length > 0) {
         const route = candidates.find((candidate) => candidate.method === method)
         if (route === undefined) {
-          sendError(response, 405, 'Methode nicht erlaubt')
+          fail(405, 'method_not_allowed', 'Methode nicht erlaubt')
           return
         }
         await route.handle({ request, response, url })
         return
       }
-      if (method !== 'GET') {
-        sendError(response, 404, 'Nicht gefunden')
+      // Tools must never receive the SPA as an answer to a mistyped path.
+      if (isApiV1 || method !== 'GET') {
+        fail(404, 'not_found', 'Nicht gefunden')
         return
       }
       const file = await resolveStaticFile(root, url.pathname)
@@ -327,7 +343,7 @@ export function createRequestListener(routes: readonly Route[], options: Request
       // Nur der Pfad, nie die Anfragezeile: der Suchbegriff der Nutzersuche steht als Query dahinter.
       options.logger('error', 'http.unhandled', { path: url.pathname, error: describeError(error) })
       if (!response.headersSent) {
-        sendError(response, 500, 'Interner Fehler')
+        fail(500, 'internal_error', 'Interner Fehler')
       }
       response.end()
     })

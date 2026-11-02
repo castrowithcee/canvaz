@@ -100,10 +100,12 @@ export type BoardFilter = {
    * Gewaehlter Ordner. `null` heisst: kein Ordnerfilter - die ganze Liste des Arbeitsbereichs.
    * `{ folderId: null }` heisst: ausschliesslich die Boards unmittelbar im Arbeitsbereich.
    *
+   * `{ folderIds }` heisst: Boards in genau einem dieser Ordner (der Teilbaum eines API-Key-Ziels).
+   *
    * Der Filter waehlt aus, was ohnehin zugaenglich ist, und **erweitert den Zugriff nie**: die Liste ist
    * bereits auf den Arbeitsbereich des Anfragenden begrenzt, bevor ein Ordner ueberhaupt zaehlt.
    */
-  readonly folder: { readonly folderId: FolderId | null } | null
+  readonly folder: { readonly folderId: FolderId | null } | { readonly folderIds: readonly FolderId[] } | null
 }
 
 /**

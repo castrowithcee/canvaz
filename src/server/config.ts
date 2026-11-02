@@ -115,6 +115,8 @@ export type AppConfig = {
    * stattfindet und kein Gebrauch.
    */
   readonly authRateLimitPerMinute: number
+  /** Requests per minute and API key on the automation API, on top of the per-client limit. */
+  readonly apiKeyRateLimitPerMinute: number
   /**
    * Anmeldeversuche je Zielkonto und Fenster, unabhaengig davon, von wie vielen Clients sie kommen. Gezaehlt
    * wird die eingegebene Adresse, ob es das Konto gibt oder nicht; eine erfolgreiche Anmeldung setzt den
@@ -350,6 +352,14 @@ const MAX_RATE_LIMIT_PER_MINUTE = 600_000
 const DEFAULT_AUTH_RATE_LIMIT_PER_MINUTE = 10
 const MIN_AUTH_RATE_LIMIT_PER_MINUTE = 5
 const MAX_AUTH_RATE_LIMIT_PER_MINUTE = 600_000
+
+/**
+ * Requests per minute and API key. Two per second sustained, with a full minute as burst, covers a tool
+ * walking a workspace; a looping tool hits the wall long before the per-client limit.
+ */
+const DEFAULT_API_KEY_RATE_LIMIT_PER_MINUTE = 120
+const MIN_API_KEY_RATE_LIMIT_PER_MINUTE = 10
+const MAX_API_KEY_RATE_LIMIT_PER_MINUTE = 600_000
 
 /**
  * Anmeldeversuche je Zielkonto und Fenster.
@@ -635,6 +645,14 @@ export function loadConfig(env: Env = process.env): AppConfig {
       DEFAULT_AUTH_RATE_LIMIT_PER_MINUTE,
       MIN_AUTH_RATE_LIMIT_PER_MINUTE,
       MAX_AUTH_RATE_LIMIT_PER_MINUTE,
+      problems,
+    ),
+    apiKeyRateLimitPerMinute: readInteger(
+      env,
+      'CANVAZ_API_KEY_RATE_LIMIT_PER_MINUTE',
+      DEFAULT_API_KEY_RATE_LIMIT_PER_MINUTE,
+      MIN_API_KEY_RATE_LIMIT_PER_MINUTE,
+      MAX_API_KEY_RATE_LIMIT_PER_MINUTE,
       problems,
     ),
     authAccountAttempts: readInteger(

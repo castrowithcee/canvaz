@@ -370,11 +370,14 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
         // `position(... in ...)` statt `like`: der Suchbegriff darf keine Platzhalter enthalten koennen.
         // Die eigene Freigabezeile kommt als `left join` mit: sie gehoert zu genau dieser Zeile und zu
         // diesem Zeitpunkt, und eine zweite Abfrage je Board waere beides nicht.
-        // Der Ordnerfilter ist eine feste Bedingung aus drei Faellen und nie eine zusammengesetzte
+        // Der Ordnerfilter ist eine feste Bedingung aus vier Faellen und nie eine zusammengesetzte
         // Zeichenkette aus der Anfrage: die Kennung selbst kommt weiterhin als Parameter.
         const params: unknown[] = [workspaceId, filter.status, filter.title, userId]
         let folderCondition = 'true'
-        if (filter.folder !== null) {
+        if (filter.folder !== null && 'folderIds' in filter.folder) {
+          params.push(filter.folder.folderIds)
+          folderCondition = 'b.folder_id = any($5::uuid[])'
+        } else if (filter.folder !== null) {
           if (filter.folder.folderId === null) {
             folderCondition = 'b.folder_id is null'
           } else {
