@@ -265,6 +265,14 @@ describe('Szene und Export', () => {
     return { ada, workspace, board, value }
   }
 
+  /** Waits for the closing checkpoint, so its write cannot collide with the next test's truncate. */
+  async function schliessen(client: { close(): void }, boardId: string, value: string) {
+    client.close()
+    await vi.waitFor(async () => {
+      expect((await get(API_V1_BOARD_METADATA_PATH, value, { boardId })).body).toMatchObject({ board: { sceneVersion: 1 } })
+    })
+  }
+
   it('liefert bei geschlossenem Board den gespeicherten Stand ohne Tombstones', async () => {
     const b = await boardMitSzene((boardId) => ({ kind: 'board', boardId }))
     const client = await openRealtime(app.baseUrl, b.ada.jar.cookieHeader())
@@ -297,7 +305,7 @@ describe('Szene und Export', () => {
         board: { sceneVersion: 0 },
       })
     } finally {
-      client.close()
+      await schliessen(client, b.board.id, b.value)
     }
   })
 
@@ -318,7 +326,7 @@ describe('Szene und Export', () => {
       expect(geparst.ok).toBe(true)
       expect(geparst.ok && geparst.file.elements.map((entry) => entry.id)).toEqual(['a'])
     } finally {
-      client.close()
+      await schliessen(client, b.board.id, b.value)
     }
   })
 
