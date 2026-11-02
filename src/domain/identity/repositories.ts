@@ -421,6 +421,7 @@ export interface ApiKeyRepository {
   revokeAllForUser(userId: UserId, revokedAt: Date): Promise<number>
   /** Keys that are neither revoked nor expired. */
   countActive(userId: UserId, now: Date): Promise<number>
+  /** Writes `last_used_at` only if it is unset or at least a minute older than `usedAt`. */
   markUsed(id: ApiKeyId, usedAt: Date): Promise<void>
   /** `null`: unknown, expired, revoked, access off or user inactive. */
   resolveByHash(keyHash: string, now: Date): Promise<ResolvedApiKey | null>

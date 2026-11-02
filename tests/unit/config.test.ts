@@ -146,6 +146,12 @@ describe('Konfiguration', () => {
     expect(() => loadConfig({ ...validEnv, CANVAZ_AUTH_RATE_LIMIT_PER_MINUTE: '1' })).toThrow(ConfigError)
   })
 
+  it('nimmt eine eigene Ratengrenze je API-Key nur innerhalb der zulaessigen Spanne an', () => {
+    expect(loadConfig(validEnv).apiKeyRateLimitPerMinute).toBe(120)
+    expect(loadConfig({ ...validEnv, CANVAZ_API_KEY_RATE_LIMIT_PER_MINUTE: '30' }).apiKeyRateLimitPerMinute).toBe(30)
+    expect(() => loadConfig({ ...validEnv, CANVAZ_API_KEY_RATE_LIMIT_PER_MINUTE: '1' })).toThrow(ConfigError)
+  })
+
   it('weist ein zu kurzes Session-Geheimnis und falsche Werte zurueck', () => {
     expect(() => loadConfig({ ...validEnv, CANVAZ_SESSION_SECRET: 'kurz' })).toThrow(ConfigError)
     // Ein Schluessel, der nicht genau 32 Byte ergibt, waere still ein schwacher.

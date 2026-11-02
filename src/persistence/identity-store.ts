@@ -1075,7 +1075,12 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Identit
       },
 
       async markUsed(id: ApiKeyId, usedAt: Date): Promise<void> {
-        await db.query('update api_keys set last_used_at = $2 where id = $1', [id, usedAt])
+        // The condition sits in SQL so concurrent requests of one key still write at most once a minute.
+        await db.query(
+          `update api_keys set last_used_at = $2
+            where id = $1 and (last_used_at is null or last_used_at <= $2::timestamptz - interval '1 minute')`,
+          [id, usedAt],
+        )
       },
 
       async resolveByHash(keyHash: string, now: Date): Promise<ResolvedApiKey | null> {
