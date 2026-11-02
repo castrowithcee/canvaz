@@ -91,11 +91,12 @@ Jeder Fehler unter `/api/v1` ist JSON:
 
 | Status | `code`               | Bedeutung                                                  |
 | ------ | -------------------- | ---------------------------------------------------------- |
-| 400    | `bad_request`        | ungueltiger Parameter                                      |
+| 400    | `bad_request`        | ungueltiger Parameter oder Anfragekoerper                  |
 | 401    | `unauthorized`       | kein gueltiger Key                                         |
 | 403    | `forbidden`          | Stufe oder Rolle traegt die Aktion nicht                   |
 | 404    | `not_found`          | unbekannter Pfad, ausserhalb des Ziels oder nicht sichtbar |
 | 405    | `method_not_allowed` | bekannter Pfad, falsche Methode                            |
+| 409    | `conflict`           | Widerspruch zum Bestand, etwa ein doppelter Ordnername     |
 | 429    | `rate_limited`       | Ratengrenze erreicht, mit `Retry-After` in Sekunden        |
 | 500    | `internal_error`     | interner Fehler                                            |
 
@@ -159,3 +160,63 @@ Die Boards im Ziel.
 ### `GET /api/v1/boards/metadata?boardId=`
 
 Die Metadaten eines Boards im Ziel, mit denselben Feldern wie in der Boardliste: `{ "board": { … } }`.
+
+## Schreiboperationen
+
+Alle verlangen die Stufe `edit`; ein Key der Stufe `read` erhaelt `403`. Sie sind `POST` mit JSON-Koerper,
+Kennungen stehen im Koerper. Ein CSRF-Token entfaellt, weil nur der Key authentisiert. Es gelten die Rechte
+des Nutzers wie in der Oberflaeche, und jede Aktion wird wie dort nachgewiesen, zusaetzlich mit der Key-ID.
+
+Wohin geschrieben werden darf, entscheidet das Ziel des Keys bei jedem Aufruf neu:
+
+| Ziel           | Board anlegen                  | Board umbenennen     | Board verschieben                          | Ordner anlegen                 |
+| -------------- | ------------------------------ | -------------------- | ------------------------------------------ | ------------------------------ |
+| Arbeitsbereich | ueberall im Arbeitsbereich     | jedes Board darin    | innerhalb des Arbeitsbereichs, auch Wurzel | ueberall im Arbeitsbereich     |
+| Ordner         | nur in einem Ordner des Ziels  | Boards im Teilbaum   | Quelle und Ziel im Teilbaum, nie Wurzel    | nur unter Ordnern des Ziels    |
+| Board          | nicht moeglich                 | genau dieses Board   | nicht moeglich                             | nicht moeglich                 |
+
+Ein Ort ausserhalb des Ziels ergibt dieselbe `404` wie eine erfundene Kennung, ebenso ein Board-Key bei
+Anlage und Verschiebung. Ein Wechsel des Arbeitsbereichs, Archivieren sowie Umbenennen, Verschieben und
+Aufloesen von Ordnern sind ueber die API nicht moeglich.
+
+### `POST /api/v1/boards`
+
+Legt ein Board an; es gehoert dem Nutzer des Keys. Verlangt das Recht, Boards anzulegen.
+
+```json
+{ "workspaceId": "…", "title": "…", "folderId": "…" }
+```
+
+`folderId` fehlt oder ist `null`: unmittelbar im Arbeitsbereich. Antwort `201` mit `{ "board": { … } }` in
+der Form der Boardliste. Ein Titel ausserhalb von 1 bis 120 Zeichen nach dem Kuerzen ergibt `400`.
+
+### `POST /api/v1/boards/rename`
+
+```json
+{ "boardId": "…", "title": "…" }
+```
+
+Antwort `200` mit `{ "board": { … } }`. Verlangt das Recht, das Board zu bearbeiten.
+
+### `POST /api/v1/boards/move`
+
+Legt ein Board in einem anderen Ordner seines Arbeitsbereichs ab.
+
+```json
+{ "boardId": "…", "folderId": null }
+```
+
+`folderId` ist Pflicht; `null` heisst Wurzel des Arbeitsbereichs, ein fehlendes Feld ergibt `400`. Antwort
+`200` mit `{ "board": { … } }`. Verlangt das Recht, das Board zu bearbeiten.
+
+### `POST /api/v1/folders`
+
+Legt einen Ordner an. Verlangt die Rolle Owner oder Admin im Arbeitsbereich.
+
+```json
+{ "workspaceId": "…", "name": "…", "parentId": "…" }
+```
+
+`parentId` fehlt oder ist `null`: unmittelbar im Arbeitsbereich. Antwort `201` mit `{ "folder": { … } }` in
+der Form der Ordnerliste. Ein Name ausserhalb von 1 bis 80 Zeichen ergibt `400`; ein doppelter Name unter
+demselben Elternordner oder eine Verschachtelung tiefer als fuenf Ebenen ergibt `409` mit `code: "conflict"`.

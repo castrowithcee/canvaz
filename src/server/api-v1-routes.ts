@@ -33,7 +33,7 @@ import type { ApiKeyLevel, ResolvedApiKey } from '../domain/identity/api-key.js'
 import { apiKeyLevelAllows, isBoardInApiKeyTarget } from '../domain/identity/api-key.js'
 import type { Workspace, WorkspaceAccess } from '../domain/workspace/model.js'
 import { decideWorkspaceAccess } from '../domain/workspace/policy.js'
-import { createApiKeyGuard } from './api-key-guard.js'
+import type { ApiKeyGuard } from './api-key-guard.js'
 import type { AppContext } from './context.js'
 import type { Route } from './http.js'
 import { sendApiV1Error, sendJson } from './http.js'
@@ -42,8 +42,8 @@ import { apiKeyBoardSubject } from './requester.js'
 
 type Denial = { readonly status: 400 | 403 | 404; readonly code: 'bad_request' | 'forbidden' | 'not_found'; readonly message: string }
 
-const NOT_FOUND: Denial = { status: 404, code: 'not_found', message: 'Nicht gefunden' }
-const LEVEL_TOO_LOW: Denial = { status: 403, code: 'forbidden', message: 'Die Stufe des API-Keys reicht nicht' }
+export const NOT_FOUND: Denial = { status: 404, code: 'not_found', message: 'Nicht gefunden' }
+export const LEVEL_TOO_LOW: Denial = { status: 403, code: 'forbidden', message: 'Die Stufe des API-Keys reicht nicht' }
 const FORBIDDEN: Denial = { status: 403, code: 'forbidden', message: 'Keine Berechtigung fuer diese Aktion' }
 const BAD_STATUS: Denial = { status: 400, code: 'bad_request', message: 'status muss active oder archived sein' }
 
@@ -76,7 +76,7 @@ function toWorkspace(workspace: Workspace): ApiV1Workspace {
   }
 }
 
-function toFolder(folder: Folder): ApiV1Folder {
+export function toFolder(folder: Folder): ApiV1Folder {
   return {
     id: folder.id,
     workspaceId: folder.workspaceId,
@@ -87,7 +87,7 @@ function toFolder(folder: Folder): ApiV1Folder {
   }
 }
 
-function toBoard(board: Board): ApiV1Board {
+export function toBoard(board: Board): ApiV1Board {
   return {
     id: board.id,
     workspaceId: board.workspaceId,
@@ -100,9 +100,8 @@ function toBoard(board: Board): ApiV1Board {
   }
 }
 
-export function createApiV1Routes(context: AppContext): readonly Route[] {
-  const authenticate = createApiKeyGuard(context)
-
+/** `authenticate` is shared with the write routes so that one rate limit counts every call of a key. */
+export function createApiV1Routes(context: AppContext, authenticate: ApiKeyGuard): readonly Route[] {
   function viewerOf(key: ResolvedApiKey): BoardViewer {
     return { kind: 'user', userId: key.key.userId }
   }
