@@ -142,3 +142,16 @@ export function checkFolderPlacement(
   )
   return doppelt ? 'name-doppelt' : null
 }
+
+/** Whether `folderId` lies in the subtree of `rootId`, the folder itself included. Returns `false` on a cycle. */
+export function isInFolderSubtree(folders: readonly Folder[], folderId: FolderId, rootId: FolderId): boolean {
+  const byId = new Map(folders.map((folder) => [folder.id, folder]))
+  let current: FolderId | null = folderId
+  for (let step = 0; current !== null && step <= byId.size; step += 1) {
+    if (current === rootId) {
+      return true
+    }
+    current = byId.get(current)?.parentId ?? null
+  }
+  return false
+}

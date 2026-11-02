@@ -10,6 +10,8 @@ import type { Pool, PoolClient } from 'pg'
 import type { AppearanceView } from '../contracts/api.js'
 import { parseAppearance } from '../contracts/api.js'
 
+import type { ApiKey, ApiKeyAccess, ApiKeyId, ApiKeyTarget, ResolvedApiKey } from '../domain/identity/api-key.js'
+import { resolveApiKey } from '../domain/identity/api-key.js'
 import type {
   InvitationPurpose,
   LocalCredential,
@@ -33,8 +35,11 @@ import type { TotpFactor } from '../domain/identity/second-factor.js'
 import type { RecoveryEmailToken, RecoveryEmailTokenPurpose, SelfRecovery } from '../domain/identity/self-recovery.js'
 import type { UserProfileDraft } from '../domain/identity/provisioning.js'
 import type {
+  ApiKeyWithUser,
   IdentityStore,
   LinkedIdentity,
+  NewApiKey,
+  NewUserAuditEvent,
   NewInvitation,
   NewRecoveryEmailToken,
   NewSenderBlock,
@@ -200,7 +205,7 @@ function toRecoveryEmailToken(row: RecoveryEmailTokenRow): RecoveryEmailToken {
   return {
     id: row.id,
     userId: row.user_id,
-    // Der Check-Constraint laesst nur diese beiden Werte zu.
+    // The check constraint allows only these two values.
     purpose: row.purpose as RecoveryEmailTokenPurpose,
     email: row.email,
     createdAt: row.created_at,
@@ -305,6 +310,87 @@ function toSession(row: SessionRow): Session {
     revokedAt: row.revoked_at,
     secondFactorVerifiedAt: row.second_factor_verified_at,
   }
+}
+
+type ApiKeyRow = {
+  id: string
+  user_id: string
+  name: string
+  target_workspace_id: string | null
+  target_folder_id: string | null
+  target_board_id: string | null
+  level: string
+  expires_at: Date
+  revoked_at: Date | null
+  last_used_at: Date | null
+  key_prefix: string
+  created_at: Date
+}
+
+const API_KEY_COLUMNS =
+  'id, user_id, name, target_workspace_id, target_folder_id, target_board_id, level, expires_at, revoked_at, last_used_at, key_prefix, created_at'
+
+function toApiKeyTarget(row: ApiKeyRow): ApiKeyTarget {
+  // The check constraint guarantees exactly one target.
+  if (row.target_workspace_id !== null) {
+    return { kind: 'workspace', workspaceId: row.target_workspace_id }
+  }
+  if (row.target_folder_id !== null) {
+    return { kind: 'folder', folderId: row.target_folder_id }
+  }
+  return { kind: 'board', boardId: requireRow(row.target_board_id ?? undefined, 'Key ohne Ziel') }
+}
+
+function toApiKey(row: ApiKeyRow): ApiKey {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    name: row.name,
+    target: toApiKeyTarget(row),
+    // Der Check-Constraint laesst nur diese beiden Werte zu.
+    level: row.level as ApiKey['level'],
+    expiresAt: row.expires_at,
+    revokedAt: row.revoked_at,
+    lastUsedAt: row.last_used_at,
+    prefix: row.key_prefix,
+    createdAt: row.created_at,
+  }
+}
+
+function targetColumns(target: ApiKeyTarget): [string | null, string | null, string | null] {
+  switch (target.kind) {
+    case 'workspace':
+      return [target.workspaceId, null, null]
+    case 'folder':
+      return [null, target.folderId, null]
+    case 'board':
+      return [null, null, target.boardId]
+  }
+}
+
+/** Key, user and current access in one query; together they decide validity. */
+const API_KEY_WITH_USER = `select k.id, k.user_id, k.name, k.target_workspace_id, k.target_folder_id, k.target_board_id,
+                  k.level, k.expires_at, k.revoked_at, k.last_used_at, k.key_prefix, k.created_at,
+                  u.display_name, u.email, u.status, u.is_system_admin,
+                  u.created_at as user_created_at, u.updated_at as user_updated_at,
+                  coalesce(a.level, 'off') as access
+           from api_keys k
+           join users u on u.id = k.user_id
+           left join user_api_key_access a on a.user_id = k.user_id`
+
+type ApiKeyWithUserRow = ApiKeyRow &
+  Omit<UserRow, 'id' | 'created_at' | 'updated_at'> & { user_created_at: Date; user_updated_at: Date; access: string }
+
+function userOfApiKeyRow(row: ApiKeyWithUserRow): User {
+  return toUser({
+    id: row.user_id,
+    display_name: row.display_name,
+    email: row.email,
+    status: row.status,
+    is_system_admin: row.is_system_admin,
+    created_at: row.user_created_at,
+    updated_at: row.user_updated_at,
+  })
 }
 
 function requireRow<T>(row: T | undefined, message: string): T {
@@ -935,6 +1021,103 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Identit
           [userId, revokedAt, purpose ?? null],
         )
         return result.rowCount ?? 0
+      },
+    },
+
+    apiKeys: {
+      async create(key: NewApiKey): Promise<ApiKey> {
+        const [workspaceId, folderId, boardId] = targetColumns(key.target)
+        const result = await db.query<ApiKeyRow>(
+          `insert into api_keys (user_id, name, target_workspace_id, target_folder_id, target_board_id,
+                                 level, expires_at, key_prefix, key_hash)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           returning ${API_KEY_COLUMNS}`,
+          [key.userId, key.name, workspaceId, folderId, boardId, key.level, key.expiresAt, key.prefix, key.keyHash],
+        )
+        return toApiKey(requireRow(result.rows[0], 'Key konnte nicht angelegt werden'))
+      },
+
+      async listAll(): Promise<readonly ApiKeyWithUser[]> {
+        const result = await db.query<ApiKeyWithUserRow>(`${API_KEY_WITH_USER} order by k.created_at desc, k.id`)
+        return result.rows.map((row): ApiKeyWithUser => ({ key: toApiKey(row), user: userOfApiKeyRow(row) }))
+      },
+
+      async listForUser(userId: UserId): Promise<readonly ApiKey[]> {
+        const result = await db.query<ApiKeyRow>(
+          `select ${API_KEY_COLUMNS} from api_keys where user_id = $1 order by created_at desc, id`,
+          [userId],
+        )
+        return result.rows.map(toApiKey)
+      },
+
+      async revoke(id: ApiKeyId, revokedAt: Date): Promise<boolean> {
+        const result = await db.query('update api_keys set revoked_at = $2 where id = $1 and revoked_at is null', [
+          id,
+          revokedAt,
+        ])
+        return (result.rowCount ?? 0) === 1
+      },
+
+      async revokeAllForUser(userId: UserId, revokedAt: Date): Promise<number> {
+        const result = await db.query(
+          'update api_keys set revoked_at = $2 where user_id = $1 and revoked_at is null',
+          [userId, revokedAt],
+        )
+        return result.rowCount ?? 0
+      },
+
+      async countActive(userId: UserId, now: Date): Promise<number> {
+        const result = await db.query<{ count: string }>(
+          'select count(*) as count from api_keys where user_id = $1 and revoked_at is null and expires_at > $2',
+          [userId, now],
+        )
+        return Number(result.rows[0]?.count ?? 0)
+      },
+
+      async markUsed(id: ApiKeyId, usedAt: Date): Promise<void> {
+        await db.query('update api_keys set last_used_at = $2 where id = $1', [id, usedAt])
+      },
+
+      async resolveByHash(keyHash: string, now: Date): Promise<ResolvedApiKey | null> {
+        const result = await db.query<ApiKeyWithUserRow>(`${API_KEY_WITH_USER} where k.key_hash = $1`, [keyHash])
+        const row = result.rows[0]
+        if (row === undefined) {
+          return null
+        }
+        // The level is recomputed from the current access on every call; the domain decides.
+        return resolveApiKey({ key: toApiKey(row), user: userOfApiKeyRow(row), access: row.access as ApiKeyAccess }, now)
+      },
+
+      async getAccess(userId: UserId): Promise<ApiKeyAccess> {
+        const result = await db.query<{ level: string }>('select level from user_api_key_access where user_id = $1', [
+          userId,
+        ])
+        return (result.rows[0]?.level ?? 'off') as ApiKeyAccess
+      },
+
+      async listAccess(): Promise<ReadonlyMap<UserId, ApiKeyAccess>> {
+        const result = await db.query<{ user_id: string; level: string }>(
+          'select user_id, level from user_api_key_access',
+        )
+        return new Map(result.rows.map((row) => [row.user_id, row.level as ApiKeyAccess]))
+      },
+
+      async setAccess(userId: UserId, access: ApiKeyAccess): Promise<void> {
+        await db.query(
+          `insert into user_api_key_access (user_id, level) values ($1, $2)
+           on conflict (user_id) do update set level = excluded.level, updated_at = now()`,
+          [userId, access],
+        )
+      },
+    },
+
+    userAudit: {
+      async record(event: NewUserAuditEvent): Promise<void> {
+        await db.query(
+          `insert into user_audit_events (actor_user_id, action, target_type, target_id, subject_user_id, details)
+           values ($1, $2, $3, $4, $5, $6)`,
+          [event.actorId, event.action, event.targetType, event.targetId, event.subjectUserId, event.details],
+        )
       },
     },
 

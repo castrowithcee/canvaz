@@ -70,6 +70,11 @@ export const ADMIN_USER_INVITATION_PATH = `${API_BASE_PATH}/admin/users/invitati
 export const ADMIN_USER_INVITATION_REVOKE_PATH = `${API_BASE_PATH}/admin/users/invitation/revoke`
 /** Selbstwiederherstellung per Mail fuer ein Konto freischalten oder abschalten. */
 export const ADMIN_USER_SELF_RECOVERY_PATH = `${API_BASE_PATH}/admin/users/self-recovery`
+/** Set a user's API key access (off, read, edit). */
+export const ADMIN_USER_API_ACCESS_PATH = `${API_BASE_PATH}/admin/users/api-access`
+/** All API keys of all users, without value or hash. */
+export const ADMIN_API_KEYS_PATH = `${API_BASE_PATH}/admin/api-keys`
+export const ADMIN_API_KEY_REVOKE_PATH = `${API_BASE_PATH}/admin/api-keys/revoke`
 /**
  * Adresse und Klasse der aktuellen Anfrage, wie die Anwendung sie ermittelt - fuer die Systemadministration.
  * Speichert nichts; die Antwort gilt genau fuer diese eine Anfrage.
@@ -276,6 +281,21 @@ export type SetSelfRecoveryRequest = {
   readonly allowed: boolean
 }
 
+export type ApiKeyAccessView = 'off' | 'read' | 'edit'
+
+export type SetApiAccessRequest = {
+  readonly userId: string
+  readonly access: ApiKeyAccessView
+}
+
+export type RevokeApiKeyRequest = {
+  readonly keyId: string
+}
+
+export type RevokeApiKeyResponse = {
+  readonly status: 'ok'
+}
+
 export type RedeemInvitationRequest = {
   readonly token: string
   readonly password: string
@@ -401,6 +421,8 @@ export type AdminUserView = UserView & {
   readonly selfRecoveryAllowed: boolean
   /** Ob eine Wiederherstellungsadresse bestaetigt ist - die Adresse selbst steht hier nicht. */
   readonly recoveryEmailVerified: boolean
+  /** API key access; `off` when none is set. */
+  readonly apiKeyAccess: ApiKeyAccessView
 }
 
 export type AdminUsersResponse = {
@@ -1294,4 +1316,27 @@ export const MAX_ASSET_FILE_NAME_LENGTH = 255
  */
 export type UploadBoardAssetResponse = {
   readonly file: BinaryFileRef
+}
+
+export type ApiKeyTargetView = {
+  readonly kind: 'workspace' | 'folder' | 'board'
+  readonly id: string
+}
+
+export type AdminApiKeyView = {
+  readonly id: string
+  readonly userId: string
+  readonly userDisplayName: string
+  readonly name: string
+  /** Non-secret start of the value; neither the value nor its hash ever leaves the server. */
+  readonly prefix: string
+  readonly target: ApiKeyTargetView
+  readonly level: 'read' | 'edit'
+  readonly expiresAt: string
+  readonly lastUsedAt: string | null
+  readonly state: 'active' | 'expired' | 'revoked'
+}
+
+export type AdminApiKeysResponse = {
+  readonly keys: readonly AdminApiKeyView[]
 }

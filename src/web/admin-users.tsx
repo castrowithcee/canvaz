@@ -2,7 +2,7 @@
  * Kontenverwaltung der Systemadministration.
  *
  * Anlegen, Zugang uebergeben, zuruecksetzen, Einladung widerrufen, Selbstwiederherstellung per Mail
- * freischalten, aktivieren und deaktivieren. Die Ansicht
+ * freischalten, API-Key-Freigabe setzen, API-Keys widerrufen, aktivieren und deaktivieren. Die Ansicht
  * blendet nichts als Sicherheitsgrenze aus - jede Aktion wird serverseitig entschieden, und jede Ablehnung
  * erscheint hier als Text.
  *
@@ -16,18 +16,21 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { KeyRound, Mail, MailCheck, MailX, RotateCcw, UserCheck, UserPlus, UserX } from 'lucide-react'
+import { Ban, KeyRound, Mail, MailCheck, MailX, RotateCcw, UserCheck, UserPlus, UserX } from 'lucide-react'
 
-import type { AdminUserView, ClientAddressResponse, MeResponse } from '../contracts/api.js'
+import type { AdminApiKeyView, AdminUserView, ApiKeyAccessView, ClientAddressResponse, MeResponse } from '../contracts/api.js'
 import { MIN_PASSWORD_LENGTH } from '../contracts/api.js'
 import {
   ApiError,
   createUser,
   createUserInvitation,
+  fetchAdminApiKeys,
   fetchAdminUsers,
   fetchClientAddress,
   resetUserPassword,
+  revokeAdminApiKey,
   revokeUserInvitation,
+  setUserApiAccess,
   setUserSelfRecovery,
   setUserStatus,
 } from './api.js'
@@ -35,6 +38,20 @@ import { Dialog } from './overlays.js'
 import { Badge, Button, Field, Notice, PageState, TableSkeleton } from './ui.js'
 
 const USER_COLUMNS = ['Anzeigename', 'E-Mail', 'Status', 'Rolle', 'Zugang', 'Aktion']
+
+const API_KEY_COLUMNS = ['Nutzer', 'Name', 'Ziel', 'Stufe', 'Ablauf', 'Zuletzt benutzt', 'Zustand', 'Aktion']
+
+const API_ACCESS_LABELS: Record<ApiKeyAccessView, string> = {
+  off: 'aus',
+  read: 'lesen',
+  edit: 'bearbeiten',
+}
+
+const API_TARGET_LABELS: Record<AdminApiKeyView['target']['kind'], string> = {
+  workspace: 'Arbeitsbereich',
+  folder: 'Ordner (mit Teilbaum)',
+  board: 'Board',
+}
 
 function messageOf(cause: unknown, fallback: string): string {
   return cause instanceof ApiError ? cause.message : fallback
@@ -53,6 +70,21 @@ function AccessBadge({ user }: { readonly user: AdminUserView }) {
     )
   }
   return user.hasPassword ? <Badge>lokales Passwort</Badge> : <Badge>kein lokaler Zugang</Badge>
+}
+
+function ApiAccessBadge({ access }: { readonly access: ApiKeyAccessView }) {
+  return access === 'off' ? null : <Badge tone="accent">API-Keys: {API_ACCESS_LABELS[access]}</Badge>
+}
+
+function ApiKeyStateBadge({ state }: { readonly state: AdminApiKeyView['state'] }) {
+  switch (state) {
+    case 'active':
+      return <Badge tone="success">aktiv</Badge>
+    case 'expired':
+      return <Badge>abgelaufen</Badge>
+    case 'revoked':
+      return <Badge tone="danger">widerrufen</Badge>
+  }
 }
 
 /** Ob die Selbstwiederherstellung frei ist und ob der Inhaber schon eine Adresse bestaetigt hat. */
@@ -355,6 +387,8 @@ export function AdminUsers({ me }: { readonly me: MeResponse }) {
   const [pendingId, setPendingId] = useState<string | null>(null)
   const [resetFor, setResetFor] = useState<AdminUserView | null>(null)
   const [revokeFor, setRevokeFor] = useState<AdminUserView | null>(null)
+  const [apiKeys, setApiKeys] = useState<readonly AdminApiKeyView[] | null>(null)
+  const [revokeKeyFor, setRevokeKeyFor] = useState<AdminApiKeyView | null>(null)
   const [invitation, setInvitation] = useState<string | null>(null)
 
   const load = useCallback(() => {
@@ -366,6 +400,14 @@ export function AdminUsers({ me }: { readonly me: MeResponse }) {
       .catch((cause: unknown) => {
         setUsers([])
         setError(messageOf(cause, 'Die Nutzerliste konnte nicht geladen werden.'))
+      })
+    fetchAdminApiKeys()
+      .then((response) => {
+        setApiKeys(response.keys)
+      })
+      .catch((cause: unknown) => {
+        setApiKeys([])
+        setError(messageOf(cause, 'Die API-Keys konnten nicht geladen werden.'))
       })
   }, [])
 
@@ -461,6 +503,7 @@ export function AdminUsers({ me }: { readonly me: MeResponse }) {
                       <span className="actions">
                         <AccessBadge user={user} />
                         <SelfRecoveryBadge user={user} />
+                        <ApiAccessBadge access={user.apiKeyAccess} />
                       </span>
                     </td>
                     <td data-label="Aktion">
@@ -532,6 +575,29 @@ export function AdminUsers({ me }: { readonly me: MeResponse }) {
                             {user.selfRecoveryAllowed ? 'Mail-Ruecksetzung abschalten' : 'Mail-Ruecksetzung freischalten'}
                           </Button>
                         )}
+                        <select
+                          value={user.apiKeyAccess}
+                          disabled={busy}
+                          aria-label={`API-Key-Freigabe fuer ${user.displayName}`}
+                          onChange={(event) => {
+                            const access = (Object.keys(API_ACCESS_LABELS) as ApiKeyAccessView[]).find(
+                              (candidate) => candidate === event.target.value,
+                            )
+                            if (access !== undefined) {
+                              run(
+                                user.id,
+                                setUserApiAccess(me.csrfToken, { userId: user.id, access }),
+                                'Die API-Key-Freigabe konnte nicht geaendert werden.',
+                              )
+                            }
+                          }}
+                        >
+                          {Object.entries(API_ACCESS_LABELS).map(([value, label]) => (
+                            <option key={value} value={value}>
+                              API-Keys: {label}
+                            </option>
+                          ))}
+                        </select>
                         {user.invitationExpiresAt !== null && (
                           <Button
                             variant="danger"
@@ -560,6 +626,63 @@ export function AdminUsers({ me }: { readonly me: MeResponse }) {
         </div>
       )}
 
+      <h3>API-Keys</h3>
+      {apiKeys === null && <TableSkeleton columns={API_KEY_COLUMNS} label="API-Keys werden geladen …" />}
+      {apiKeys !== null && apiKeys.length === 0 && error === null && (
+        <PageState kind="empty" title="Keine API-Keys" description="Noch hat niemand einen API-Key angelegt." />
+      )}
+      {apiKeys !== null && apiKeys.length > 0 && (
+        <div className="table-wrap">
+          <table className="table">
+            <caption className="visually-hidden">Alle API-Keys dieser Instanz</caption>
+            <thead>
+              <tr>
+                {API_KEY_COLUMNS.map((column) => (
+                  <th key={column} scope="col">
+                    {column}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {apiKeys.map((key) => (
+                <tr key={key.id}>
+                  <td data-label="Nutzer">{key.userDisplayName}</td>
+                  <td data-label="Name">
+                    {key.name} <span className="hint">({key.prefix}…)</span>
+                  </td>
+                  <td data-label="Ziel">
+                    {API_TARGET_LABELS[key.target.kind]} <span className="hint">{key.target.id}</span>
+                  </td>
+                  <td data-label="Stufe">{key.level === 'edit' ? 'bearbeiten' : 'lesen'}</td>
+                  <td data-label="Ablauf">{new Date(key.expiresAt).toLocaleString('de-DE')}</td>
+                  <td data-label="Zuletzt benutzt">
+                    {key.lastUsedAt === null ? '—' : new Date(key.lastUsedAt).toLocaleString('de-DE')}
+                  </td>
+                  <td data-label="Zustand">
+                    <ApiKeyStateBadge state={key.state} />
+                  </td>
+                  <td data-label="Aktion">
+                    {key.state !== 'revoked' && (
+                      <Button
+                        variant="danger"
+                        icon={Ban}
+                        onClick={() => {
+                          setRevokeKeyFor(key)
+                        }}
+                        aria-label={`API-Key ${key.name} von ${key.userDisplayName} widerrufen`}
+                      >
+                        Widerrufen
+                      </Button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       <ClientAddressCheck />
 
       <ResetPasswordDialog
@@ -573,6 +696,43 @@ export function AdminUsers({ me }: { readonly me: MeResponse }) {
           load()
         }}
       />
+
+      <Dialog
+        open={revokeKeyFor !== null}
+        danger
+        title="API-Key widerrufen"
+        onClose={() => {
+          setRevokeKeyFor(null)
+        }}
+      >
+        <p>
+          Der Key <strong>{revokeKeyFor?.name}</strong> von {revokeKeyFor?.userDisplayName} gilt danach nicht mehr
+          und laesst sich nicht wiederherstellen.
+        </p>
+        <p className="actions">
+          <Button
+            variant="danger"
+            icon={Ban}
+            onClick={() => {
+              const key = revokeKeyFor
+              setRevokeKeyFor(null)
+              if (key !== null) {
+                run(key.userId, revokeAdminApiKey(me.csrfToken, { keyId: key.id }), 'Der API-Key konnte nicht widerrufen werden.')
+              }
+            }}
+          >
+            API-Key widerrufen
+          </Button>
+          <Button
+            variant="quiet"
+            onClick={() => {
+              setRevokeKeyFor(null)
+            }}
+          >
+            Abbrechen
+          </Button>
+        </p>
+      </Dialog>
 
       <Dialog
         open={revokeFor !== null}

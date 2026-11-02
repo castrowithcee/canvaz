@@ -4,6 +4,7 @@ Selbst gehostete Kollaborationsplattform. Ein TypeScript/Node-Anwendungsserver l
 und die HTTP-API aus; PostgreSQL ist die massgebliche Datenhaltung.
 
 Planung, Architekturentscheidungen und Betriebswissen liegen im getrennten Repository `canvaz-ops`.
+API-Keys fuer die Automation beschreibt [API.md](API.md).
 
 ## Struktur
 
@@ -395,6 +396,9 @@ Codeeinloesung, damit es genau einmal gilt.
 | POST          | `/api/admin/users/invitation/revoke` | angemeldet + Systemadmin + CSRF-Token                                                                                                             |
 | POST          | `/api/admin/users/self-recovery`     | angemeldet + Systemadmin + CSRF-Token                                                                                                             |
 | POST          | `/api/admin/users/status`            | angemeldet + Systemadmin + CSRF-Token                                                                                                             |
+| POST          | `/api/admin/users/api-access`        | angemeldet + Systemadmin + CSRF-Token; Freigabe der API-Keys, siehe [API.md](API.md)                                                              |
+| GET           | `/api/admin/api-keys`                | angemeldet + Systemadmin; alle API-Keys ohne Wert                                                                                                 |
+| POST          | `/api/admin/api-keys/revoke`         | angemeldet + Systemadmin + CSRF-Token                                                                                                             |
 | GET           | `/api/admin/client-address`          | angemeldet + Systemadmin; Adresse und Klasse der eigenen aktuellen Anfrage, siehe [Echte Client-Adresse erkennen](#echte-client-adresse-erkennen) |
 | GET (Upgrade) | `/api/realtime`                      | angemeldet **oder** gueltige Gastsession; WebSocket-Einstieg der Realtime-Strecke                                                                 |
 | POST          | `/api/boards/guest/join`             | oeffentlich, verlangt ein gueltiges Freigabetoken und die eigene Herkunft                                                                         |
@@ -1882,3 +1886,7 @@ docker/canvaz-ops.sh restore <archiv>        # Schema und Daten wieder auf dem a
 
 Additive Migrationen - neue Tabellen, neue Spalten mit Standardwert - brauchen ihn nicht: die vorherige
 Anwendungsversion laeuft auf dem neuen Schema weiter, und der Rueckweg ist allein das alte Image.
+
+Die Migration `0017_api_keys.sql` ist additiv: sie legt `api_keys`, `user_api_key_access` und
+`user_audit_events` an und ergaenzt `scene_versions` um die Autorenspalten fuer Keys. Ohne Zeile in
+`user_api_key_access` gilt die Freigabe `off`, bestehende Konten brauchen daher keinen Backfill.
