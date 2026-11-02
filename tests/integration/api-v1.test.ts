@@ -1,11 +1,13 @@
 /** Automation API: key authentication, target semantics and error format against a real PostgreSQL. */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Pool } from 'pg'
 
 import { WORKSPACES_PATH } from '../../src/contracts/api.js'
 import {
+  API_V1_BOARD_EXPORT_PATH,
   API_V1_BOARD_METADATA_PATH,
+  API_V1_BOARD_SCENE_PATH,
   API_V1_BOARDS_PATH,
   API_V1_FOLDERS_PATH,
   API_V1_WORKSPACES_PATH,
@@ -15,7 +17,12 @@ import { displayPrefixOf } from '../../src/domain/identity/api-key.js'
 import { migrate } from '../../src/persistence/migrate.js'
 import { createPool } from '../../src/persistence/pool.js'
 import { createApiKeyValue, hashApiKeyValue } from '../../src/server/api-key-secret.js'
+import { parseExcalidrawFile } from '../../src/domain/board/excalidraw-file.js'
+import { signedInAs, createBoard, createWorkspace } from '../support/board-fixture.js'
 import { signedInAsSystemAdmin } from '../support/local-accounts.js'
+import { change, element, openRealtime } from '../support/realtime-socket.js'
+import { startTestProvider } from '../support/oidc-provider.js'
+import type { TestProvider } from '../support/oidc-provider.js'
 import { startTestApp } from '../support/test-app.js'
 import type { TestApp } from '../support/test-app.js'
 
@@ -26,15 +33,18 @@ const DAY = 24 * 60 * 60 * 1000
 
 let pool: Pool
 let app: TestApp
+let provider: TestProvider
 
 beforeAll(async () => {
   pool = createPool(DATABASE_URL)
   await migrate(pool)
-  app = await startTestApp({ pool, databaseUrl: DATABASE_URL })
+  provider = await startTestProvider()
+  app = await startTestApp({ provider, pool, databaseUrl: DATABASE_URL })
 })
 
 afterAll(async () => {
   await app.close()
+  await provider.close()
   await pool.end()
 })
 
@@ -240,5 +250,96 @@ describe('Fehlerformat, Grenzen und Protokoll', () => {
     const protokoll = JSON.stringify(app.logs)
     expect(protokoll).not.toContain(value)
     expect(protokoll).not.toContain('Bearer')
+  })
+})
+
+describe('Szene und Export', () => {
+  /** A signed-in owner with a board and a read key for the given target. */
+  async function boardMitSzene(target: (boardId: string, workspaceId: string) => ApiKeyTarget) {
+    const ada = await signedInAs(app, 'ada')
+    const workspace = await createWorkspace(app, ada, 'W')
+    const board = await createBoard(app, ada, workspace.id, 'Skizze')
+    const userId = ada.profile.user.id
+    await app.store.apiKeys.setAccess(userId, 'read')
+    const { value } = await keyFor(userId, target(board.id, workspace.id))
+    return { ada, workspace, board, value }
+  }
+
+  /** Waits for the closing checkpoint, so its write cannot collide with the next test's truncate. */
+  async function schliessen(client: { close(): void }, boardId: string, value: string) {
+    client.close()
+    await vi.waitFor(async () => {
+      expect((await get(API_V1_BOARD_METADATA_PATH, value, { boardId })).body).toMatchObject({ board: { sceneVersion: 1 } })
+    })
+  }
+
+  it('liefert bei geschlossenem Board den gespeicherten Stand ohne Tombstones', async () => {
+    const b = await boardMitSzene((boardId) => ({ kind: 'board', boardId }))
+    const client = await openRealtime(app.baseUrl, b.ada.jar.cookieHeader())
+    await client.join(b.board.id)
+    client.send(change(b.board.id, [element('a', 1, 1), element('b', 2, 2, { isDeleted: true })]))
+    client.close()
+    await vi.waitFor(async () => {
+      expect((await get(API_V1_BOARD_SCENE_PATH, b.value, { boardId: b.board.id })).body['sceneVersion']).toBe(1)
+    })
+
+    const szene = await get(API_V1_BOARD_SCENE_PATH, b.value, { boardId: b.board.id })
+
+    expect(app.rooms.roomCount).toBe(0)
+    expect(szene.body).toMatchObject({ boardId: b.board.id, sceneVersion: 1, appState: { name: expect.any(String) as string } })
+    expect(szene.body['elements']).toEqual([expect.objectContaining({ id: 'a', version: 1 })])
+  })
+
+  it('liefert bei offenem Raum die ungespeicherte Aenderung', async () => {
+    const b = await boardMitSzene((boardId) => ({ kind: 'board', boardId }))
+    const client = await openRealtime(app.baseUrl, b.ada.jar.cookieHeader())
+    try {
+      await client.join(b.board.id)
+      client.send(change(b.board.id, [element('neu', 1, 1)]))
+      await vi.waitFor(async () => {
+        const szene = await get(API_V1_BOARD_SCENE_PATH, b.value, { boardId: b.board.id })
+        expect(ids(szene.body, 'elements')).toEqual(['neu'])
+      })
+      // Not yet saved: the checkpoint timer of the test app is far longer than this test.
+      expect((await get(API_V1_BOARD_METADATA_PATH, b.value, { boardId: b.board.id })).body).toMatchObject({
+        board: { sceneVersion: 0 },
+      })
+    } finally {
+      await schliessen(client, b.board.id, b.value)
+    }
+  })
+
+  it('exportiert eine nach parseExcalidrawFile gueltige Datei', async () => {
+    const b = await boardMitSzene((boardId) => ({ kind: 'board', boardId }))
+    const client = await openRealtime(app.baseUrl, b.ada.jar.cookieHeader())
+    try {
+      await client.join(b.board.id)
+      client.send(change(b.board.id, [element('a', 1, 1)]))
+      await vi.waitFor(async () => {
+        expect(ids((await get(API_V1_BOARD_SCENE_PATH, b.value, { boardId: b.board.id })).body, 'elements')).toEqual(['a'])
+      })
+
+      const datei = await get(API_V1_BOARD_EXPORT_PATH, b.value, { boardId: b.board.id })
+
+      expect(datei.status).toBe(200)
+      const geparst = parseExcalidrawFile(datei.body)
+      expect(geparst.ok).toBe(true)
+      expect(geparst.ok && geparst.file.elements.map((entry) => entry.id)).toEqual(['a'])
+    } finally {
+      await schliessen(client, b.board.id, b.value)
+    }
+  })
+
+  it('antwortet fuer ein Board ausserhalb des Ziels mit 404', async () => {
+    const b = await boardMitSzene((_boardId, workspaceId) => ({ kind: 'workspace', workspaceId }))
+    const anderes = await createBoard(app, b.ada, b.workspace.id, 'Anderes')
+    const { value } = await keyFor(b.ada.profile.user.id, { kind: 'board', boardId: b.board.id })
+
+    for (const path of [API_V1_BOARD_SCENE_PATH, API_V1_BOARD_EXPORT_PATH]) {
+      expect((await get(path, value, { boardId: b.board.id })).status).toBe(200)
+      const aussen = await get(path, value, { boardId: anderes.id })
+      expect(aussen.status).toBe(404)
+      expect(aussen.body).toEqual((await get(path, value, { boardId: crypto.randomUUID() })).body)
+    }
   })
 })

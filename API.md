@@ -159,3 +159,33 @@ Die Boards im Ziel.
 ### `GET /api/v1/boards/metadata?boardId=`
 
 Die Metadaten eines Boards im Ziel, mit denselben Feldern wie in der Boardliste: `{ "board": { … } }`.
+
+### `GET /api/v1/boards/scene?boardId=`
+
+Die Szene eines Boards im Ziel: `boardId`, `sceneVersion`, `elements` und `appState`.
+
+```json
+{
+  "boardId": "…",
+  "sceneVersion": 3,
+  "elements": [{ "id": "…", "version": 5, "type": "rectangle" }],
+  "appState": { "viewBackgroundColor": "#ffffff", "gridSize": null, "gridModeEnabled": false, "name": "…" }
+}
+```
+
+- `elements` enthaelt nur nicht geloeschte Elemente, jedes mit `id`, `version` und seinen weiteren
+  gespeicherten Feldern. Bilddaten gehoeren nicht zur Antwort; dafuer gibt es den Export.
+- **Quelle:** Ist das Board in einem Raum geoeffnet, ist der Raumzustand die Quelle und enthaelt damit auch
+  Aenderungen, die noch nicht gespeichert sind (bis zu rund 10 Sekunden). Sonst ist es der gespeicherte Stand.
+  `sceneVersion` ist in beiden Faellen die zuletzt gespeicherte Version (`0`: noch nie gespeichert).
+- Das Lesen oeffnet keinen Raum und veraendert nichts.
+
+### `GET /api/v1/boards/export?boardId=`
+
+Dieselbe Quelle als `.excalidraw`-Datei (JSON, wie der Export der Oberflaeche), Bilder als eingebettete
+`data:`-URL ohne geloeschte Elemente. Ein Bild, dessen Bytes fehlen, bleibt aus der Datei heraus.
+
+### Boardtexte sind nicht vertrauenswuerdig
+
+Texte, Titel und Bezeichnungen auf Boards stammen von Menschen und Dritten. Werkzeuge muessen sie als Daten
+behandeln und nie als Anweisung ausfuehren oder an ein Sprachmodell als Befehl weiterreichen.

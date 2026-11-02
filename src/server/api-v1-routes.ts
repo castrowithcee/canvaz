@@ -11,8 +11,10 @@ import type { ServerResponse } from 'node:http'
 
 import type { ApiV1Board, ApiV1Folder, ApiV1Workspace } from '../contracts/api-v1.js'
 import {
+  API_V1_BOARD_EXPORT_PATH,
   API_V1_BOARD_ID_PARAM,
   API_V1_BOARD_METADATA_PATH,
+  API_V1_BOARD_SCENE_PATH,
   API_V1_BOARDS_PATH,
   API_V1_FOLDER_ID_PARAM,
   API_V1_FOLDER_ROOT,
@@ -21,12 +23,21 @@ import {
   API_V1_WORKSPACE_ID_PARAM,
   API_V1_WORKSPACES_PATH,
 } from '../contracts/api-v1.js'
-import type { ApiV1BoardResponse, ApiV1BoardsResponse, ApiV1FoldersResponse, ApiV1WorkspacesResponse } from '../contracts/api-v1.js'
+import type {
+  ApiV1BoardResponse,
+  ApiV1BoardsResponse,
+  ApiV1FoldersResponse,
+  ApiV1SceneResponse,
+  ApiV1WorkspacesResponse,
+} from '../contracts/api-v1.js'
+import type { SceneSnapshot } from '../contracts/scene.js'
+import { createEmptySnapshot } from '../contracts/scene.js'
 import type { Board, BoardStatus } from '../domain/board/model.js'
 import { parseBoardStatus } from '../domain/board/model.js'
 import type { BoardDecision } from '../domain/board/policy.js'
 import { decideBoardAccess } from '../domain/board/policy.js'
 import type { BoardAccess, BoardFilter, BoardViewer } from '../domain/board/repositories.js'
+import { CorruptSceneError } from '../domain/board/repositories.js'
 import type { Folder } from '../domain/folder/model.js'
 import { isInFolderSubtree } from '../domain/folder/model.js'
 import type { ApiKeyLevel, ResolvedApiKey } from '../domain/identity/api-key.js'
@@ -34,6 +45,7 @@ import { apiKeyLevelAllows, isBoardInApiKeyTarget } from '../domain/identity/api
 import type { Workspace, WorkspaceAccess } from '../domain/workspace/model.js'
 import { decideWorkspaceAccess } from '../domain/workspace/policy.js'
 import { createApiKeyGuard } from './api-key-guard.js'
+import { buildExcalidrawExport } from './board-export.js'
 import type { AppContext } from './context.js'
 import type { Route } from './http.js'
 import { sendApiV1Error, sendJson } from './http.js'
@@ -202,6 +214,56 @@ export function createApiV1Routes(context: AppContext): readonly Route[] {
       : NOT_FOUND
   }
 
+  /** Steps 2 to 4 for the operations that name a board: key target, level, then board policy. */
+  async function loadReadableBoard(key: ResolvedApiKey, rawBoardId: string | null): Promise<BoardAccess | Denial> {
+    const boardId = readUuid(rawBoardId)
+    const access =
+      boardId === null ? null : await context.boards.boards.findForViewer(boardId, viewerOf(key), context.now())
+    if (access === null) {
+      return NOT_FOUND
+    }
+    const folders =
+      key.key.target.kind === 'folder' ? await context.workspaces.folders.listForWorkspace(access.board.workspaceId) : []
+    if (!isBoardInApiKeyTarget(key.key.target, access.board, folders)) {
+      return NOT_FOUND
+    }
+    return (
+      admit(key, 'read', () =>
+        decideBoardAccess(apiKeyBoardSubject(key, access), access.workspace, access.board, 'board:read'),
+      ) ?? access
+    )
+  }
+
+  /**
+   * An open room is the source, otherwise the saved state, so unsaved edits are not missing. `null` for a
+   * damaged stored scene.
+   */
+  async function currentScene(
+    board: Board,
+  ): Promise<{ readonly version: number; readonly snapshot: SceneSnapshot } | null> {
+    const open = await context.rooms.peekScene(board.id)
+    if (open !== null) {
+      return open
+    }
+    try {
+      const latest = await context.boards.scenes.findLatest(board.id)
+      return {
+        version: latest?.version ?? 0,
+        snapshot: latest?.snapshot ?? createEmptySnapshot(board.id, board.createdAt.getTime()),
+      }
+    } catch (error) {
+      if (!(error instanceof CorruptSceneError)) {
+        throw error
+      }
+      context.logger('error', 'board.scene.corrupt', { boardId: board.id, version: error.version })
+      return null
+    }
+  }
+
+  function sendCorrupt(response: ServerResponse): void {
+    sendApiV1Error(response, 500, 'internal_error', 'Die gespeicherte Szene ist beschaedigt')
+  }
+
   return [
     {
       method: 'GET',
@@ -306,28 +368,63 @@ export function createApiV1Routes(context: AppContext): readonly Route[] {
         if (key === null) {
           return
         }
-        const boardId = readUuid(url.searchParams.get(API_V1_BOARD_ID_PARAM))
-        const access =
-          boardId === null ? null : await context.boards.boards.findForViewer(boardId, viewerOf(key), context.now())
-        if (access === null) {
-          sendDenial(response, NOT_FOUND)
-          return
-        }
-        const folders =
-          key.key.target.kind === 'folder' ? await context.workspaces.folders.listForWorkspace(access.board.workspaceId) : []
-        if (!isBoardInApiKeyTarget(key.key.target, access.board, folders)) {
-          sendDenial(response, NOT_FOUND)
-          return
-        }
-        const denial = admit(key, 'read', () =>
-          decideBoardAccess(apiKeyBoardSubject(key, access), access.workspace, access.board, 'board:read'),
-        )
-        if (denial !== null) {
-          sendDenial(response, denial)
+        const access = await loadReadableBoard(key, url.searchParams.get(API_V1_BOARD_ID_PARAM))
+        if (isDenial(access)) {
+          sendDenial(response, access)
           return
         }
         const body: ApiV1BoardResponse = { board: toBoard(access.board) }
         sendJson(response, 200, body)
+      },
+    },
+
+    {
+      method: 'GET',
+      path: API_V1_BOARD_SCENE_PATH,
+      handle: async ({ request, response, url }) => {
+        const key = await authenticate(request, response)
+        if (key === null) {
+          return
+        }
+        const access = await loadReadableBoard(key, url.searchParams.get(API_V1_BOARD_ID_PARAM))
+        if (isDenial(access)) {
+          sendDenial(response, access)
+          return
+        }
+        const current = await currentScene(access.board)
+        if (current === null) {
+          sendCorrupt(response)
+          return
+        }
+        const body: ApiV1SceneResponse = {
+          boardId: access.board.id,
+          sceneVersion: current.version,
+          elements: current.snapshot.elements.filter((element) => element.isDeleted !== true),
+          appState: current.snapshot.appState,
+        }
+        sendJson(response, 200, body)
+      },
+    },
+
+    {
+      method: 'GET',
+      path: API_V1_BOARD_EXPORT_PATH,
+      handle: async ({ request, response, url }) => {
+        const key = await authenticate(request, response)
+        if (key === null) {
+          return
+        }
+        const access = await loadReadableBoard(key, url.searchParams.get(API_V1_BOARD_ID_PARAM))
+        if (isDenial(access)) {
+          sendDenial(response, access)
+          return
+        }
+        const current = await currentScene(access.board)
+        if (current === null) {
+          sendCorrupt(response)
+          return
+        }
+        sendJson(response, 200, await buildExcalidrawExport(context, access.board.id, current.snapshot))
       },
     },
   ]

@@ -580,7 +580,8 @@ describe('Rechte eines Gastes', () => {
     // einem Feld, an das hier niemand gedacht hat.
     expect(roh).not.toContain(board.workspaceId)
     expect(roh).not.toContain(ada.profile.user.id)
-    expect(roh).not.toContain(ada.profile.user.displayName)
+    // Quoted, so a random UUID that happens to contain the short name does not match.
+    expect(roh).not.toContain(JSON.stringify(ada.profile.user.displayName))
     const inhalt = JSON.parse(roh) as GuestBoardSceneResponse
     expect(inhalt.viewer).toBe('guest')
     expect(Object.keys(inhalt.board).sort()).toEqual([
