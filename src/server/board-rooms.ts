@@ -192,6 +192,11 @@ export type BoardRooms = {
    * Abschluss-Checkpoint wie bei jedem anderen Verlassen.
    */
   closeBoard(boardId: BoardId): void
+  /**
+   * Copy of an open room's current state, `null` without an open room. Read-only: opens, subscribes to and
+   * changes nothing. `version` is the last persisted one; the state may be newer until the next checkpoint.
+   */
+  peekScene(boardId: BoardId): Promise<{ readonly version: number; readonly snapshot: SceneSnapshot } | null>
   /** Offene Raeume; ausschliesslich fuer Tests und Diagnose. */
   readonly roomCount: number
   close(): Promise<void>
@@ -1122,6 +1127,27 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
       // Kopie: `revoke` laesst den Teilnehmer den Raum verlassen und veraendert dabei genau diese Menge.
       for (const participant of [...room.participants]) {
         revoke(participant)
+      }
+    },
+    async peekScene(boardId: BoardId) {
+      // A room in its closing checkpoint is already unregistered but its last state is not yet in the
+      // database; only afterwards does "no room" mean "stored state".
+      await closing.get(boardId)
+      const room = rooms.get(boardId)
+      if (room === undefined) {
+        return null
+      }
+      // Copied without an await in between, so the fields form one consistent moment.
+      return {
+        version: room.version,
+        snapshot: {
+          schemaVersion: SCENE_SCHEMA_VERSION,
+          boardId,
+          elements: [...room.elements],
+          appState: { ...room.appState },
+          files: { ...room.files },
+          updatedAt: now().getTime(),
+        },
       }
     },
     get roomCount(): number {

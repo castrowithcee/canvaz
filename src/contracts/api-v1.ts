@@ -9,6 +9,8 @@ export const API_V1_WORKSPACES_PATH = `${API_V1_BASE_PATH}/workspaces`
 export const API_V1_FOLDERS_PATH = `${API_V1_BASE_PATH}/folders`
 export const API_V1_BOARDS_PATH = `${API_V1_BASE_PATH}/boards`
 export const API_V1_BOARD_METADATA_PATH = `${API_V1_BASE_PATH}/boards/metadata`
+export const API_V1_BOARD_SCENE_PATH = `${API_V1_BASE_PATH}/boards/scene`
+export const API_V1_BOARD_EXPORT_PATH = `${API_V1_BASE_PATH}/boards/export`
 
 export const API_V1_WORKSPACE_ID_PARAM = 'workspaceId'
 export const API_V1_BOARD_ID_PARAM = 'boardId'
@@ -67,3 +69,20 @@ export type ApiV1WorkspacesResponse = { readonly workspaces: readonly ApiV1Works
 export type ApiV1FoldersResponse = { readonly folders: readonly ApiV1Folder[] }
 export type ApiV1BoardsResponse = { readonly boards: readonly ApiV1Board[] }
 export type ApiV1BoardResponse = { readonly board: ApiV1Board }
+
+/** A drawing element as stored; besides `id` and `version` the fields are passed through untouched. */
+export type ApiV1SceneElement = { readonly id: string; readonly version: number } & Readonly<Record<string, unknown>>
+
+export type ApiV1SceneResponse = {
+  readonly boardId: string
+  /** Last saved version; with an open room the elements may be newer. `0`: never saved. */
+  readonly sceneVersion: number
+  /** Without deleted elements. */
+  readonly elements: readonly ApiV1SceneElement[]
+  readonly appState: {
+    readonly viewBackgroundColor: string
+    readonly gridSize: number | null
+    readonly gridModeEnabled: boolean
+    readonly name: string
+  }
+}

@@ -53,11 +53,10 @@ import {
   findUnstorableValue,
   serializeSceneSnapshot,
 } from '../contracts/scene.js'
-import type { ExcalidrawFile, ExcalidrawImportProblem, ParsedExcalidrawFile } from '../domain/board/excalidraw-file.js'
-import { parseExcalidrawFile, toExcalidrawFile } from '../domain/board/excalidraw-file.js'
+import type { ExcalidrawImportProblem, ParsedExcalidrawFile } from '../domain/board/excalidraw-file.js'
+import { parseExcalidrawFile } from '../domain/board/excalidraw-file.js'
 import { parseBaseVersion } from '../domain/board/model.js'
 import { effectiveBoardRole, mayRestoreBoard } from '../domain/board/policy.js'
-import { visibleElements } from '../domain/board/reconcile.js'
 import type { BoardAccess, BoardStore, SceneVersionSummary } from '../domain/board/repositories.js'
 import { CorruptSceneError, SceneConflictError } from '../domain/board/repositories.js'
 import { supersedeSnapshot } from '../domain/board/versioning.js'
@@ -65,6 +64,7 @@ import type { AuthenticatedSession, UserId } from '../domain/identity/model.js'
 import { buildAssetStorageKey } from '../domain/storage/asset-storage-port.js'
 import { isAllowedImageType, sniffImageType } from '../domain/storage/image-type.js'
 import { NOT_FOUND, createBoardGate } from './board-access.js'
+import { buildExcalidrawExport } from './board-export.js'
 import { toBoardView } from './board-views.js'
 import type { AppContext } from './context.js'
 import { requireSession } from './guard.js'
@@ -469,22 +469,7 @@ export function createBoardVersionRoutes(context: AppContext): readonly Route[] 
           return
         }
         const snapshot = latest?.snapshot ?? createEmptySnapshot(boardId, access.board.createdAt.getTime())
-        const dataUrls = new Map<string, string>()
-        for (const file of Object.values(snapshot.files)) {
-          const asset = await store.assets.findByFileId(boardId, file.id)
-          const bytes = asset === null ? null : await context.storage.get(asset.storageKey)
-          if (asset === null || bytes === null) {
-            context.logger('warn', 'board.export.asset.missing', { boardId, fileId: file.id })
-            continue
-          }
-          dataUrls.set(file.id, `data:${asset.mimeType};base64,${Buffer.from(bytes).toString('base64')}`)
-        }
-        const exported: ExcalidrawFile = toExcalidrawFile(
-          visibleElements([...snapshot.elements]),
-          snapshot.appState,
-          Object.values(snapshot.files),
-          dataUrls,
-        )
+        const exported = await buildExcalidrawExport(context, boardId, snapshot)
         send(response, ok(200, exported))
       },
     },
