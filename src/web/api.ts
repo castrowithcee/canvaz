@@ -27,6 +27,9 @@ import type {
   SetRecoveryEmailRequest,
   SetSelfRecoveryRequest,
   AdminApiKeysResponse,
+  CreateApiKeyRequest,
+  CreateApiKeyResponse,
+  OwnApiKeysResponse,
   RevokeApiKeyRequest,
   RevokeApiKeyResponse,
   SetApiAccessRequest,
@@ -140,6 +143,9 @@ import {
   FOLDER_REMOVE_PATH,
   FOLDER_RENAME_PATH,
   FOLDERS_PATH,
+  ME_API_KEY_CREATE_PATH,
+  ME_API_KEY_REVOKE_PATH,
+  ME_API_KEYS_PATH,
   ME_APPEARANCE_PATH,
   ME_PATH,
   ME_RECOVERY_EMAIL_PATH,
@@ -159,11 +165,14 @@ import type { SceneSnapshot } from '../contracts/scene.js'
 
 export class ApiError extends Error {
   readonly status: number
+  /** Machine-readable reason some endpoints add next to the message. */
+  readonly code: string | null
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code: string | null = null) {
     super(message)
     this.name = 'ApiError'
     this.status = status
+    this.code = code
   }
 }
 
@@ -175,7 +184,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       typeof body === 'object' && body !== null && typeof (body as { error?: unknown }).error === 'string'
         ? (body as { error: string }).error
         : `Anfrage fehlgeschlagen (${String(response.status)})`
-    throw new ApiError(response.status, message)
+    const code =
+      typeof body === 'object' && body !== null && typeof (body as { code?: unknown }).code === 'string'
+        ? (body as { code: string }).code
+        : null
+    throw new ApiError(response.status, message, code)
   }
   return (await response.json()) as T
 }
@@ -301,6 +314,18 @@ export async function setUserSelfRecovery(csrfToken: string, change: SetSelfReco
 
 export async function setUserApiAccess(csrfToken: string, change: SetApiAccessRequest): Promise<UserView> {
   return request<UserView>(ADMIN_USER_API_ACCESS_PATH, mutation(csrfToken, change))
+}
+
+export async function fetchOwnApiKeys(): Promise<OwnApiKeysResponse> {
+  return request<OwnApiKeysResponse>(ME_API_KEYS_PATH)
+}
+
+export async function createOwnApiKey(csrfToken: string, key: CreateApiKeyRequest): Promise<CreateApiKeyResponse> {
+  return request<CreateApiKeyResponse>(ME_API_KEY_CREATE_PATH, mutation(csrfToken, key))
+}
+
+export async function revokeOwnApiKey(csrfToken: string, change: RevokeApiKeyRequest): Promise<RevokeApiKeyResponse> {
+  return request<RevokeApiKeyResponse>(ME_API_KEY_REVOKE_PATH, mutation(csrfToken, change))
 }
 
 export async function fetchAdminApiKeys(): Promise<AdminApiKeysResponse> {
