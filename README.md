@@ -399,6 +399,9 @@ Codeeinloesung, damit es genau einmal gilt.
 | POST          | `/api/admin/users/api-access`        | angemeldet + Systemadmin + CSRF-Token; Freigabe der API-Keys, siehe [API.md](API.md)                                                              |
 | GET           | `/api/admin/api-keys`                | angemeldet + Systemadmin; alle API-Keys ohne Wert                                                                                                 |
 | POST          | `/api/admin/api-keys/revoke`         | angemeldet + Systemadmin + CSRF-Token                                                                                                             |
+| GET           | `/api/me/api-keys`                   | angemeldet + Freigabe; eigene API-Keys ohne Wert, siehe [API.md](API.md)                                                                          |
+| POST          | `/api/me/api-keys/create`            | angemeldet + Freigabe + CSRF-Token + frische Anmeldung; liefert den Wert einmalig                                                                 |
+| POST          | `/api/me/api-keys/revoke`            | angemeldet + Freigabe + CSRF-Token                                                                                                                |
 | GET           | `/api/admin/client-address`          | angemeldet + Systemadmin; Adresse und Klasse der eigenen aktuellen Anfrage, siehe [Echte Client-Adresse erkennen](#echte-client-adresse-erkennen) |
 | GET (Upgrade) | `/api/realtime`                      | angemeldet **oder** gueltige Gastsession; WebSocket-Einstieg der Realtime-Strecke                                                                 |
 | POST          | `/api/boards/guest/join`             | oeffentlich, verlangt ein gueltiges Freigabetoken und die eigene Herkunft                                                                         |

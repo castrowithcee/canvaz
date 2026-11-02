@@ -72,6 +72,10 @@ export const ADMIN_USER_INVITATION_REVOKE_PATH = `${API_BASE_PATH}/admin/users/i
 export const ADMIN_USER_SELF_RECOVERY_PATH = `${API_BASE_PATH}/admin/users/self-recovery`
 /** Set a user's API key access (off, read, edit). */
 export const ADMIN_USER_API_ACCESS_PATH = `${API_BASE_PATH}/admin/users/api-access`
+/** Own API keys: list (GET), create and revoke (POST). Session and CSRF token; never reachable with a key. */
+export const ME_API_KEYS_PATH = `${API_BASE_PATH}/me/api-keys`
+export const ME_API_KEY_CREATE_PATH = `${API_BASE_PATH}/me/api-keys/create`
+export const ME_API_KEY_REVOKE_PATH = `${API_BASE_PATH}/me/api-keys/revoke`
 /** All API keys of all users, without value or hash. */
 export const ADMIN_API_KEYS_PATH = `${API_BASE_PATH}/admin/api-keys`
 export const ADMIN_API_KEY_REVOKE_PATH = `${API_BASE_PATH}/admin/api-keys/revoke`
@@ -339,6 +343,8 @@ export type MeResponse = {
   readonly appearance: AppearanceView
   readonly secondFactor: SecondFactorView
   readonly selfRecovery: SelfRecoveryView | null
+  /** Level the system admin released for creating own API keys; `off` hides the account section. */
+  readonly apiKeyAccess: ApiKeyAccessView
 }
 
 /** Ein Code des zweiten Faktors: sechs Ziffern aus der App oder ein Ersatzcode (`XXXXX-XXXXX`). */
@@ -1339,4 +1345,34 @@ export type AdminApiKeyView = {
 
 export type AdminApiKeysResponse = {
   readonly keys: readonly AdminApiKeyView[]
+}
+
+/** Machine-readable `code` of the 403 for a key request from a session older than the freshness window. */
+export const FRESH_LOGIN_REQUIRED_CODE = 'fresh-login-required'
+
+export type FreshLoginRequiredResponse = ErrorResponse & {
+  readonly code: typeof FRESH_LOGIN_REQUIRED_CODE
+}
+
+/** Own key as listed: no value, no hash. `name` of the target is `null` when it is no longer visible. */
+export type OwnApiKeyView = Omit<AdminApiKeyView, 'userId' | 'userDisplayName' | 'target'> & {
+  readonly target: ApiKeyTargetView & { readonly name: string | null }
+}
+
+export type OwnApiKeysResponse = {
+  readonly keys: readonly OwnApiKeyView[]
+}
+
+export type CreateApiKeyRequest = {
+  readonly name: string
+  readonly target: ApiKeyTargetView
+  readonly level: 'read' | 'edit'
+  /** Whole days from 1 to 365; omitted means 90. */
+  readonly lifetimeDays?: number
+}
+
+/** The only response that ever carries the key value. */
+export type CreateApiKeyResponse = {
+  readonly key: OwnApiKeyView
+  readonly value: string
 }

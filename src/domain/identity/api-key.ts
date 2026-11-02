@@ -47,6 +47,8 @@ export const MAX_API_KEY_LIFETIME_DAYS = 365
 /** Active (neither revoked nor expired) keys per user. */
 export const MAX_ACTIVE_API_KEYS_PER_USER = 25
 export const MAX_API_KEY_NAME_LENGTH = 60
+/** A key is created only from a session at most this old; a system admin session exists only after the second factor. */
+export const API_KEY_FRESH_LOGIN_MS = 10 * 60 * 1000
 
 const API_KEY_VALUE_FORMAT = /^cvz_[A-Za-z0-9_-]{43}$/
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -92,6 +94,11 @@ export function effectiveApiKeyLevel(keyLevel: ApiKeyLevel, access: ApiKeyAccess
 
 export function isApiKeyLive(key: Pick<ApiKey, 'expiresAt' | 'revokedAt'>, now: Date): boolean {
   return key.revokedAt === null && key.expiresAt.getTime() > now.getTime()
+}
+
+/** Whether the session is recent enough to create a key. */
+export function isFreshLogin(sessionCreatedAt: Date, now: Date): boolean {
+  return now.getTime() - sessionCreatedAt.getTime() <= API_KEY_FRESH_LOGIN_MS
 }
 
 /** Whether another key may be created; the caller enforces it at creation. */

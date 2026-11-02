@@ -73,6 +73,7 @@ import {
   RecoveryEmailSettings,
 } from './account.js'
 import { AdminUsers } from './admin-users.js'
+import { ApiKeySettings, consumeReturnToAccount } from './api-keys.js'
 import { ApiError, fetchMe, fetchWorkspaces, logout } from './api.js'
 import { applyAppearance } from './appearance.js'
 import { BoardEditor } from './board/lazy-editor.js'
@@ -415,6 +416,7 @@ function Content({
   onProfileChanged,
   onAppearanceChanged,
   onBoardsChanged,
+  onSignedOut,
 }: {
   readonly me: MeResponse
   readonly route: AppRoute
@@ -427,6 +429,7 @@ function Content({
   readonly onProfileChanged: () => void
   readonly onAppearanceChanged: (appearance: AppearanceView) => void
   readonly onBoardsChanged: () => void
+  readonly onSignedOut: () => void
 }) {
   switch (route.kind) {
     case 'einstieg':
@@ -481,6 +484,7 @@ function Content({
           <PasswordSettings me={me} onChanged={onProfileChanged} />
           <RecoveryEmailSettings me={me} onChanged={onProfileChanged} />
           <SecondFactorSettings me={me} onChanged={onProfileChanged} />
+          <ApiKeySettings me={me} onSignedOut={onSignedOut} />
         </section>
       )
     case 'konten':
@@ -747,6 +751,7 @@ function Shell({
           onProfileChanged={onReload}
           onAppearanceChanged={onAppearanceChanged}
           onBoardsChanged={explorer.reload}
+          onSignedOut={onSignedOut}
         />
       </main>
     </div>
@@ -777,6 +782,9 @@ function MemberApp() {
           return
         }
         clearLoginError()
+        if (consumeReturnToAccount()) {
+          navigate({ kind: 'konto' }, { replace: true })
+        }
         setState({ kind: 'authenticated', me })
       })
       .catch(() => {
