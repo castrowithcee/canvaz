@@ -41,7 +41,32 @@ Kennung. Boards im Papierkorb gibt es fuer die API nicht.
 - Der Zeitpunkt der letzten Verwendung wird hoechstens einmal je Minute und Key festgehalten.
 - Der Systemadmin sieht alle Keys (mit Anzeigepraefix, nie mit Wert) und kann jeden widerrufen. Die
   Deaktivierung eines Kontos widerruft alle seine Keys.
-- Freigabeaenderungen und Widerrufe durch den Systemadmin werden nachgewiesen.
+- Anlage, Widerruf und Freigabeaenderungen werden nachgewiesen.
+
+## Eigene Keys anlegen und widerrufen
+
+Ein freigegebener Nutzer verwaltet seine Keys im Konto unter „API-Keys“. Ohne Freigabe fehlt der Abschnitt,
+und die Endpunkte antworten 403. Sie verlangen Sitzung und CSRF-Token wie alle internen Routen; ein Key
+erreicht sie nie.
+
+| Methode | Pfad                         | Zweck                                                         |
+| ------- | ---------------------------- | ------------------------------------------------------------- |
+| GET     | `/api/me/api-keys`           | eigene Keys mit Ziel, Stufe, Ablauf, letzter Nutzung, Zustand |
+| POST    | `/api/me/api-keys/create`    | Key anlegen; die Antwort traegt den Wert genau einmal         |
+| POST    | `/api/me/api-keys/revoke`    | eigenen Key sofort widerrufen (`{ "keyId": "..." }`)          |
+
+Anlegen erwartet `name`, `target` (`{ "kind": "workspace" | "folder" | "board", "id": "<uuid>" }`), `level`
+(`read` oder `edit`, hoechstens die Freigabe) und optional `lifetimeDays` (ganze Tage, 1 bis 365, Standard 90).
+Abgewiesen werden:
+
+- **403 `fresh-login-required`:** Die Sitzung ist aelter als zehn Minuten. Die Antwort traegt neben `error`
+  das Feld `code`. Der Systemadmin erreicht eine Sitzung erst nach dem zweiten Faktor, sodass dieser
+  eingeschlossen ist. Die Oberflaeche meldet ab, fuehrt zur Anmeldung und danach zurueck ins Konto.
+- **403:** Stufe ueber der Freigabe.
+- **400:** ungueltiger Name, ungueltige Stufe oder ungueltiger Ablauf.
+- **404:** Ziel unbekannt oder fuer den Nutzer nicht lesbar, ohne Unterschied zwischen beiden. Systemadmin-Rechte
+  zaehlen dafuer nicht.
+- **409:** 25 aktive Keys erreicht.
 
 ## Authentisierung
 

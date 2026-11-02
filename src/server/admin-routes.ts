@@ -99,7 +99,7 @@ function parseApiAccessRequest(body: Record<string, unknown> | null): SetApiAcce
   return typeof userId === 'string' && userId.length > 0 && access !== undefined ? { userId, access } : null
 }
 
-function targetViewOf(target: ApiKey['target']): AdminApiKeyView['target'] {
+export function targetViewOf(target: ApiKey['target']): AdminApiKeyView['target'] {
   switch (target.kind) {
     case 'workspace':
       return { kind: 'workspace', id: target.workspaceId }
@@ -110,7 +110,7 @@ function targetViewOf(target: ApiKey['target']): AdminApiKeyView['target'] {
   }
 }
 
-function apiKeyStateOf(key: ApiKey, now: Date): AdminApiKeyView['state'] {
+export function apiKeyStateOf(key: ApiKey, now: Date): AdminApiKeyView['state'] {
   if (key.revokedAt !== null) {
     return 'revoked'
   }

@@ -1,9 +1,14 @@
 /** API keys against a real PostgreSQL instance: store level plus the admin endpoints. */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import type { Pool } from 'pg'
 
 import {
+  BOARDS_PATH,
+  ME_API_KEY_CREATE_PATH,
+  ME_API_KEY_REVOKE_PATH,
+  ME_API_KEYS_PATH,
+  WORKSPACES_PATH,
   ADMIN_API_KEY_REVOKE_PATH,
   ADMIN_API_KEYS_PATH,
   ADMIN_USER_API_ACCESS_PATH,
@@ -11,7 +16,15 @@ import {
   ADMIN_USER_STATUS_PATH,
   ADMIN_USERS_PATH,
 } from '../../src/contracts/api.js'
-import type { AdminApiKeysResponse, AdminUsersResponse, CreateUserResponse } from '../../src/contracts/api.js'
+import type {
+  AdminApiKeysResponse,
+  AdminUsersResponse,
+  BoardView,
+  CreateApiKeyResponse,
+  CreateUserResponse,
+  OwnApiKeysResponse,
+  WorkspaceView,
+} from '../../src/contracts/api.js'
 import { displayPrefixOf } from '../../src/domain/identity/api-key.js'
 import type { ApiKeyAccess, ApiKeyTarget } from '../../src/domain/identity/api-key.js'
 import type { IdentityStore } from '../../src/domain/identity/repositories.js'
@@ -221,6 +234,24 @@ describe('Datenbankregeln', () => {
   })
 })
 
+async function createMember(admin: Account, email: string): Promise<Account & { readonly id: string }> {
+  const created = (await (
+    await postWithCsrf(app, admin.jar, ADMIN_USER_CREATE_PATH, {
+      displayName: 'Ada',
+      email,
+      initialPassword: TEST_PASSWORD,
+    })
+  ).json()) as CreateUserResponse
+  const jar = createJar()
+  const changed = await changePassword(app, jar, {
+    email,
+    currentPassword: TEST_PASSWORD,
+    newPassword: 'eigenes-passwort-4711-lang',
+  })
+  expect(changed.status).toBe(200)
+  return { jar, profile: await profileOf(app, jar), id: created.user.id }
+}
+
 describe('Administration', () => {
   let admin: Account
 
@@ -228,22 +259,8 @@ describe('Administration', () => {
     admin = await signedInAsSystemAdmin(app)
   })
 
-  async function member(email: string): Promise<Account & { readonly id: string }> {
-    const created = (await (
-      await postWithCsrf(app, admin.jar, ADMIN_USER_CREATE_PATH, {
-        displayName: 'Ada',
-        email,
-        initialPassword: TEST_PASSWORD,
-      })
-    ).json()) as CreateUserResponse
-    const jar = createJar()
-    const changed = await changePassword(app, jar, {
-      email,
-      currentPassword: TEST_PASSWORD,
-      newPassword: 'eigenes-passwort-4711-lang',
-    })
-    expect(changed.status).toBe(200)
-    return { jar, profile: await profileOf(app, jar), id: created.user.id }
+  function member(email: string): Promise<Account & { readonly id: string }> {
+    return createMember(admin, email)
   }
 
   async function accessOf(userId: string): Promise<string | undefined> {
@@ -348,5 +365,136 @@ describe('Administration', () => {
     expect((await app.store.apiKeys.listForUser(ada.id)).every((key) => key.revokedAt !== null)).toBe(true)
     expect(await app.store.apiKeys.resolveByHash(first.hash, new Date())).toBeNull()
     expect(await app.store.apiKeys.resolveByHash(second.hash, new Date())).toBeNull()
+  })
+})
+
+describe('Eigene Keys', () => {
+  const FREMD = '00000000-0000-0000-0000-000000000000'
+  let admin: Account
+  let ada: Account & { readonly id: string }
+  let workspace: WorkspaceView
+  let board: BoardView
+
+  beforeEach(async () => {
+    admin = await signedInAsSystemAdmin(app)
+    ada = await createMember(admin, 'ada@example.com')
+    await store.apiKeys.setAccess(ada.id, 'edit')
+    workspace = (await (await postWithCsrf(app, ada.jar, WORKSPACES_PATH, { name: 'Team' })).json()) as WorkspaceView
+    board = (await (
+      await postWithCsrf(app, ada.jar, BOARDS_PATH, { workspaceId: workspace.id, title: 'Skizze' })
+    ).json()) as BoardView
+  })
+
+  afterEach(() => {
+    app.setNow(null)
+  })
+
+  function create(account: Account, body: Record<string, unknown> = {}): Promise<Response> {
+    return postWithCsrf(app, account.jar, ME_API_KEY_CREATE_PATH, {
+      name: 'CI',
+      target: { kind: 'workspace', id: workspace.id },
+      level: 'edit',
+      ...body,
+    })
+  }
+
+  async function auditText(): Promise<string> {
+    return JSON.stringify((await pool.query('select * from user_audit_events')).rows)
+  }
+
+  it('zeigt den Wert genau einmal; die Liste nennt ihn nie', async () => {
+    const response = await create(ada, { target: { kind: 'board', id: board.id }, level: 'read', lifetimeDays: 30 })
+    const created = (await response.json()) as CreateApiKeyResponse
+    const listed = await (await ada.jar.fetch(`${app.baseUrl}${ME_API_KEYS_PATH}`)).text()
+
+    expect(response.status).toBe(201)
+    expect(created.value).toMatch(/^cvz_/)
+    expect(listed).not.toContain(created.value)
+    expect((JSON.parse(listed) as OwnApiKeysResponse).keys[0]).toMatchObject({
+      name: 'CI',
+      level: 'read',
+      state: 'active',
+      target: { kind: 'board', id: board.id, name: 'Skizze' },
+    })
+    expect((await app.store.apiKeys.resolveByHash(hashApiKeyValue(created.value), new Date()))?.level).toBe('read')
+  })
+
+  it('haelt den Wert aus Datenbank, Nachweis und Protokoll heraus', async () => {
+    const { value } = (await (await create(ada)).json()) as CreateApiKeyResponse
+
+    const stored = JSON.stringify((await pool.query('select * from api_keys')).rows)
+    expect(stored).not.toContain(value)
+    expect(stored).toContain(hashApiKeyValue(value))
+    expect(await auditText()).toContain('api-key.created')
+    expect(JSON.stringify([await auditText(), app.logs])).not.toContain(value)
+  })
+
+  it('lehnt ohne Freigabe alle Endpunkte mit 403 ab', async () => {
+    await store.apiKeys.setAccess(ada.id, 'off')
+
+    const responses = [
+      await create(ada),
+      await postWithCsrf(app, ada.jar, ME_API_KEY_REVOKE_PATH, { keyId: FREMD }),
+      await ada.jar.fetch(`${app.baseUrl}${ME_API_KEYS_PATH}`),
+    ]
+
+    expect(responses.map((response) => response.status)).toEqual([403, 403, 403])
+    expect((await ada.jar.fetch(`${app.baseUrl}/api/me`).then((response) => response.json())).apiKeyAccess).toBe('off')
+  })
+
+  it('weist eine Stufe ueber der Freigabe ab', async () => {
+    await store.apiKeys.setAccess(ada.id, 'read')
+
+    expect((await create(ada, { level: 'edit' })).status).toBe(403)
+    expect((await create(ada, { level: 'read' })).status).toBe(201)
+  })
+
+  it('verlangt eine Sitzung von hoechstens zehn Minuten mit eigenem Fehlercode', async () => {
+    app.setNow(new Date(Date.now() + 11 * 60_000))
+
+    const response = await create(ada)
+
+    expect(response.status).toBe(403)
+    expect(await response.json()).toMatchObject({ code: 'fresh-login-required' })
+    expect(await store.apiKeys.listForUser(ada.id)).toEqual([])
+  })
+
+  it('behandelt ein unsichtbares Ziel wie eine erfundene Kennung, auch fuer den Systemadmin', async () => {
+    await store.apiKeys.setAccess(admin.profile.user.id, 'edit')
+
+    const erfunden = await create(ada, { target: { kind: 'workspace', id: FREMD } })
+    const ohneUuid = await create(ada, { target: { kind: 'board', id: 'nein' } })
+    const adminOhneMitgliedschaft = await create(admin)
+    const adminBoard = await create(admin, { target: { kind: 'board', id: board.id } })
+
+    expect(erfunden.status).toBe(404)
+    for (const response of [ohneUuid, adminOhneMitgliedschaft, adminBoard]) {
+      expect(response.status).toBe(404)
+      expect(await response.json()).toEqual(await erfunden.clone().json())
+    }
+  })
+
+  it('begrenzt aktive Keys auf 25', async () => {
+    for (let index = 0; index < 25; index += 1) {
+      await anlegen(ada.id, { kind: 'workspace', workspaceId: workspace.id })
+    }
+
+    expect((await create(ada)).status).toBe(409)
+    expect(await store.apiKeys.countActive(ada.id, new Date())).toBe(25)
+  })
+
+  it('widerruft nur eigene Keys sofort und mit Nachweis', async () => {
+    const { key, value } = (await (await create(ada)).json()) as CreateApiKeyResponse
+    const bob = await createMember(admin, 'bob@example.com')
+    await store.apiKeys.setAccess(bob.id, 'edit')
+
+    const fremd = await postWithCsrf(app, bob.jar, ME_API_KEY_REVOKE_PATH, { keyId: key.id })
+    const eigen = await postWithCsrf(app, ada.jar, ME_API_KEY_REVOKE_PATH, { keyId: key.id })
+
+    expect(fremd.status).toBe(404)
+    expect(eigen.status).toBe(200)
+    expect(await store.apiKeys.resolveByHash(hashApiKeyValue(value), new Date())).toBeNull()
+    expect((await store.apiKeys.listForUser(ada.id))[0]?.revokedAt).not.toBeNull()
+    expect(await auditText()).toContain('api-key.revoked')
   })
 })

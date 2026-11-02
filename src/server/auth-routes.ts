@@ -306,6 +306,7 @@ export function createAuthRoutes(context: AppContext): readonly Route[] {
           appearance: appearance ?? DEFAULT_APPEARANCE,
           secondFactor: await secondFactorOf(context, auth),
           selfRecovery: await selfRecoveryViewOf(context, auth.user),
+          apiKeyAccess: await context.identity.apiKeys.getAccess(auth.user.id),
         }
         sendJson(response, 200, body)
       },

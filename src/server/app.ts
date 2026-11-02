@@ -9,6 +9,7 @@ import { HEALTH_PATH, METRICS_PATH, READY_PATH } from '../contracts/api.js'
 import type { HealthResponse, ReadyResponse } from '../contracts/api.js'
 import { createAdminRoutes } from './admin-routes.js'
 import { createApiKeyGuard } from './api-key-guard.js'
+import { createApiKeyRoutes } from './api-key-routes.js'
 import { createApiV1Routes } from './api-v1-routes.js'
 import { createApiV1WriteRoutes } from './api-v1-write-routes.js'
 import { createAuthRoutes } from './auth-routes.js'
@@ -93,6 +94,7 @@ export function createRoutes(context: AppContext): readonly Route[] {
     ...createLocalAuthRoutes(context),
     ...createSecondFactorRoutes(context),
     ...createAdminRoutes(context),
+    ...createApiKeyRoutes(context),
     ...createWorkspaceRoutes(context),
     ...createFolderRoutes(context),
     ...createBoardRoutes(context),
