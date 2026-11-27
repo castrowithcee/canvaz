@@ -303,6 +303,8 @@ export function BoardEditor({
   const canWriteRef = useRef<boolean | null>(null)
   /** Der Ausloeser der Informationsleiste. Angedockt gibt ihm die Ansicht den Fokus selbst zurueck. */
   const panelTriggerRef = useRef<HTMLButtonElement>(null)
+  /** Whether the open share dialog was started from the info panel summary rather than its own trigger. */
+  const sharesFromPanelRef = useRef(false)
   /** Das Titelfeld des Umbenennen-Dialogs. Es bekommt beim Oeffnen und nach einer Ablehnung den Fokus. */
   const renameInputRef = useRef<HTMLInputElement>(null)
   /** Die schwebenden Gruppen. Ihre Hoehe ist der obere Rand, den die Bedienelemente der Zeichenflaeche freihalten. */
@@ -930,6 +932,14 @@ export function BoardEditor({
   /** Schliesst den Freigabedialog; wie beim Versionsoverlay gibt die Plattform den Fokus zurueck. */
   function closeShares(): void {
     member?.onPanel(null)
+    if (sharesFromPanelRef.current) {
+      sharesFromPanelRef.current = false
+      // Opened from the info panel summary, whose button is gone once the panel closed: the platform would
+      // return focus to the body, so hand it to the panel trigger after the dialog has closed.
+      setTimeout(() => {
+        panelTriggerRef.current?.focus()
+      }, 0)
+    }
   }
 
   function submitRename(next: string): void {
@@ -1225,6 +1235,7 @@ export function BoardEditor({
                 boardId={boardId}
                 revision={panelRevision}
                 onShares={() => {
+                  sharesFromPanelRef.current = true
                   member.onPanel('freigaben')
                 }}
                 onChanged={member.onChanged}
