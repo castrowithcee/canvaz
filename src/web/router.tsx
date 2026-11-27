@@ -21,11 +21,10 @@ import { parseDashboardFilter } from '../domain/board/model.js'
 /**
  * Werte des `panel`-Parameters an einem Board.
  *
- * Nur `uebersicht` und `freigaben` sind Bereiche der Informationsleiste: die Uebersicht traegt Ablage und
- * Lebenszyklus, die Freigaben das interne und oeffentliche Teilen. `versionen` ist **kein** Bereich dieser
- * Leiste mehr, sondern oeffnet das eigene, breitere Overlay des Versionsverlaufs (`board-versions.tsx`) -
- * er steht trotzdem hier, weil derselbe Adressparameter ihn traegt und ein alter Direktlink
- * (`?bereich=versionen`) weiterhin dorthin fuehren soll.
+ * Nur `uebersicht` ist ein Bereich der Informationsleiste (Ablage und Lebenszyklus). `versionen` und
+ * `freigaben` oeffnen eigene, breitere Dialoge (`board-versions.tsx`, `board-shares-overlay.tsx`) - sie
+ * stehen trotzdem hier, weil derselbe Adressparameter sie traegt und ein Direktlink (`?bereich=freigaben`)
+ * weiterhin dorthin fuehren soll.
  */
 export type BoardPanelView = 'uebersicht' | 'freigaben' | 'versionen'
 

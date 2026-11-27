@@ -7,19 +7,18 @@
  * Handlung sichtbar. Fuer dieselbe Handlung gibt es damit **einen** Ort - die alte Adresse fuehrt hierher
  * (siehe `router.tsx`).
  *
- * Zwei Bereiche, weil sie zwei verschiedene Fragen beantworten: **Uebersicht** (wo liegt das Board, wem
- * gehoert es, wie steht es um Speicherung und Verbindung, wie geht es weg) und **Freigaben** (wer darf es).
- * Der offene Bereich steht in der Adresse; geschlossen wird ueber `closeLayer` (`router.tsx`), das Board
- * bleibt dabei offen.
+ * Sie hat einen Bereich: die **Uebersicht** (wo liegt das Board, wem gehoert es, wie steht es um Speicherung
+ * und Verbindung, wie geht es weg), dazu nur eine Zusammenfassung der Freigaben. Der offene Bereich steht in
+ * der Adresse; geschlossen wird ueber `closeLayer` (`router.tsx`), das Board bleibt dabei offen.
  *
- * Der Versionsverlauf ist **kein** Bereich dieser Leiste mehr: er ist breiter, als hier schmal neben der
- * Zeichenflaeche Platz haette, und steht deshalb als eigenes Overlay ueber einem Symbol der schwebenden
- * Gruppe (`board-versions.tsx`, `board/board-view.tsx`). Ein alter Direktlink auf `versionen` fuehrt weiterhin
- * dorthin - nur eben ins Overlay statt in diese Leiste.
+ * Versionsverlauf und Freigabeverwaltung sind **keine** Bereiche dieser Leiste mehr: ihre Tabellen sind
+ * breiter, als hier schmal neben der Zeichenflaeche Platz haette, und stehen deshalb in eigenen Dialogen
+ * (`board-versions.tsx`, `board-shares-overlay.tsx`, gemountet in `board/board-view.tsx`). Alte Direktlinks
+ * auf `versionen` und `freigaben` fuehren weiterhin dorthin.
  *
  * Die Ansicht entscheidet nichts. Was sie anbietet, leitet sie aus der vom Server genannten Rolle mit
  * **denselben** Funktionen ab, mit denen der Server entscheidet (`mayChangeBoard`, `mayManageBoard`,
- * `mayRestoreBoard`); jede Ablehnung erscheint als Text. Freigaben kommen unveraendert aus `board-share.tsx`
+ * `mayRestoreBoard`); jede Ablehnung erscheint als Text. Die Freigaben selbst bleiben in `board-share.tsx`
  * - hier entsteht keine zweite Fachlogik.
  *
  * Ein Gast erreicht diese Sidebar nicht: sie wird nur im Mitgliedskontext gerendert, und jeder ihrer
@@ -27,21 +26,21 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { Archive, ArchiveRestore, Info, Share2, Trash2 } from 'lucide-react'
+import { Archive, ArchiveRestore, Share2, Trash2 } from 'lucide-react'
 
-import type { BoardRoleView, BoardView, FolderView, MeResponse, WorkspaceView } from '../contracts/api.js'
+import type { BoardGrantView, BoardRoleView, BoardView, FolderView, MeResponse, WorkspaceView } from '../contracts/api.js'
 import type { EffectiveBoardRole } from '../domain/board/policy.js'
 import { mayChangeBoard, mayManageBoard, mayRestoreBoard } from '../domain/board/policy.js'
 import {
   ApiError,
   fetchBoardGrants,
+  fetchBoardShareLinks,
   fetchFolders,
   moveBoardToFolder,
   moveBoardToWorkspace,
   setBoardStatus,
   trashBoard,
 } from './api.js'
-import { BoardShare } from './board-share.js'
 import { FolderSelect } from './folders.js'
 import type { BoardPanelView } from './router.js'
 import { navigate } from './router.js'
@@ -53,13 +52,8 @@ const ROLE_LABELS: Readonly<Record<BoardRoleView, string>> = {
   viewer: 'Viewer',
 }
 
-/** Die beiden Bereiche dieser Leiste - der Versionsverlauf ist ein eigenes Overlay und keiner mehr. */
-export type SidebarPanelView = Exclude<BoardPanelView, 'versionen'>
-
-const SECTIONS: readonly { readonly id: SidebarPanelView; readonly label: string }[] = [
-  { id: 'uebersicht', label: 'Uebersicht' },
-  { id: 'freigaben', label: 'Freigaben' },
-]
+/** Der einzige Bereich dieser Leiste - Versionsverlauf und Freigaben sind eigene Dialoge. */
+export type SidebarPanelView = Exclude<BoardPanelView, 'versionen' | 'freigaben'>
 
 /** Uebersetzt eine Serverantwort in einen Satz. 404 und 403 bekommen bewusst eigene Texte. */
 function messageOf(cause: unknown, fallback: string): string {
@@ -288,6 +282,68 @@ export type BoardSessionDetails = {
   readonly connection: string
 }
 
+/**
+ * Kurze Zusammenfassung der Freigaben mit dem Weg in den Dialog. Die Verwaltung selbst liegt dort.
+ *
+ * Gastlinks lesen darf nur, wer verwalten darf (wie in `board-share.tsx`): wer es nicht darf, bekommt keine
+ * Anfrage und keine Zahl.
+ */
+function ShareSummary({
+  board,
+  grants,
+  onOpen,
+}: {
+  readonly board: BoardView
+  readonly grants: readonly BoardGrantView[]
+  readonly onOpen: () => void
+}) {
+  const manageable = mayManageBoard(viewerRoleOf(board))
+  const [validLinks, setValidLinks] = useState<number | null>(null)
+
+  useEffect(() => {
+    if (!manageable) {
+      return
+    }
+    let current = true
+    fetchBoardShareLinks(board.id)
+      .then((response) => {
+        const now = Date.now()
+        if (current) {
+          setValidLinks(
+            response.links.filter(
+              (link) => link.revokedAt === null && (link.expiresAt === null || Date.parse(link.expiresAt) > now),
+            ).length,
+          )
+        }
+      })
+      .catch(() => {
+        // The dialog shows the reason; the summary just omits the count.
+      })
+    return () => {
+      current = false
+    }
+  }, [board.id, manageable])
+
+  return (
+    <>
+      <h4 className="sidebar__title">Freigaben</h4>
+      <p>
+        {String(grants.length)} interne {grants.length === 1 ? 'Freigabe' : 'Freigaben'}
+        {manageable && validLinks !== null && (
+          <>
+            , {String(validLinks)} gueltige {validLinks === 1 ? 'Gastlink' : 'Gastlinks'}
+          </>
+        )}
+      </p>
+      <p>
+        <Button icon={Share2} onClick={onOpen}>
+          {manageable ? 'Freigaben verwalten' : 'Freigaben anzeigen'}
+        </Button>
+      </p>
+    </>
+  )
+}
+
 /** Uebersicht und Ablage: wo das Board liegt, wem es gehoert und wie es den Arbeitsbereich verlaesst. */
 function Overview({
   me,
@@ -296,11 +352,13 @@ function Overview({
   board,
   session,
   folders,
+  grants,
   busy,
   onRun,
   onApply,
   onError,
   onChanged,
+  onShares,
 }: {
   readonly me: MeResponse
   readonly workspace: WorkspaceView
@@ -308,11 +366,13 @@ function Overview({
   readonly board: BoardView
   readonly session: BoardSessionDetails
   readonly folders: readonly FolderView[]
+  readonly grants: readonly BoardGrantView[]
   readonly busy: boolean
   readonly onRun: (action: Promise<BoardView>, fallback: string) => void
   readonly onApply: (board: BoardView) => void
   readonly onError: (message: string) => void
   readonly onChanged: () => void
+  readonly onShares: () => void
 }) {
   const workspaceActive = workspace.status === 'active'
   /** Was der Server fuer diese Rolle zulaesst - nicht, was diese Ansicht fuer richtig haelt. */
@@ -365,6 +425,8 @@ function Overview({
           Deine Rolle auf diesem Board traegt keine Aenderung. Ansehen und Versionen bleiben dir offen.
         </p>
       )}
+
+      <ShareSummary board={board} grants={grants} onOpen={onShares} />
 
       {editable && (
         <>
@@ -449,9 +511,8 @@ export function BoardPanel({
   workspace,
   workspaces,
   boardId,
-  section,
   revision,
-  onSection,
+  onShares,
   onChanged,
   onBoard,
   session,
@@ -461,10 +522,10 @@ export function BoardPanel({
   readonly workspace: WorkspaceView
   readonly workspaces: readonly WorkspaceView[]
   readonly boardId: string
-  readonly section: SidebarPanelView
   /** Zaehler des Editors: er steigt, wenn dort etwas am Board geaendert wurde (etwa der Titel). */
   readonly revision: number
-  readonly onSection: (section: SidebarPanelView) => void
+  /** Oeffnet den Freigabedialog. */
+  readonly onShares: () => void
   /** Meldet der Huelle, dass sich an den Boards etwas geaendert hat. */
   readonly onChanged: () => void
   /** Meldet dem Editor den frisch geladenen Stand des Boards - Titel und Archivzustand haengen daran. */
@@ -474,7 +535,7 @@ export function BoardPanel({
 }) {
   const [state, setState] = useState<
     | { readonly kind: 'loading' }
-    | { readonly kind: 'ready'; readonly board: BoardView }
+    | { readonly kind: 'ready'; readonly board: BoardView; readonly grants: readonly BoardGrantView[] }
     | { readonly kind: 'failed'; readonly message: string }
   >({ kind: 'loading' })
   const [folders, setFolders] = useState<readonly FolderView[]>([])
@@ -484,7 +545,7 @@ export function BoardPanel({
   const load = useCallback(() => {
     fetchBoardGrants(boardId)
       .then((response) => {
-        setState({ kind: 'ready', board: response.board })
+        setState({ kind: 'ready', board: response.board, grants: response.grants })
         onBoard(response.board)
       })
       .catch((cause: unknown) => {
@@ -507,48 +568,21 @@ export function BoardPanel({
       })
   }, [workspaceId])
 
-  const tabs = (
-    <div className="board__sections" role="group" aria-label="Bereich der Informationen">
-      {SECTIONS.map((entry) => (
-        <button
-          key={entry.id}
-          type="button"
-          className={entry.id === section ? 'board__section board__section--aktiv' : 'board__section'}
-          aria-current={entry.id === section ? 'true' : undefined}
-          onClick={() => {
-            onSection(entry.id)
-          }}
-        >
-          {entry.id === 'uebersicht' && <Info size={16} aria-hidden="true" />}
-          {entry.id === 'freigaben' && <Share2 size={16} aria-hidden="true" />}
-          {entry.label}
-        </button>
-      ))}
-    </div>
-  )
-
   if (state.kind === 'loading') {
     return (
-      <>
-        {tabs}
-        <Loading text="Das Board wird geladen …" />
-      </>
+    <Loading text="Das Board wird geladen …" />
     )
   }
   if (state.kind === 'failed') {
     return (
-      <>
-        {tabs}
-        <Notice text={state.message} />
-      </>
+    <Notice text={state.message} />
     )
   }
 
-  const board = state.board
-  const manageable = mayManageBoard(viewerRoleOf(board))
+  const { board, grants } = state
 
   function apply(updated: BoardView): void {
-    setState({ kind: 'ready', board: updated })
+    setState({ kind: 'ready', board: updated, grants })
     onBoard(updated)
     onChanged()
   }
@@ -572,29 +606,22 @@ export function BoardPanel({
 
   return (
     <>
-      {tabs}
       {actionError !== null && <Notice text={actionError} />}
-      {section === 'uebersicht' && (
-        <Overview
-          me={me}
-          workspace={workspace}
-          workspaces={workspaces}
-          board={board}
-          session={session}
-          folders={folders}
-          busy={busy}
-          onRun={run}
-          onApply={apply}
-          onError={reportError}
-          onChanged={onChanged}
-        />
-      )}
-      {section === 'freigaben' && (
-        <>
-          {!manageable && <p className="hint">Aendern kann die Freigaben der Owner dieses Boards.</p>}
-          <BoardShare me={me} boardId={board.id} onChanged={load} />
-        </>
-      )}
+      <Overview
+        me={me}
+        workspace={workspace}
+        workspaces={workspaces}
+        board={board}
+        session={session}
+        folders={folders}
+        grants={grants}
+        busy={busy}
+        onRun={run}
+        onApply={apply}
+        onError={reportError}
+        onChanged={onChanged}
+        onShares={onShares}
+      />
     </>
   )
 }

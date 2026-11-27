@@ -1571,43 +1571,6 @@
     background: rgb(0 0 0 / 38%);
   }
 
-  /* Die Bereiche der Sidebar: eine Gruppe gleichrangiger Schalter, der aktive ist markiert. */
-  .board__sections {
-    background: var(--color-surface-muted);
-    border-radius: var(--radius-lg);
-    display: flex;
-    flex-wrap: wrap;
-    gap: --spacing(0.5);
-    margin-bottom: --spacing(4);
-    padding: --spacing(0.75);
-  }
-
-  .board__section {
-    align-items: center;
-    background: none;
-    border: 0;
-    border-radius: var(--radius-md);
-    color: var(--color-text-muted);
-    cursor: pointer;
-    display: inline-flex;
-    font: inherit;
-    font-weight: 600;
-    gap: --spacing(2);
-    min-height: var(--spacing-touch);
-    padding: --spacing(1) --spacing(3);
-    box-shadow: none;
-  }
-
-  .board__section:hover {
-    background: var(--color-surface-muted);
-  }
-
-  .board__section--aktiv {
-    background: var(--color-surface);
-    color: var(--color-text);
-    box-shadow: var(--shadow-control);
-  }
-
   .board__panel .details,
   .board__panel .table-wrap {
     font-size: var(--text-sm);
@@ -2095,26 +2058,6 @@
     .dashboard__filters a {
       flex: none;
       scroll-snap-align: start;
-    }
-
-    .board__sections {
-      background: var(--color-surface);
-      flex-wrap: nowrap;
-      margin-inline: calc(-1 * --spacing(4));
-      overflow-x: auto;
-      padding: --spacing(1) --spacing(4) --spacing(2);
-      position: sticky;
-      scrollbar-width: none;
-      top: calc(var(--spacing-touch) + --spacing(2));
-      z-index: 2;
-    }
-
-    .board__sections::-webkit-scrollbar {
-      display: none;
-    }
-
-    .board__section {
-      flex: none;
     }
 
     .drawer__head {

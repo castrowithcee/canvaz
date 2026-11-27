@@ -1,9 +1,9 @@
 /**
  * Freigabeverwaltung eines Boards: interne Freigaben, Ownerschaft und oeffentliche Gastlinks.
  *
- * Ein Abschnitt im Fluss seiner Umgebung und kein eigener Dialog: die Ueberschriften bleiben in der
- * Dokumentstruktur, und weder Fokuskaefig noch Escape werden hier nachgebaut. Der Abschnitt steht heute im
- * Bereich "Freigaben" der Informationsleiste (`board-panel.tsx`); sie traegt Name und Schliessweg.
+ * Ein Abschnitt im Fluss seiner Umgebung: die Ueberschriften bleiben in der Dokumentstruktur, und weder
+ * Fokuskaefig noch Escape werden hier nachgebaut. Er steht im eigenen breiten Dialog
+ * (`board-shares-overlay.tsx`), der Name (Ebene 2) und Schliessweg traegt.
  *
  * Die Oberflaeche entscheidet nichts. Sie bietet an, was der Server laut seiner Antwort ohnehin traegt, und
  * zeigt jede Ablehnung als Text - der Owner steht in `board.ownerUserId`, die Freigaben kommen aus
@@ -772,7 +772,7 @@ export function BoardShare({
   if (state.kind === 'loading') {
     return (
       <section aria-labelledby="board-share-heading">
-        <h5 id="board-share-heading">Freigaben</h5>
+        <h3 id="board-share-heading" className="visually-hidden">Freigaben</h3>
         <Loading text="Freigaben werden geladen …" />
       </section>
     )
@@ -780,7 +780,7 @@ export function BoardShare({
   if (state.kind === 'failed') {
     return (
       <section aria-labelledby="board-share-heading">
-        <h5 id="board-share-heading">Freigaben</h5>
+        <h3 id="board-share-heading" className="visually-hidden">Freigaben</h3>
         <Notice text={state.message} />
       </section>
     )
@@ -811,7 +811,7 @@ export function BoardShare({
 
   return (
     <section aria-labelledby="board-share-heading">
-      <h5 id="board-share-heading">Freigaben von {board.title}</h5>
+      <h3 id="board-share-heading" className="visually-hidden">Freigaben von {board.title}</h3>
       <p>
         Owner: <strong>{board.ownerDisplayName}</strong>
         {board.ownerUserId === me.user.id && <> (du)</>}
@@ -830,7 +830,7 @@ export function BoardShare({
       )}
       {actionError !== null && actionError !== '' && <Notice text={actionError} />}
 
-      <h6>Interne Freigaben</h6>
+      <h3>Interne Freigaben</h3>
       {grants.length === 0 ? (
         <Empty text="Es gibt keine ausdrueckliche Freigabe. Damit gilt fuer jedes Mitglied des Arbeitsbereichs die Rolle seiner Mitgliedschaft." />
       ) : (
@@ -865,15 +865,15 @@ export function BoardShare({
 
       {manageable && (
         <>
-          <h6>Board freigeben</h6>
+          <h3>Board freigeben</h3>
           <AddGrant me={me} board={board} candidates={openMembers} onChanged={reload} />
 
-          <h6>Ownerschaft uebertragen</h6>
+          <h3>Ownerschaft uebertragen</h3>
           <TransferOwnership me={me} board={board} candidates={transferable} onChanged={reload} />
         </>
       )}
 
-      <h6>Gastlinks</h6>
+      <h3>Gastlinks</h3>
       {links.kind === 'loading' && <Loading text="Gastlinks werden geladen …" />}
       {links.kind === 'unavailable' && <Empty text="Gastlinks sieht und verwaltet der Owner dieses Boards." />}
       {links.kind === 'failed' && <Notice text={links.message} />}

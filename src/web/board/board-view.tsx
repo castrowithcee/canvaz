@@ -37,8 +37,9 @@
  *
  * Der Versionsverlauf oeffnet sein eigenes, breiteres Overlay (`board-versions.tsx`) und keinen Bereich der
  * Informationsleiste: die kompakte Liste braucht mehr Platz, als dort neben der Zeichenflaeche stuende, und
- * das Overlay bleibt der einzige Ort dafuer. Alles andere Umfangreichere - Ablage, Arbeitsbereichswechsel,
- * Freigaben, Archiv und Papierkorb, dazu Speicher- und Verbindungsdetails - steht weiterhin in der
+ * das Overlay bleibt der einzige Ort dafuer. Ebenso die Freigabeverwaltung (`board-shares-overlay.tsx`), die
+ * das Symbol "Freigeben" und die Zusammenfassung der Informationsleiste oeffnen. Alles andere Umfangreichere - Ablage, Arbeitsbereichswechsel,
+ * Archiv und Papierkorb, dazu Speicher- und Verbindungsdetails - steht weiterhin in der
  * Informationsleiste (`board-panel.tsx`, sichtbar benannt "Informationen") neben der Zeichenflaeche. Sie ist
  * auf jeder Breite derselbe Knoten: breit eine angedockte Spalte, schmal ein modales Sheet mit Fokusfang,
  * Escape und Fokusrueckgabe von der Plattform. Welcher Bereich offen ist, steht in der Adresse; `Zurueck`
@@ -120,6 +121,7 @@ import {
 } from '../api.js'
 import type { SidebarPanelView } from '../board-panel.js'
 import { BoardPanel } from '../board-panel.js'
+import { BoardSharesOverlay } from '../board-shares-overlay.js'
 import { BoardVersionsOverlay } from '../board-versions.js'
 import { Dialog, Drawer, Menu, MenuItem } from '../overlays.js'
 import type { BoardPanelView } from '../router.js'
@@ -889,13 +891,14 @@ export function BoardEditor({
     shareable,
   })
   /**
-   * Der offene Bereich der Informationsleiste - der Versionsverlauf gehoert nicht dazu, er ist ein eigenes
-   * Overlay (`versionsOpen`) und schliesst die Leiste dabei nicht mit ein.
+   * Der offene Bereich der Informationsleiste - Versionsverlauf und Freigaben gehoeren nicht dazu, sie sind
+   * eigene Dialoge (`versionsOpen`, `sharesOpen`).
    */
   const sidebarPanel: SidebarPanelView | null =
-    member !== null && member.panel !== null && member.panel !== 'versionen' ? member.panel : null
+    member !== null && member.panel === 'uebersicht' ? member.panel : null
   const panelOpen = sidebarPanel !== null
   const versionsOpen = member !== null && member.panel === 'versionen'
+  const sharesOpen = member !== null && member.panel === 'freigaben'
   const StatusSymbol = status.symbol === null ? null : STATUS_SYMBOLS[status.symbol]
   /** Was die Gruppe nur als Symbol zeigt, steht in den Informationen ausgeschrieben. */
   const details = sessionDetails({
@@ -921,6 +924,11 @@ export function BoardEditor({
    * den Fokus von sich aus an seinen Ausloeser zurueck, und die Ansicht muss dafuer nichts nachholen.
    */
   function closeVersions(): void {
+    member?.onPanel(null)
+  }
+
+  /** Schliesst den Freigabedialog; wie beim Versionsoverlay gibt die Plattform den Fokus zurueck. */
+  function closeShares(): void {
     member?.onPanel(null)
   }
 
@@ -1215,9 +1223,10 @@ export function BoardEditor({
                 workspace={member.workspace}
                 workspaces={member.workspaces}
                 boardId={boardId}
-                section={sidebarPanel}
                 revision={panelRevision}
-                onSection={member.onPanel}
+                onShares={() => {
+                  member.onPanel('freigaben')
+                }}
                 onChanged={member.onChanged}
                 onBoard={applyBoard}
                 session={{ state: status.detail, ...details }}
@@ -1250,6 +1259,18 @@ export function BoardEditor({
           onPreview={member.onPreview}
           onChanged={member.onChanged}
           onClose={closeVersions}
+        />
+      )}
+
+      {/* Die Freigabeverwaltung: derselbe Dialogweg wie der Versionsverlauf, ausserhalb der Informationsleiste. */}
+      {member !== null && (
+        <BoardSharesOverlay
+          me={member.me}
+          boardId={boardId}
+          boardTitle={title}
+          open={sharesOpen}
+          onChanged={member.onChanged}
+          onClose={closeShares}
         />
       )}
 
