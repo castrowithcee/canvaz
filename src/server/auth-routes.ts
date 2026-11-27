@@ -123,10 +123,15 @@ async function runProvisioning(context: AppContext, claims: IdentityClaims): Pro
  * Melden sich mehrere Geraete desselben Nutzers gleichzeitig zum ersten Mal an, gewinnt einer die Erstanlage
  * und die anderen laufen in die Eindeutigkeit von Adresse oder externer Identitaet. Das ist ein erwarteter
  * Konflikt: der zweite Anlauf findet den angelegten Nutzer vor und meldet ihn normal an.
+ *
+ * If the winner commits between `findByKey` and `findByEmail` of another attempt, that attempt is denied
+ * with `email-already-linked` without any uniqueness conflict, so it is retried once as well. The retry runs
+ * the full decision again: an address owned by a different identity is still denied.
  */
 async function provisionAndStartSession(context: AppContext, claims: IdentityClaims): Promise<LoginOutcome> {
+  let outcome: LoginOutcome
   try {
-    return await runProvisioning(context, claims)
+    outcome = await runProvisioning(context, claims)
   } catch (error) {
     if (!(error instanceof IdentityConflictError)) {
       throw error
@@ -134,6 +139,11 @@ async function provisionAndStartSession(context: AppContext, claims: IdentityCla
     context.logger('warn', 'auth.provisioning.conflict-retried', { subject: claims.subject })
     return runProvisioning(context, claims)
   }
+  if (outcome.kind === 'denied' && outcome.reason === 'email-already-linked') {
+    context.logger('warn', 'auth.provisioning.conflict-retried', { subject: claims.subject })
+    return runProvisioning(context, claims)
+  }
+  return outcome
 }
 
 /**
