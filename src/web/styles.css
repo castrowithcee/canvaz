@@ -1861,6 +1861,20 @@
       background: transparent;
     }
 
+    .table tbody tr:not(
+        :hover,
+        :focus-within,
+        :has([aria-haspopup][aria-expanded='true'])
+      )
+      .table__row-menu > * {
+      clip-path: inset(50%);
+      height: 1px;
+      overflow: hidden;
+      position: absolute;
+      white-space: nowrap;
+      width: 1px;
+    }
+
     :is(.row, .tree__row):not(
         :hover,
         :focus-within,

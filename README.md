@@ -779,6 +779,12 @@ Angeboten wird der Abschnitt dort, wo die Serverantwort die Verwaltung ohnehin t
 Bequemlichkeit und keine Grenze: **entschieden wird jede einzelne Aktion serverseitig**, und jede Ablehnung
 erscheint als Text statt zu verschwinden.
 
+**Im Dashboard** hat jede Zeile der Ansicht _Mit extern geteilt_ (`?filter=shared-externally`), deren Freigaben der
+Nutzer verwalten darf, ein Optionsmenue mit _Freigaben verwalten_. Es oeffnet denselben Dialog wie der Editor,
+ohne das Board zu oeffnen; nach dem Schliessen laedt die Liste neu, ein Board ohne gueltigen Gastlink faellt
+heraus. Das Recht kommt hier nicht aus `viewerRole`, sondern als `canManageShares` je Zeile der
+Dashboard-Antwort, gebildet aus derselben Policy-Entscheidung (`grant:manage`) wie in den Endpunkten.
+
 ### Oeffentliche Gastfreigaben
 
 Ein **Freigabelink** oeffnet genau ein Board fuer Menschen ohne Konto dieser Instanz. Er ist die einzige

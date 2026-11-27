@@ -293,4 +293,15 @@ describe('Filter des Dashboards', () => {
     const alle = await dashboard(ada)
     expect(alle.find((board) => board.title === 'Intern geteilt')?.sharedExternally).toBe(false)
   })
+
+  it('meldet das Verwaltungsrecht fuer Freigaben nur dem Owner, nicht dem Board-Editor', async () => {
+    const { ada, bob, allein } = await aufbau()
+    await createShareLink(ada, allein.id)
+    await shareWith(ada, allein.id, bob.profile.user.id)
+
+    const ownerSicht = await dashboard(ada, { filter: 'shared-externally' })
+    expect(ownerSicht.map((board) => [board.title, board.canManageShares])).toEqual([['Allein', true]])
+    const editorSicht = await dashboard(bob, { filter: 'shared-externally' })
+    expect(editorSicht.map((board) => [board.title, board.canManageShares])).toEqual([['Allein', false]])
+  })
 })
