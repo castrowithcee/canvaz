@@ -517,8 +517,15 @@ Fristen braucht ein zusaetzliches Werkzeug.
 | `CANVAZ_LOGIN_BLOCK_RETENTION_DAYS`           | `30`        | Aufbewahrung eines Sperreintrags nach seinem Ablauf                                  |
 | `CANVAZ_LOGIN_BLOCK_PROPOSAL_RETENTION_DAYS`  | `365`       | Hoechste Aufbewahrung eines Vorschlags (rund 12 Monate), auch ohne Entscheidung      |
 
+**Anzeige in der Anwendung.** Die Systemadministration hat die Seite „Gesperrte Absender“ (nur fuer
+Systemadmins, serverseitig geprueft). Sie zeigt die aktiven Sperren und die offenen Vorschlaege. Der
+Systemadmin hebt dort eine aktive Sperre auf oder markiert einen Vorschlag als uebernommen (die dauerhafte
+Sperre ist ausserhalb von Canvaz gesetzt) oder verworfen. Die Adresse steht nur in dieser Antwort, nie in
+einem Log.
+
 **Hostbefehle.** Wie `admin:recover` gibt es dafuer keinen HTTP-Endpunkt - ausfuehren darf sie nur, wer
-Shellzugang zum Host hat. Keine der drei Ausgaben wird geloggt.
+Shellzugang zum Host hat. Sie bleiben der Notweg, etwa wenn ein Systemadmin selbst gesperrt ist. Keine der
+drei Ausgaben wird geloggt.
 
 ```sh
 # Aktive Sperren und offene Vorschlaege auflisten. Ein IPv6-Praefix erscheint als CIDR in kanonischer Form
@@ -568,8 +575,8 @@ im Sinne der DSGVO ist der jeweilige Betreiber der Instanz, nicht dieses Projekt
   entstandenen Vorschlag.
 - **Fristen:** Zaehlwerte 24 Stunden, ein Sperreintrag 30 Tage nach seinem Ablauf, ein Vorschlag nach der
   Entscheidung des Betreibers, spaetestens nach 12 Monaten.
-- **Zugriff:** ausschliesslich mit Shellzugang zum Host, ueber die Hostbefehle oben. Es gibt keinen
-  HTTP-Endpunkt und keine Anzeige in der Anwendung.
+- **Zugriff:** Systemadmins in der Seite „Gesperrte Absender“ der Systemadministration, sonst
+  ausschliesslich mit Shellzugang zum Host ueber die Hostbefehle oben. Die Adresse erscheint in keinem Log.
 - **Keine Verknuepfung, kein anderer Zweck:** die Daten werden nie einem Konto zugeordnet und zu keinem
   anderen Zweck ausgewertet, etwa fuer Statistik oder Nutzungsanalyse.
 - **Empfohlenes Vorgehen fuer eine dauerhafte Sperre:** die Anwendung selbst sperrt nie dauerhaft. Nimmt der
