@@ -167,7 +167,7 @@ describe('Gastlink per E-Mail', () => {
     const liste = await admin.jar.fetch(`${app.baseUrl}${BOARD_SHARE_LINKS_PATH}?${BOARD_ID_PARAM}=${board.id}`)
     expect(((await liste.json()) as BoardShareLinksResponse).mailAvailable).toBe(true)
 
-    // 2 Mails sind verbraucht, 18 bleiben: neun weitere Anfragen mit zwei Empfaengern fuellen die Grenze.
+    // 2 mails used, 18 remain: nine more requests with two recipients fill the limit.
     for (let i = 0; i < 9; i += 1) {
       const weiter = await adminPost(BOARD_SHARE_LINK_CREATE_PATH, {
         boardId: board.id,
@@ -186,7 +186,7 @@ describe('Gastlink per E-Mail', () => {
       recipients: ['c@example.com'],
     })
     expect(ersetzt.status).toBe(429)
-    // Weder ein neuer Link noch ein Widerruf, und keine 21. Mail.
+    // Neither a new link nor a revoke, and no 21st mail.
     expect(await links()).toBe(before)
     expect(app.mails).toHaveLength(20)
   })

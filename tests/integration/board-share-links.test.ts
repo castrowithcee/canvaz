@@ -274,7 +274,7 @@ describe('Freigabelinks verwalten', () => {
 
     const liste = await ada.jar.fetch(`${app.baseUrl}${BOARD_SHARE_LINKS_PATH}?${BOARD_ID_PARAM}=${board.id}`)
     const gelistet = (await liste.json()) as BoardShareLinksResponse
-    // Kein neuer Link, der alte lebt noch, und die Oberflaeche erfaehrt, dass es kein Feld gibt.
+    // No new link, the old one still lives, and the UI learns there is no field.
     expect(gelistet.links).toHaveLength(1)
     expect(gelistet.links[0]?.revokedAt).toBeNull()
     expect(gelistet.mailAvailable).toBe(false)

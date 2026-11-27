@@ -6,9 +6,9 @@
  * Aenderung seines zweiten Faktors und ueber eine Betreiber-Wiederherstellung. Jede geht an die Adresse des
  * betroffenen Kontos und an keine andere. Die Selbstwiederherstellung schreibt stattdessen an die
  * Wiederherstellungsadresse: den Bestaetigungslink an die neue, Ruecksetzungslink und Mitteilung ueber die
- * Ruecksetzung an die bestaetigte. Einzige Ausnahme ist die Linkmail eines Gastlinks: sie geht an die
- * Adressen, die der Owner beim Anlegen oder Ersetzen nennt, und `deliverShareLink` protokolliert weder diese
- * Adressen noch den Link.
+ * Ruecksetzung an die bestaetigte. The only exception is the link mail of a guest link: it goes to the
+ * addresses the owner names on create or replace, and `deliverShareLink` logs neither these
+ * addresses nor the link.
  *
  * ## Was in einer Mail steht und was nicht
  *
@@ -99,9 +99,9 @@ export async function deliver(
 }
 
 /**
- * Zustellversuch einer Linkmail. Anders als `deliver` protokolliert er nichts: weder Adresse noch Link
- * duerfen im Log landen, auch nicht im Fehlerfall, und die Fehlermeldung des Transports kann beides nennen.
- * Der Aufrufer bekommt nur, ob es geklappt hat.
+ * Delivery attempt of a link mail. Unlike `deliver` it logs nothing: neither address nor link
+ * may reach the log, not even on failure, and the transport's error message can name both.
+ * The caller only learns whether it worked.
  */
 export async function deliverShareLink(mailer: Mailer, mail: Mail): Promise<boolean> {
   try {

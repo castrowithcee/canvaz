@@ -68,14 +68,14 @@ export function createRateLimiter(options: {
 }
 
 export type Quota = {
-  /** Bucht `count` Einheiten, wenn sie alle noch passen; sonst bucht sie nichts und liefert `false`. */
+  /** Books `count` units if all still fit; otherwise books nothing and returns `false`. */
   take(key: string, count: number): boolean
 }
 
 /**
- * Feste Hoechstzahl je Schluessel in einem gleitenden Fenster. Anders als der Eimer oben bucht sie mehrere
- * Einheiten auf einmal und ganz oder gar nicht: eine Anfrage, die die Grenze ueberschritte, darf auch
- * nicht teilweise zaehlen.
+ * Fixed maximum per key in a sliding window. Unlike the bucket above it books several
+ * units at once, all or nothing: a request that would exceed the limit must not
+ * count partially either.
  */
 export function createQuota(options: {
   readonly limit: number

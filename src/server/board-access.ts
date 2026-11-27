@@ -58,7 +58,7 @@ export type BoardGate = {
       access: BoardAccess,
       body: Record<string, unknown>,
     ) => Promise<Reply>,
-    /** Laeuft nach dem Commit und vor dem Senden; nur hier darf ein Nebeneffekt die Antwort ergaenzen. */
+    /** Runs after the commit and before sending; only here may a side effect extend the response. */
     afterCommit?: (reply: Reply) => Promise<Reply>,
   ): Promise<void>
 }

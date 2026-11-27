@@ -74,13 +74,13 @@ import type { Reply } from './reply.js'
 import { fail, isReply, ok, readUuid, send } from './reply.js'
 import { asRequester } from './requester.js'
 
-/** Linkmails je Nutzer und Stunde. Gezaehlt werden Mails (Empfaenger), nicht Anfragen. */
+/** Link mails per user and hour. Counts mails (recipients), not requests. */
 const SHARE_LINK_MAILS_PER_HOUR = 20
 const HOUR_MS = 3_600_000
 
 /**
- * `recipients` aus dem Anfragekoerper: fehlt es, gibt es keine; sonst 1 bis 5 gueltige Adressen ohne
- * Duplikate. `null` heisst ungueltig.
+ * `recipients` from the request body: if absent there are none; otherwise 1 to 5 valid addresses without
+ * duplicates. `null` means invalid.
  */
 function parseRecipients(raw: unknown): readonly string[] | null {
   if (raw === undefined) {
@@ -137,9 +137,9 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
   })
 
   /**
-   * Prueft `recipients` und bucht die Mails gegen die Grenze des Nutzers, bevor ein Link entsteht. Liefert
-   * die Empfaenger oder die fertige Ablehnung. Gebucht ist auch dann, wenn die Transaktion danach scheitert:
-   * die Grenze lieber zu streng als zu lax.
+   * Validates `recipients` and books the mails against the user's limit before a link is created. Returns
+   * the recipients or the finished rejection. Booked even if the transaction fails afterwards:
+   * better a limit too strict than too lax.
    */
   function reserveMails(auth: AuthenticatedSession, raw: unknown): readonly string[] | Reply {
     const recipients = parseRecipients(raw)
@@ -159,8 +159,8 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
   }
 
   /**
-   * Versendet nach dem Commit und ausserhalb der Boardsperre und ergaenzt die 201-Antwort um die Zahlen.
-   * Ein Fehlschlag macht den Link nicht ungueltig. Adresse und Link verlassen diese Funktion nie ins Log.
+   * Sends after the commit and outside the board lock and adds the counts to the 201 response.
+   * A failure does not invalidate the link. Address and link never leave this function into the log.
    */
   function sendAfterCommit(
     mail: ((to: string, url: string) => ReturnType<typeof shareLinkMail>) | null,
@@ -226,7 +226,7 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
         boardId: access.board.id,
         role: link.role,
         expiresAt: link.expiresAt?.toISOString() ?? null,
-        // Nur die Zahl: die Adressen werden nirgends gespeichert.
+        // Count only: the addresses are stored nowhere.
         recipientCount: input.recipientCount,
         ...(input.replacesId === undefined ? {} : { replacesShareLinkId: input.replacesId }),
       },

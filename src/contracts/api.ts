@@ -1230,11 +1230,11 @@ export type BoardShareLinkView = {
 export type BoardShareLinksResponse = {
   readonly board: BoardView
   readonly links: readonly BoardShareLinkView[]
-  /** `false` ohne Postausgang: dann gibt es keinen Linkversand, und `recipients` ergibt 400. */
+  /** `false` without an outbox: link mail is not sent, and `recipients` yields 400. */
   readonly mailAvailable: boolean
 }
 
-/** Hoechstzahl Empfaenger je Anlage oder Ersetzung. */
+/** Maximum recipients per create or replace. */
 export const MAX_SHARE_LINK_RECIPIENTS = 5
 
 export type CreateBoardShareLinkRequest = {
@@ -1246,11 +1246,11 @@ export type CreateBoardShareLinkRequest = {
    * does not expire by itself.
    */
   readonly expiresAt?: string
-  /** 1 bis 5 Adressen, an die der Server den Link sendet. Sie werden nirgends gespeichert. */
+  /** 1 to 5 addresses the server sends the link to. They are stored nowhere. */
   readonly recipients?: readonly string[]
 }
 
-/** Ersetzen: wie Anlegen nimmt es optional `recipients`; Rolle und Ablauf bleiben die des alten Links. */
+/** Replace: like create, takes optional `recipients`; role and expiry stay those of the old link. */
 export type ReplaceBoardShareLinkRequest = {
   readonly boardId: string
   readonly shareLinkId: string
@@ -1267,7 +1267,7 @@ export type ReplaceBoardShareLinkRequest = {
 export type CreateBoardShareLinkResponse = {
   readonly link: BoardShareLinkView
   readonly url: string
-  /** Nur mit `recipients`: wie viele Mails der Postausgang angenommen hat und wie viele nicht. */
+  /** Only with `recipients`: how many mails the outbox accepted and how many it did not. */
   readonly mails?: { readonly sent: number; readonly failed: number }
 }
 

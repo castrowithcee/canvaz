@@ -462,7 +462,7 @@ function linkStatus(link: BoardShareLinkView, now: Date): string {
   return 'gueltig'
 }
 
-/** Das Feld "An E-Mail-Adressen senden": Trennzeichen sind Komma, Semikolon und Leerraum. */
+/** The "An E-Mail-Adressen senden" field: separators are comma, semicolon and whitespace. */
 function parseRecipientInput(text: string): readonly string[] | undefined {
   const list = text.split(/[\s,;]+/).filter((part) => part !== '')
   return list.length === 0 ? undefined : list
@@ -580,7 +580,7 @@ function ShareLinks({
   readonly me: MeResponse
   readonly board: BoardView
   readonly links: readonly BoardShareLinkView[]
-  /** Ohne Postausgang gibt es das Feld fuer Empfaenger nicht. */
+  /** Without an outbox there is no recipients field. */
   readonly mailAvailable: boolean
   /** Der Einmal-Hinweis der letzten Anlage, falls einer steht - zwischen Formular und Liste. */
   readonly notice: ReactNode
