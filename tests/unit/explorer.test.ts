@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { BoardView, FolderView } from '../../src/contracts/api.js'
 import { BOARD_FOLDER_ROOT } from '../../src/contracts/api.js'
-import { boardsOfSelection, childFolders, folderPath, matchesTitle } from '../../src/web/explorer.js'
+import { boardsOfSelection, childFolders, folderPath, matchesTitle, splitAncestors } from '../../src/web/explorer.js'
 
 const ZEIT = '2026-01-01T00:00:00.000Z'
 
@@ -69,5 +69,12 @@ describe('Ableitungen des Explorers', () => {
     expect(matchesTitle('Nordplan', 'ordp')).toBe(true)
     expect(matchesTitle('Nordplan', 'NORD')).toBe(true)
     expect(matchesTitle('Nordplan', 'sued')).toBe(false)
+  })
+})
+
+describe('splitAncestors', () => {
+  it('laesst bis zu zwei Vorfahren stehen und lagert bei mehr alle ausser dem Elternordner aus', () => {
+    expect(splitAncestors([1, 2])).toEqual({ hidden: [], shown: [1, 2] })
+    expect(splitAncestors([1, 2, 3, 4])).toEqual({ hidden: [1, 2, 3], shown: [4] })
   })
 })
