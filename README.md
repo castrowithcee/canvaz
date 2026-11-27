@@ -536,8 +536,10 @@ Offene Vorschlaege fuer eine dauerhafte Sperre (1):
 
 ```sh
 # Eine vorlaeufige Sperre vorzeitig aufheben - jede Adresse aus demselben /64-Netz findet dieselbe Sperre.
-# Das beendet nur die aktive Sperre; die Vorgeschichte bleibt bis zur Aufbewahrungsfrist (30 Tage nach Ablauf)
-# erhalten, eine erneute Sperre derselben Adresse binnen 30 Tagen nach der ersten erzeugt weiter einen Vorschlag.
+# Das beendet nur die aktive Sperre und setzt die Zaehlung der Adresse zurueck (wie "Aufheben" in der App): ein
+# weiterer Fehlschlag sperrt nicht sofort erneut, erst das erneute Erreichen der Schwelle. Die Vorgeschichte
+# bleibt bis zur Aufbewahrungsfrist (30 Tage nach Ablauf) erhalten, eine erneute Sperre derselben Adresse
+# binnen 30 Tagen nach der ersten erzeugt weiter einen Vorschlag.
 npm run sender-block -- unblock 198.51.100.77
 
 # Einen Vorschlag als uebernommen oder verworfen markieren; die Zeile danach ist der Vermerk (Datum, Adresse,
