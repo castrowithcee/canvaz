@@ -26,6 +26,7 @@ import { migrate } from '../../src/persistence/migrate.js'
 import { createPool } from '../../src/persistence/pool.js'
 import { createFilesystemRoot, filesystemEnv } from '../support/asset-storage-env.js'
 import { createJar } from '../support/browser-client.js'
+import { resetInstanceBranding } from '../support/instance-branding.js'
 import { signedInAsSystemAdmin } from '../support/local-accounts.js'
 import type { Account } from '../support/local-accounts.js'
 import { login } from '../support/login-flow.js'
@@ -56,6 +57,7 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  await resetInstanceBranding(pool)
   await app.close()
   await provider.close()
   await pool.end()
@@ -64,9 +66,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await pool.query('truncate users, workspaces cascade')
-  await pool.query(
-    "update instance_branding set instance_name = '', accent = '', logo_key = null, logo_type = null",
-  )
+  await resetInstanceBranding(pool)
   provider.resetBehaviour()
   app.clearLogs()
 })
