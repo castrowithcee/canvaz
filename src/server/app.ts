@@ -13,6 +13,7 @@ import { createApiKeyRoutes } from './api-key-routes.js'
 import { createApiV1Routes } from './api-v1-routes.js'
 import { createApiV1WriteRoutes } from './api-v1-write-routes.js'
 import { createAuthRoutes } from './auth-routes.js'
+import { createBrandingRoutes } from './branding-routes.js'
 import { createBoardRoutes } from './board-routes.js'
 import { createBoardShareRoutes } from './board-share-routes.js'
 import { createBoardTrashRoutes } from './board-trash-routes.js'
@@ -94,6 +95,7 @@ export function createRoutes(context: AppContext): readonly Route[] {
     ...createLocalAuthRoutes(context),
     ...createSecondFactorRoutes(context),
     ...createAdminRoutes(context),
+    ...createBrandingRoutes(context),
     ...createApiKeyRoutes(context),
     ...createWorkspaceRoutes(context),
     ...createFolderRoutes(context),

@@ -418,7 +418,8 @@ sofort; ein Upgrade danach wird abgelehnt. Ein Widerruf ausserhalb des Anwendung
 `admin:recover`, schliesst sie beim naechsten Pruefungslauf (hoechstens eine Minute). Eine Deaktivierung wirkt dabei auf **beide** Anmeldewege und
 entwertet zusaetzlich eine noch offene Einladung. Auch der Ablauf der Sitzung schliesst eine offene Verbindung.
 Fuer einen Gast gilt dasselbe, und zusaetzlich beendet der Widerruf seines Freigabelinks jede offene
-Verbindung, die daraus entstanden ist.
+Verbindung, die daraus entstanden ist. Widerruf wie Ablauf melden einem Gast vorher `link-ungueltig`, und die
+Gastansicht ersetzt das Board durch den Hinweis auf den ungueltigen Link.
 Ein Upgrade mit fremdem `Origin` wird abgewiesen, weil der CSRF-Header beim Handshake nicht greift.
 
 ### Echte Client-Adresse erkennen
@@ -519,8 +520,15 @@ Fristen braucht ein zusaetzliches Werkzeug.
 | `CANVAZ_LOGIN_BLOCK_RETENTION_DAYS`           | `30`        | Aufbewahrung eines Sperreintrags nach seinem Ablauf                                  |
 | `CANVAZ_LOGIN_BLOCK_PROPOSAL_RETENTION_DAYS`  | `365`       | Hoechste Aufbewahrung eines Vorschlags (rund 12 Monate), auch ohne Entscheidung      |
 
+**Anzeige in der Anwendung.** Die Systemadministration hat die Seite „Gesperrte Absender“ (nur fuer
+Systemadmins, serverseitig geprueft). Sie zeigt die aktiven Sperren und die offenen Vorschlaege. Der
+Systemadmin hebt dort eine aktive Sperre auf oder markiert einen Vorschlag als uebernommen (die dauerhafte
+Sperre ist ausserhalb von Canvaz gesetzt) oder verworfen. Die Adresse steht nur in dieser Antwort, nie in
+einem Log.
+
 **Hostbefehle.** Wie `admin:recover` gibt es dafuer keinen HTTP-Endpunkt - ausfuehren darf sie nur, wer
-Shellzugang zum Host hat. Keine der drei Ausgaben wird geloggt.
+Shellzugang zum Host hat. Sie bleiben der Notweg, etwa wenn ein Systemadmin selbst gesperrt ist. Keine der
+drei Ausgaben wird geloggt.
 
 ```sh
 # Aktive Sperren und offene Vorschlaege auflisten. Ein IPv6-Praefix erscheint als CIDR in kanonischer Form
@@ -538,8 +546,10 @@ Offene Vorschlaege fuer eine dauerhafte Sperre (1):
 
 ```sh
 # Eine vorlaeufige Sperre vorzeitig aufheben - jede Adresse aus demselben /64-Netz findet dieselbe Sperre.
-# Das beendet nur die aktive Sperre; die Vorgeschichte bleibt bis zur Aufbewahrungsfrist (30 Tage nach Ablauf)
-# erhalten, eine erneute Sperre derselben Adresse binnen 30 Tagen nach der ersten erzeugt weiter einen Vorschlag.
+# Das beendet nur die aktive Sperre und setzt die Zaehlung der Adresse zurueck (wie "Aufheben" in der App): ein
+# weiterer Fehlschlag sperrt nicht sofort erneut, erst das erneute Erreichen der Schwelle. Die Vorgeschichte
+# bleibt bis zur Aufbewahrungsfrist (30 Tage nach Ablauf) erhalten, eine erneute Sperre derselben Adresse
+# binnen 30 Tagen nach der ersten erzeugt weiter einen Vorschlag.
 npm run sender-block -- unblock 198.51.100.77
 
 # Einen Vorschlag als uebernommen oder verworfen markieren; die Zeile danach ist der Vermerk (Datum, Adresse,
@@ -568,8 +578,8 @@ im Sinne der DSGVO ist der jeweilige Betreiber der Instanz, nicht dieses Projekt
   entstandenen Vorschlag.
 - **Fristen:** Zaehlwerte 24 Stunden, ein Sperreintrag 30 Tage nach seinem Ablauf, ein Vorschlag nach der
   Entscheidung des Betreibers, spaetestens nach 12 Monaten.
-- **Zugriff:** ausschliesslich mit Shellzugang zum Host, ueber die Hostbefehle oben. Es gibt keinen
-  HTTP-Endpunkt und keine Anzeige in der Anwendung.
+- **Zugriff:** Systemadmins in der Seite „Gesperrte Absender“ der Systemadministration, sonst
+  ausschliesslich mit Shellzugang zum Host ueber die Hostbefehle oben. Die Adresse erscheint in keinem Log.
 - **Keine Verknuepfung, kein anderer Zweck:** die Daten werden nie einem Konto zugeordnet und zu keinem
   anderen Zweck ausgewertet, etwa fuer Statistik oder Nutzungsanalyse.
 - **Empfohlenes Vorgehen fuer eine dauerhafte Sperre:** die Anwendung selbst sperrt nie dauerhaft. Nimmt der
@@ -577,6 +587,56 @@ im Sinne der DSGVO ist der jeweilige Betreiber der Instanz, nicht dieses Projekt
   etwa an der Firewall des Hosts, vermerkt dabei Datum und Grund (die Ausgabe von `sender-block decide` dafuer)
   und ueberprueft die Sperre spaetestens nach sechs Monaten erneut. Diese Dokumentation setzt dafuer kein
   bestimmtes Werkzeug voraus.
+
+## Branding
+
+Der Systemadmin gibt der Instanz ein eigenes Erscheinungsbild. Es ist ein einzelner Datensatz
+(`instance_branding`, genau eine Zeile) mit diesen Feldern:
+
+| Feld         | Regel                                                                                                |
+| ------------ | ---------------------------------------------------------------------------------------------------- |
+| Instanzname  | 0 bis 60 Zeichen, vorn und hinten gekuerzt. Leer heisst "Canvaz".                                     |
+| Akzentfarbe  | Eine der fuenf vorhandenen Akzentfarben (`violett`, `blau`, `petrol`, `fuchsia`, `graphit`) oder leer. |
+| Logo         | PNG, JPEG oder WebP, hoechstens 512 KB. Kein GIF, kein SVG.                                           |
+
+Es gibt keine freien Markenfarben: der Kontrast der Akzentfarben ist in Hell und Dunkel geprueft. Der Typ des
+Logos folgt dem Inhalt der Datei, nie ihrem Namen oder dem `Content-Type` der Anfrage. Die Groesse wird beim
+Einlesen begrenzt, ein zu grosser Koerper wird nicht gespeichert. Die Bytes liegen ueber den Assetspeicher
+unter dem Schluesselpraefix `branding/`, ein neues Logo ersetzt das alte, das alte wird geloescht. Jede
+Aenderung steht mit dem angemeldeten Konto im Log (`branding.settings.changed`, `branding.logo.changed`,
+`branding.logo.removed`), nie mit Bildinhalt.
+
+Gepflegt wird es auf der Seite "Branding" der Systemadministration, neben der Kontenverwaltung und nur fuer
+Systemadmins: Name, Auswahl der Akzentfarbe mit Vorschau, Logo hochladen mit Vorschau und Entfernen.
+
+### Anzeige
+
+Der Client laedt `GET /api/branding` einmal pro Seitenaufruf. Logo (als `<img>` von der eigenen Herkunft, der
+Instanzname ist sein Alternativtext) und Instanzname ersetzen "Canvaz" in der Kopfzeile der Haupt-Ansicht, auf
+Anmeldung, Einladung, Wiederherstellung und Passwortruecksetzung sowie bei Gastbeitritt und Gastansicht. Der
+Seitentitel nennt den Instanznamen. Ohne gepflegtes Branding oder bei einem Ladefehler bleibt alles wie
+zuvor: "Canvaz", kein Logo, der Standardakzent.
+
+Rangfolge der Akzentwahl: eigene Wahl des Nutzers vor Akzent der Instanz vor Standardakzent (`violett`).
+`GET /api/me` liefert fuer einen Nutzer ohne gespeicherte Wahl den Instanz-Akzent als wirksame Wahl, ohne eine
+Zeile in `user_appearance` anzulegen. Anonyme Seiten und die Gastansicht setzen den Akzent aus dem oeffentlichen
+Branding, die Gastansicht bleibt dabei hell. Die Einstellungen nennen den Standard der Instanz bei der
+Akzentfarbe.
+
+### Endpunkte
+
+| Methode und Pfad                         | Zugriff               | Wirkung                                                                                |
+| ---------------------------------------- | --------------------- | -------------------------------------------------------------------------------------- |
+| `GET /api/branding`                      | oeffentlich           | `instanceName`, `accent` (oder `null`), `logoVersion` (oder `null`). Nichts sonst.       |
+| `GET /api/branding/logo?v=<Version>`     | oeffentlich           | Logo-Bytes mit gespeichertem `Content-Type` und `X-Content-Type-Options: nosniff`.       |
+| `GET /api/admin/branding`                | Systemadmin           | Gepflegte Werte samt Zeitpunkt der letzten Aenderung.                                  |
+| `POST /api/admin/branding`               | Systemadmin, CSRF     | Name und Akzentfarbe setzen (`{ instanceName, accent }`).                              |
+| `POST /api/admin/branding/logo`          | Systemadmin, CSRF     | Logo hochladen: Rohbytes im Koerper. `413` zu gross, `415` kein PNG, JPEG oder WebP.    |
+| `POST /api/admin/branding/logo/remove`   | Systemadmin, CSRF     | Logo entfernen.                                                                        |
+
+Die Logo-Version aendert sich genau mit dem Logo. Eine Anfrage mit der aktuellen Version darf ein Jahr lang
+zwischengespeichert werden (`immutable`), jede andere bekommt das aktuelle Logo mit `no-cache`. Die
+Content-Security-Policy bleibt unveraendert: das Logo kommt von der eigenen Herkunft.
 
 ## Arbeitsbereiche und Rollen
 
@@ -765,9 +825,12 @@ Eine Freigabe kann sich **nicht selbst weitergeben**: ein `editor` verwaltet kei
 jede Abstufung mit einem Schritt wieder aufgehoben. Und der Owner kann sich seine Ownerschaft nicht
 entziehen - dafuer gibt es nur die Uebertragung.
 
-**In der Oberflaeche** steht die Freigabeverwaltung als Abschnitt im Fluss der Boardliste und nicht als
-modaler Dialog - dieselbe Entscheidung wie ueberall sonst in dieser SPA: kein Fokuskaefig, keine eigene
-Escape-Behandlung, jede Ueberschrift bleibt in der Dokumentstruktur. Der Abschnitt zeigt den Owner, die
+**In der Oberflaeche** steht die Freigabeverwaltung in einem eigenen, breiten Dialog (`Dialog wide`, wie der
+Versionsverlauf), der nur zu einem Board und nicht zum Editorzustand gehoert. Geoeffnet wird er ueber die
+schwebende Aktion _Freigeben_ (nur mit Verwaltungsrecht), ueber den Knopf der Zusammenfassung _Freigaben_ in
+den Board-Informationen (Zahl der internen Freigaben und gueltigen Gastlinks, soweit der Nutzer sie sehen
+darf) und ueber Direktlinks mit `?bereich=freigaben`, auch aus der Bibliothek; `Escape`, Fokusfang und
+Fokusrueckgabe kommen von der Plattform, und der Inhalt laedt nur, solange der Dialog offen ist. Der Dialog zeigt den Owner, die
 vorhandenen Freigaben mit ihrer Rolle, die Auswahl der Empfaenger aus der Mitgliederliste des
 Arbeitsbereichs und zu jeder Rolle einen Satz ueber ihre Wirkung. Die Uebertragung der Ownerschaft geschieht
 in zwei Schritten: Auswahl, dann eine ausdrueckliche Bestaetigung, die benennt, was danach gilt.
@@ -822,7 +885,8 @@ Mitgliedschaft und keine Anmeldung, nur diese eine Sitzung fuer dieses eine Boar
 **Ablauf und Widerruf wirken sofort**, auf neue wie auf bestehende Gastsessions: jede Aufloesung eines
 Gastzugriffs prueft Gastsession **und** Link in derselben Abfrage, und nichts davon wird zwischengespeichert.
 Der Widerruf schliesst zusaetzlich offene Realtime-Verbindungen dieses Links unmittelbar (siehe
-_Echtzeit-Kollaboration_).
+_Echtzeit-Kollaboration_). Eine offene Gastansicht zeigt danach statt des Boards den Hinweis, dass der Link nicht
+mehr gilt; bei einem schreibenden Gast gehen nicht gespeicherte Aenderungen verloren, und der Hinweis sagt das.
 
 **Was ein Gast erreicht, ist der Inhalt seines Boards - und sonst nichts.** Vier Endpunkte nehmen eine
 Gastsession an: Szene laden und speichern, Bild abrufen und hochladen. Jede andere Strecke - Boardliste,
@@ -849,7 +913,7 @@ beiden Sichten entstehen an genau einer Stelle (`src/server/board-views.ts`), un
 Felder einzeln auf, statt aus der vollen Sicht etwas wegzulassen: ein spaeter ergaenztes Feld der
 `BoardView` landet dadurch nicht von selbst beim Gast.
 
-**In der Oberflaeche** verwaltet der Owner die Gastlinks im selben Abschnitt wie die internen Freigaben:
+**In der Oberflaeche** verwaltet der Owner die Gastlinks im selben Dialog wie die internen Freigaben:
 anlegen mit Rollenwahl (Voreinstellung `guest-viewer`) und optionalem Ablaufzeitpunkt (Datum und Uhrzeit
 oder Schnellwahl 1, 7 oder 30 Tage; Voreinstellung: kein Ablauf; der Server verlangt 15 Minuten bis 365 Tage
 nach seinem Zeitpunkt), die vorhandenen Links mit Rolle, Erzeuger, Ablauf (Datum und Uhrzeit), Zustand und
@@ -1064,7 +1128,7 @@ Form haben wie beim Upload. Die Groesse eines Imports ist mit `CANVAZ_MAX_IMPORT
 20 MiB) - deutlich mehr als ein Snapshot, weil Base64 die Bytes um rund ein Drittel aufblaeht.
 
 **In der Oberflaeche** steht das alles in einem eigenen, breiten Overlay statt in einem Abschnitt der
-Informationsleiste - anders als Uebersicht und Freigaben braucht der Verlauf mehr Platz, als dort schmal
+Informationsleiste - anders als die Uebersicht braucht der Verlauf mehr Platz, als dort schmal
 neben der Zeichenflaeche stuende. Geoeffnet wird er ueber ein benanntes Symbol der schwebenden Gruppe am
 Board (Kurzhinweis, Tastatur- und Touch-Zugang); `Escape`, Fokusfang und Fokusrueckgabe an den Ausloeser
 kommen von der Plattform, wie bei jedem Dialog dieser SPA. Das Overlay zeigt den aktuellen Stand und die
@@ -1410,8 +1474,16 @@ waere eine gemeinsame Zeichenflaeche anonym.
 Ablauf und Widerruf seines Links wirken auf die offene Verbindung wie ein Mitgliedschaftsentzug: die
 naechste Aufloesung findet nichts mehr und beendet sie. Der Widerruf schliesst sie zusaetzlich **sofort**,
 statt bis zur naechsten Nachpruefung zu warten - genau wie ein Logout eine interne Sitzung schliesst. Ein
-Wiederaufbau scheitert danach bereits am Upgrade. Ein Rollenwechsel des Links wuerde ihn wie jede andere
-Herabstufung auf Nur-Lesen stellen (`access`); das Protokoll aendert sich fuer nichts davon.
+Wiederaufbau scheitert danach bereits am Upgrade.
+
+Vor dem Schliessen, bei Widerruf, Ablaufpruefung der Verbindung und Nachpruefung des Raums, bekommt **nur ein
+Linkgast** die Fehlermeldung `link-ungueltig` ("Dieser Freigabelink gilt nicht mehr"), ohne Token, Link-Kennung,
+Workspace oder Boardangabe; interne Nutzer bekommen weiter `board-nicht-gefunden`. Die Meldung ist nur Darstellung:
+der Server entscheidet die Berechtigung unabhaengig. Die Gastansicht wechselt darauf in ihren Zustand
+"ungueltiger Link". Kommt nur der Schliesscode `4401` oder `4403` an, prueft sie den Gastzugang einmal neu und
+zeigt bei Ungueltigkeit denselben Hinweis. Ein Rollenwechsel des Links wuerde ihn wie jede andere
+Herabstufung auf Nur-Lesen stellen (`access`); das Protokoll aendert sich fuer nichts davon (`REALTIME_PROTOCOL_VERSION` bleibt, ein neuer Fehlercode ist
+abwaertskompatibel).
 
 ### Was Presence uebertraegt
 
@@ -1752,9 +1824,12 @@ Alarm weitergibt.
   Konsistenzzusage: Assets werden nur angelegt, nie geloescht, deshalb liegt ein zwischenzeitlich
   hochgeladenes Bild danach ohne Datensatz im Speicher und stoert niemanden - andersherum verwiese ein
   Datensatz auf Bytes, die im Archiv fehlen.
-- Die Assets als `tar`, nur im Modus `filesystem` aus dem Volume. Im Modus `s3` liegen die Bytes bei einem
-  externen Objektspeicher, den diese Instanz nicht mitliefert; ihre Sicherung ist Sache des Betreibers bzw.
-  des Anbieters, und das Archiv enthaelt dafuer keinen eigenen Stand.
+- Die Assets als `tar`, nur im Modus `filesystem` aus dem Volume, einschliesslich des Instanzlogos (Praefix
+  `branding/`). Anders als Bildassets wird das Logo beim Ersetzen geloescht: ersetzt oder entfernt ein Systemadmin es
+  zwischen Datenbankabzug und Assetabzug, fehlen dem gesicherten Datensatz die Bytes, und das Logo wird nach
+  einer Wiederherstellung neu hochgeladen. Im Modus `s3` liegen die Bytes bei einem externen Objektspeicher,
+  den diese Instanz nicht mitliefert; ihre Sicherung ist Sache des Betreibers bzw. des Anbieters, und das
+  Archiv enthaelt dafuer keinen eigenen Stand.
 - Ein `meta`-Eintrag mit Zeitpunkt, Adapter, Image und angewendeter Schemaversion.
 - Verschluesselt mit `gpg --symmetric` (AES-256) **bevor** das Archiv seinen Platz hat. Die Passphrase steht
   in einer Datei ausserhalb des Repositories (`CANVAZ_BACKUP_PASSPHRASE_FILE`). Aufbewahrung sind 14 Tage;
@@ -1872,8 +1947,8 @@ widerrufen, ersetzen, beitreten, ablaufen; dass das Token weder in der Liste noc
 Nachweis auftaucht; dass **keine** Antwort an einen Gast eine Workspacekennung, eine interne Nutzerkennung
 oder einen internen Anzeigenamen enthaelt - gemessen am Rohkoerper der Antwort und am gesamten
 Nachrichtenprotokoll seiner WebSocket-Verbindung; dass ein Gast an keinem fremden Board, keinem Workspace-,
-Mitglieder- und keinem Adminendpunkt ankommt; und dass Widerruf wie Ablauf eine **offene** WebSocket-Verbindung beenden und ihren Wiederaufbau
-verhindern. `tests/unit/board-guest.test.ts` durchlaeuft dazu die Gasttabelle vollstaendig - beide
+Mitglieder- und keinem Adminendpunkt ankommt; und dass Widerruf wie Ablauf eine **offene** WebSocket-Verbindung nach der Meldung `link-ungueltig` beenden und ihren
+Wiederaufbau verhindern. `tests/unit/board-guest.test.ts` durchlaeuft dazu die Gasttabelle vollstaendig - beide
 Gastrollen gegen jede Aktion sowie jeden Board- und Workspacezustand, einschliesslich des Falls, der einen
 Gast ausmacht: ein anderes Board als das seines Links.
 

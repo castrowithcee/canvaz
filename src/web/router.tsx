@@ -21,11 +21,10 @@ import { parseDashboardFilter } from '../domain/board/model.js'
 /**
  * Werte des `panel`-Parameters an einem Board.
  *
- * Nur `uebersicht` und `freigaben` sind Bereiche der Informationsleiste: die Uebersicht traegt Ablage und
- * Lebenszyklus, die Freigaben das interne und oeffentliche Teilen. `versionen` ist **kein** Bereich dieser
- * Leiste mehr, sondern oeffnet das eigene, breitere Overlay des Versionsverlaufs (`board-versions.tsx`) -
- * er steht trotzdem hier, weil derselbe Adressparameter ihn traegt und ein alter Direktlink
- * (`?bereich=versionen`) weiterhin dorthin fuehren soll.
+ * Only `uebersicht` is a section of the info panel (filing and lifecycle). `versionen` and `freigaben`
+ * open their own wider dialogs (`board-versions.tsx`, `board-shares-overlay.tsx`). They are listed here
+ * anyway because the same address parameter carries them and a direct link (`?bereich=freigaben`) should
+ * keep leading there.
  */
 export type BoardPanelView = 'uebersicht' | 'freigaben' | 'versionen'
 
@@ -69,6 +68,10 @@ export type AppRoute =
   | { readonly kind: 'konto' }
   /** Kontenverwaltung der Systemadministration. */
   | { readonly kind: 'konten' }
+  /** Blocked senders page of the system administration. */
+  | { readonly kind: 'absender' }
+  /** Instance branding page of the system administration. */
+  | { readonly kind: 'branding' }
   /** Keine Ansicht dieser Anwendung. */
   | { readonly kind: 'unbekannt' }
 
@@ -81,6 +84,8 @@ const DETAILS_SEGMENT = 'details'
 const ACCOUNT_SEGMENT = 'konto'
 const ADMIN_SEGMENT = 'verwaltung'
 const ADMIN_ACCOUNTS_SEGMENT = 'konten'
+const ADMIN_SENDERS_SEGMENT = 'absender'
+const ADMIN_BRANDING_SEGMENT = 'branding'
 const VERSION_PARAM = 'version'
 const PANEL_PARAM = 'bereich'
 const FOLDER_PARAM = 'ordner'
@@ -132,6 +137,12 @@ export function parseRoute(href: string): AppRoute {
   }
   if (first === ADMIN_SEGMENT && second === ADMIN_ACCOUNTS_SEGMENT && third === undefined) {
     return { kind: 'konten' }
+  }
+  if (first === ADMIN_SEGMENT && second === ADMIN_SENDERS_SEGMENT && third === undefined) {
+    return { kind: 'absender' }
+  }
+  if (first === ADMIN_SEGMENT && second === ADMIN_BRANDING_SEGMENT && third === undefined) {
+    return { kind: 'branding' }
   }
   if (first === WORKSPACES_SEGMENT) {
     if (second === undefined) {
@@ -203,6 +214,10 @@ export function routeHref(route: AppRoute): string {
       return `/${ACCOUNT_SEGMENT}`
     case 'konten':
       return `/${ADMIN_SEGMENT}/${ADMIN_ACCOUNTS_SEGMENT}`
+    case 'absender':
+      return `/${ADMIN_SEGMENT}/${ADMIN_SENDERS_SEGMENT}`
+    case 'branding':
+      return `/${ADMIN_SEGMENT}/${ADMIN_BRANDING_SEGMENT}`
   }
 }
 

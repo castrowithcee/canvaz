@@ -24,7 +24,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Archive,
+  ChevronRight,
   Copy,
+  Ellipsis,
   EllipsisVertical,
   Folder,
   FolderInput,
@@ -56,7 +58,7 @@ import {
   renameFolder,
 } from './api.js'
 import type { Explorer } from './explorer.js'
-import { boardsOfSelection, childFolders, folderPath, matchesTitle } from './explorer.js'
+import { boardsOfSelection, childFolders, folderPath, matchesTitle, splitAncestors } from './explorer.js'
 import { FolderSelect, folderMessageOf } from './folders.js'
 import { Dialog, Menu, MenuItem, MenuLinkItem, NameDialog } from './overlays.js'
 import { Link, navigate } from './router.js'
@@ -369,6 +371,7 @@ export function Boards({
 
   const path = folderPath(folders, folder === BOARD_FOLDER_ROOT ? null : folder)
   const current = path.length === 0 ? null : (path[path.length - 1] ?? null)
+  const { hidden, shown } = splitAncestors(path.slice(0, -1))
   const heading =
     folder === null ? workspace.name : folder === BOARD_FOLDER_ROOT ? 'Boards ohne Ordner' : (current?.name ?? 'Ordner')
 
@@ -432,17 +435,46 @@ export function Boards({
 
   return (
     <section aria-labelledby="explorer-inhalt">
-      {path.length > 0 && (
+      {current !== null && (
         <nav aria-label="Pfad">
           <ol className="breadcrumb">
             <li>
-              <Link route={{ kind: 'arbeitsbereich', workspaceId, folder: null }}>{workspace.name}</Link>
+              <Link route={{ kind: 'arbeitsbereich', workspaceId, folder: null }} title={workspace.name}>
+                {workspace.name}
+              </Link>
             </li>
-            {path.slice(0, -1).map((entry) => (
+            {hidden.length > 0 && (
+              <li className="breadcrumb__more">
+                <ChevronRight className="breadcrumb__sep" size={16} aria-hidden="true" />
+                <Menu label="Weitere übergeordnete Ordner" icon={Ellipsis} variant="quiet">
+                  {hidden.map((entry) => (
+                    <MenuLinkItem key={entry.id}>
+                      <Link
+                        className="menu__item"
+                        role="menuitem"
+                        route={{ kind: 'arbeitsbereich', workspaceId, folder: entry.id }}
+                      >
+                        {entry.name}
+                      </Link>
+                    </MenuLinkItem>
+                  ))}
+                </Menu>
+              </li>
+            )}
+            {shown.map((entry) => (
               <li key={entry.id}>
-                <Link route={{ kind: 'arbeitsbereich', workspaceId, folder: entry.id }}>{entry.name}</Link>
+                <ChevronRight className="breadcrumb__sep" size={16} aria-hidden="true" />
+                <Link route={{ kind: 'arbeitsbereich', workspaceId, folder: entry.id }} title={entry.name}>
+                  {entry.name}
+                </Link>
               </li>
             ))}
+            <li>
+              <ChevronRight className="breadcrumb__sep" size={16} aria-hidden="true" />
+              <span aria-current="page" title={current.name}>
+                {current.name}
+              </span>
+            </li>
           </ol>
         </nav>
       )}
