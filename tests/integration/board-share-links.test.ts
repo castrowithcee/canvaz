@@ -847,6 +847,11 @@ describe('Gaeste an der Realtime-Strecke', () => {
 
     await post(app, ada, BOARD_SHARE_LINK_REVOKE_PATH, { boardId: board.id, shareLinkId: link.id })
 
+    // The notice arrives before closing, named and without link, token or board details.
+    const meldung = await verbindung.next('error')
+    expect(meldung.code).toBe('link-ungueltig')
+    expect(JSON.stringify(meldung)).not.toMatch(new RegExp(`${link.id}|${link.token}|${board.id}`))
+
     // Beide Wege beenden die Verbindung und beide sind endgueltig: der Widerruf schliesst sie unmittelbar
     // (`4401`), und die Nachpruefung des Raums wuerde sie andernfalls binnen zwei Sekunden entziehen
     // (`4403`). Welcher zuerst greift, entscheidet nur die Reihenfolge - beide verbieten den Wiederaufbau.
@@ -864,6 +869,7 @@ describe('Gaeste an der Realtime-Strecke', () => {
 
     app.setNow(new Date(Date.now() + 2 * 3600 * 1000))
 
+    expect((await verbindung.next('error')).code).toBe('link-ungueltig')
     expect(BEENDET).toContain(await verbindung.closeCode)
     await expect(openRealtime(app.baseUrl, gast.jar.cookieHeader())).rejects.toThrow()
   })

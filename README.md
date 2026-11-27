@@ -416,7 +416,8 @@ sofort; ein Upgrade danach wird abgelehnt. Ein Widerruf ausserhalb des Anwendung
 `admin:recover`, schliesst sie beim naechsten Pruefungslauf (hoechstens eine Minute). Eine Deaktivierung wirkt dabei auf **beide** Anmeldewege und
 entwertet zusaetzlich eine noch offene Einladung. Auch der Ablauf der Sitzung schliesst eine offene Verbindung.
 Fuer einen Gast gilt dasselbe, und zusaetzlich beendet der Widerruf seines Freigabelinks jede offene
-Verbindung, die daraus entstanden ist.
+Verbindung, die daraus entstanden ist. Widerruf wie Ablauf melden einem Gast vorher `link-ungueltig`, und die
+Gastansicht ersetzt das Board durch den Hinweis auf den ungueltigen Link.
 Ein Upgrade mit fremdem `Origin` wird abgewiesen, weil der CSRF-Header beim Handshake nicht greift.
 
 ### Echte Client-Adresse erkennen
@@ -814,7 +815,8 @@ Mitgliedschaft und keine Anmeldung, nur diese eine Sitzung fuer dieses eine Boar
 **Ablauf und Widerruf wirken sofort**, auf neue wie auf bestehende Gastsessions: jede Aufloesung eines
 Gastzugriffs prueft Gastsession **und** Link in derselben Abfrage, und nichts davon wird zwischengespeichert.
 Der Widerruf schliesst zusaetzlich offene Realtime-Verbindungen dieses Links unmittelbar (siehe
-_Echtzeit-Kollaboration_).
+_Echtzeit-Kollaboration_). Eine offene Gastansicht zeigt danach statt des Boards den Hinweis, dass der Link nicht
+mehr gilt; bei einem schreibenden Gast gehen nicht gespeicherte Aenderungen verloren, und der Hinweis sagt das.
 
 **Was ein Gast erreicht, ist der Inhalt seines Boards - und sonst nichts.** Vier Endpunkte nehmen eine
 Gastsession an: Szene laden und speichern, Bild abrufen und hochladen. Jede andere Strecke - Boardliste,
@@ -1398,8 +1400,16 @@ waere eine gemeinsame Zeichenflaeche anonym.
 Ablauf und Widerruf seines Links wirken auf die offene Verbindung wie ein Mitgliedschaftsentzug: die
 naechste Aufloesung findet nichts mehr und beendet sie. Der Widerruf schliesst sie zusaetzlich **sofort**,
 statt bis zur naechsten Nachpruefung zu warten - genau wie ein Logout eine interne Sitzung schliesst. Ein
-Wiederaufbau scheitert danach bereits am Upgrade. Ein Rollenwechsel des Links wuerde ihn wie jede andere
-Herabstufung auf Nur-Lesen stellen (`access`); das Protokoll aendert sich fuer nichts davon.
+Wiederaufbau scheitert danach bereits am Upgrade.
+
+Vor dem Schliessen, bei Widerruf, Ablaufpruefung der Verbindung und Nachpruefung des Raums, bekommt **nur ein
+Linkgast** die Fehlermeldung `link-ungueltig` ("Dieser Freigabelink gilt nicht mehr"), ohne Token, Link-Kennung,
+Workspace oder Boardangabe; interne Nutzer bekommen weiter `board-nicht-gefunden`. Die Meldung ist nur Darstellung:
+der Server entscheidet die Berechtigung unabhaengig. Die Gastansicht wechselt darauf in ihren Zustand
+"ungueltiger Link". Kommt nur der Schliesscode `4401` oder `4403` an, prueft sie den Gastzugang einmal neu und
+zeigt bei Ungueltigkeit denselben Hinweis. Ein Rollenwechsel des Links wuerde ihn wie jede andere
+Herabstufung auf Nur-Lesen stellen (`access`); das Protokoll aendert sich fuer nichts davon (`REALTIME_PROTOCOL_VERSION` bleibt, ein neuer Fehlercode ist
+abwaertskompatibel).
 
 ### Was Presence uebertraegt
 
@@ -1860,8 +1870,8 @@ widerrufen, beitreten, ablaufen; dass das Token weder in der Liste noch in der D
 Nachweis auftaucht; dass **keine** Antwort an einen Gast eine Workspacekennung, eine interne Nutzerkennung
 oder einen internen Anzeigenamen enthaelt - gemessen am Rohkoerper der Antwort und am gesamten
 Nachrichtenprotokoll seiner WebSocket-Verbindung; dass ein Gast an keinem fremden Board, keinem Workspace-,
-Mitglieder- und keinem Adminendpunkt ankommt; und dass Widerruf wie Ablauf eine **offene** WebSocket-Verbindung beenden und ihren Wiederaufbau
-verhindern. `tests/unit/board-guest.test.ts` durchlaeuft dazu die Gasttabelle vollstaendig - beide
+Mitglieder- und keinem Adminendpunkt ankommt; und dass Widerruf wie Ablauf eine **offene** WebSocket-Verbindung nach der Meldung `link-ungueltig` beenden und ihren
+Wiederaufbau verhindern. `tests/unit/board-guest.test.ts` durchlaeuft dazu die Gasttabelle vollstaendig - beide
 Gastrollen gegen jede Aktion sowie jeden Board- und Workspacezustand, einschliesslich des Falls, der einen
 Gast ausmacht: ein anderes Board als das seines Links.
 
