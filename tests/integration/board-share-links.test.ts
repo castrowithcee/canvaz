@@ -364,7 +364,8 @@ describe('Freigabelinks verwalten', () => {
 
   it('ersetzt einen Link in einem Schritt und beendet den alten samt seiner Verbindung', async () => {
     const { ada, workspace, board } = await aufbau()
-    const alt = await createShareLink(ada, board.id, { role: 'guest-editor', expiresAt: inFrom(DAY_MS) })
+    const ablauf = inFrom(DAY_MS)
+    const alt = await createShareLink(ada, board.id, { role: 'guest-editor', expiresAt: ablauf })
     const gast = await joinAsGuest(alt.token, 'Schreibgast')
     const verbindung = await connect(gast.jar.cookieHeader())
     await verbindung.join(board.id)
@@ -379,10 +380,10 @@ describe('Freigabelinks verwalten', () => {
     const liste = (await (
       await ada.jar.fetch(`${app.baseUrl}${BOARD_SHARE_LINKS_PATH}?${BOARD_ID_PARAM}=${board.id}`)
     ).json()) as BoardShareLinksResponse
-    const gelistetAlt = liste.links.find((link) => link.id === alt.id)
-    expect(gelistetAlt?.revokedAt).not.toBeNull()
+    // The list shows valid links only: the replaced one is gone, its replacement is there.
+    expect(liste.links.map((link) => link.id)).toEqual([ersatz.link.id])
     // Expiry is carried over unchanged.
-    expect(ersatz.link.expiresAt).toBe(gelistetAlt?.expiresAt)
+    expect(ersatz.link.expiresAt).toBe(ablauf)
 
     // The old address is dead, the old link's open connection is closed, the new address works.
     const beitritt = await fetch(`${app.baseUrl}${BOARD_GUEST_JOIN_PATH}`, {
@@ -495,6 +496,31 @@ describe('Gastbeitritt', () => {
     expect(JSON.stringify(beitritte)).not.toContain(link.token)
     expect(JSON.stringify(app.logs)).not.toContain(link.token)
     expect(JSON.stringify(app.logs)).not.toContain(gast.jar.cookies.get(GUEST_COOKIE))
+  })
+
+  it('listet nur gueltige Links: weder widerrufene noch abgelaufene', async () => {
+    const { ada, workspace, board } = await aufbau()
+    const gueltig = await createShareLink(ada, board.id)
+    const widerrufen = await createShareLink(ada, board.id)
+    await createShareLink(ada, board.id, { expiresAt: inFrom(3_600_000) })
+    await post(app, ada, BOARD_SHARE_LINK_REVOKE_PATH, { boardId: board.id, shareLinkId: widerrufen.id })
+
+    const ids = async () => {
+      const liste = await ada.jar.fetch(`${app.baseUrl}${BOARD_SHARE_LINKS_PATH}?${BOARD_ID_PARAM}=${board.id}`)
+      return ((await liste.json()) as BoardShareLinksResponse).links.map((link) => link.id)
+    }
+    expect(await ids()).toHaveLength(2)
+    expect(await ids()).not.toContain(widerrufen.id)
+
+    // The clock of the app decides, not the database clock.
+    app.setNow(new Date(Date.now() + 2 * 3600 * 1000))
+    expect(await ids()).toEqual([gueltig.id])
+
+    // Records and audit stay.
+    expect(await pool.query('select 1 from board_share_links')).toHaveProperty('rowCount', 3)
+    expect(
+      (await auditEvents(workspace.id)).filter((event) => event.action === 'board-share-link.revoked'),
+    ).toHaveLength(1)
   })
 
   it('zaehlt die Beitritte in der Liste des Owners mit', async () => {

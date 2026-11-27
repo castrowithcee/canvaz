@@ -451,17 +451,6 @@ function TransferOwnership({
   )
 }
 
-/** Zustand eines Links in einem Wort - abgeleitet aus den Zeitpunkten, die der Server nennt. */
-function linkStatus(link: BoardShareLinkView, now: Date): string {
-  if (link.revokedAt !== null) {
-    return `widerrufen am ${formatDate(link.revokedAt)}`
-  }
-  if (link.expiresAt !== null && new Date(link.expiresAt).getTime() <= now.getTime()) {
-    return `abgelaufen am ${formatDateTime(link.expiresAt)}`
-  }
-  return 'gueltig'
-}
-
 /** The "An E-Mail-Adressen senden" field: separators are comma, semicolon and whitespace. */
 function parseRecipientInput(text: string): readonly string[] | undefined {
   const list = text.split(/[\s,;]+/).filter((part) => part !== '')
@@ -595,6 +584,7 @@ function ShareLinks({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const [revoked, setRevoked] = useState<string | null>(null)
   const now = new Date()
   // Only a convenience: the server checks the bounds against its own clock. Rounded inward to whole minutes.
   const minValue = toLocalInputValue(
@@ -723,9 +713,10 @@ function ShareLinks({
       </form>
 
       {notice}
+      {revoked !== null && <Notice kind="success" text={revoked} />}
 
       {links.length === 0 ? (
-        <Empty text="Fuer dieses Board gibt es noch keinen Gastlink." />
+        <Empty text="Fuer dieses Board gibt es keine gueltigen Gastlinks." />
       ) : (
         <div className="table-wrap">
           <table className="table">
@@ -736,7 +727,6 @@ function ShareLinks({
                 <th scope="col">Angelegt von</th>
                 <th scope="col">Angelegt</th>
                 <th scope="col">Ablauf</th>
-                <th scope="col">Zustand</th>
                 <th scope="col">Gaeste</th>
                 <th scope="col">Aktion</th>
               </tr>
@@ -748,7 +738,10 @@ function ShareLinks({
                   me={me}
                   board={board}
                   link={link}
-                  now={now}
+                  onRevoked={() => {
+                    setRevoked(`Der Gastlink vom ${formatDate(link.createdAt)} ist widerrufen.`)
+                    onChanged()
+                  }}
                   mailAvailable={mailAvailable}
                   onCreated={onCreated}
                   onChanged={onChanged}
@@ -766,7 +759,7 @@ function ShareLinkRow({
   me,
   board,
   link,
-  now,
+  onRevoked,
   mailAvailable,
   onCreated,
   onChanged,
@@ -774,7 +767,7 @@ function ShareLinkRow({
   readonly me: MeResponse
   readonly board: BoardView
   readonly link: BoardShareLinkView
-  readonly now: Date
+  readonly onRevoked: () => void
   readonly mailAvailable: boolean
   /** Hands the replacement link's response to `BoardShare` exactly once. */
   readonly onCreated: (response: CreateBoardShareLinkResponse) => void
@@ -784,8 +777,6 @@ function ShareLinkRow({
   const [error, setError] = useState<string | null>(null)
   const [replacing, setReplacing] = useState(false)
   const [recipients, setRecipients] = useState('')
-  // The server replaces only valid links, so the row offers it only there.
-  const live = link.revokedAt === null && linkStatus(link, now) === 'gueltig'
 
   return (
     <tr>
@@ -793,30 +784,27 @@ function ShareLinkRow({
       <td data-label="Angelegt von">{link.createdByDisplayName ?? '—'}</td>
       <td data-label="Angelegt">{formatDate(link.createdAt)}</td>
       <td data-label="Ablauf">{link.expiresAt === null ? 'kein Ablauf' : formatDateTime(link.expiresAt)}</td>
-      <td data-label="Zustand">{linkStatus(link, now)}</td>
       <td data-label="Gaeste">{String(link.guestCount)}</td>
       <td data-label="Aktion">
-        {link.revokedAt === null && (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => {
-              setBusy(true)
-              setError(null)
-              revokeBoardShareLink(me.csrfToken, { boardId: board.id, shareLinkId: link.id })
-                .then(onChanged)
-                .catch((cause: unknown) => {
-                  setError(messageOf(cause, 'Der Freigabelink konnte nicht widerrufen werden.'))
-                })
-                .finally(() => {
-                  setBusy(false)
-                })
-            }}
-          >
-            Gastlink vom {formatDate(link.createdAt)} widerrufen
-          </button>
-        )}
-        {live && !replacing && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true)
+            setError(null)
+            revokeBoardShareLink(me.csrfToken, { boardId: board.id, shareLinkId: link.id })
+              .then(onRevoked)
+              .catch((cause: unknown) => {
+                setError(messageOf(cause, 'Der Freigabelink konnte nicht widerrufen werden.'))
+              })
+              .finally(() => {
+                setBusy(false)
+              })
+          }}
+        >
+          Gastlink vom {formatDate(link.createdAt)} widerrufen
+        </button>
+        {!replacing && (
           <button
             type="button"
             disabled={busy}
@@ -828,7 +816,7 @@ function ShareLinkRow({
             Gastlink vom {formatDate(link.createdAt)} ersetzen
           </button>
         )}
-        {live && replacing && (
+        {replacing && (
           <ConfirmDialog danger>
             <p>
               Gastlink vom {formatDate(link.createdAt)} ersetzen? Die bisherige Adresse funktioniert danach fuer

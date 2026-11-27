@@ -1314,7 +1314,7 @@ export type BoardShareLinkView = {
   readonly createdAt: string
   /** ISO-8601 oder `null`: dieser Link laeuft nicht von selbst ab. */
   readonly expiresAt: string | null
-  /** ISO-8601 oder `null`. Ein widerrufener Link bleibt sichtbar, damit der Nachweis lesbar bleibt. */
+  /** ISO-8601 or `null`. The list holds only valid links; the revoke is in the audit, not in the list. */
   readonly revokedAt: string | null
   /** Zahl der bisher beigetretenen Gaeste. Ohne Namen und ohne Zeitpunkte. */
   readonly guestCount: number

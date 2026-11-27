@@ -274,7 +274,7 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
 
   return [
     /**
-     * Liste der Freigabelinks eines Boards.
+     * List of the valid share links of a board (not revoked, not expired).
      *
      * Hinter `grant:manage` und nicht hinter `board:read`: wer ein Board nur sieht, muss nicht wissen, ueber
      * welche Wege es sonst noch erreichbar ist. Die Liste zeigt Rolle, Ablauf, Widerruf und die Zahl der
@@ -303,7 +303,7 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
           send(response, denial)
           return
         }
-        const links = await store.shareLinks.listForBoard(boardId)
+        const links = await store.shareLinks.listForBoard(boardId, context.now())
         // Diese Liste erreicht ausschliesslich der Board-Owner; sie traegt deshalb die volle Boardsicht.
         const body: BoardShareLinksResponse = {
           board: toBoardView(asRequester(auth), access),
