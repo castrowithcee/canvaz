@@ -122,7 +122,7 @@ export function shareLinkMail(
     readonly url: string
   },
 ): Mail {
-  const right = input.role === 'guest-editor' ? 'bearbeiten' : 'ansehen'
+  const right = input.role === 'guest-editor' ? 'zu bearbeiten' : 'anzusehen'
   const expiry =
     input.expiresAt === null
       ? 'unbefristet'
@@ -133,7 +133,7 @@ export function shareLinkMail(
     text: [
       'Guten Tag,',
       '',
-      `${input.ownerName} laedt Sie ein, das Board "${input.boardTitle}" in Canvaz zu ${right}. Ueber diesen Link`,
+      `${input.ownerName} laedt Sie ein, das Board "${input.boardTitle}" in Canvaz ${right}. Ueber diesen Link`,
       'gelangen Sie ohne Konto hinein:',
       '',
       input.url,
