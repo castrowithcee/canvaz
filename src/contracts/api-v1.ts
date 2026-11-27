@@ -93,3 +93,31 @@ export type ApiV1CreateFolderRequest = {
 }
 
 export type ApiV1FolderResponse = { readonly folder: ApiV1Folder }
+
+/**
+ * Trash: `GET` lists, `POST` moves a board into the trash. The board keeps its folder, so it stays in the
+ * key's target. `API_V1_BOARD_RESTORE_PATH` takes it back. Purging is not part of this API.
+ */
+export const API_V1_BOARD_TRASH_PATH = `${API_V1_BASE_PATH}/boards/trash`
+export const API_V1_BOARD_RESTORE_PATH = `${API_V1_BASE_PATH}/boards/restore`
+
+export type ApiV1TrashedBoard = {
+  readonly id: string
+  readonly workspaceId: string
+  /** Kept while in the trash; may name a folder that no longer exists. */
+  readonly folderId: string | null
+  readonly title: string
+  readonly status: 'active' | 'archived'
+  /** ISO-8601. */
+  readonly deletedAt: string
+  /** ISO-8601: from then on the board is removed for good. */
+  readonly purgeAt: string
+}
+
+/** `POST API_V1_BOARD_TRASH_PATH` and `POST API_V1_BOARD_RESTORE_PATH` take `{ boardId }`. */
+export type ApiV1TrashBoardRequest = { readonly boardId: string }
+export type ApiV1TrashedBoardResponse = { readonly board: ApiV1TrashedBoard }
+export type ApiV1TrashedBoardsResponse = { readonly boards: readonly ApiV1TrashedBoard[] }
+
+/** `leftTarget`: the folder was gone, the board sits in the workspace root and lies outside the key's target. */
+export type ApiV1RestoredBoardResponse = { readonly board: ApiV1Board; readonly leftTarget: boolean }

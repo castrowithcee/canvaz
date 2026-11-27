@@ -68,6 +68,10 @@ export type AppRoute =
   | { readonly kind: 'konto' }
   /** Kontenverwaltung der Systemadministration. */
   | { readonly kind: 'konten' }
+  /** Blocked senders page of the system administration. */
+  | { readonly kind: 'absender' }
+  /** Instance branding page of the system administration. */
+  | { readonly kind: 'branding' }
   /** Keine Ansicht dieser Anwendung. */
   | { readonly kind: 'unbekannt' }
 
@@ -80,6 +84,8 @@ const DETAILS_SEGMENT = 'details'
 const ACCOUNT_SEGMENT = 'konto'
 const ADMIN_SEGMENT = 'verwaltung'
 const ADMIN_ACCOUNTS_SEGMENT = 'konten'
+const ADMIN_SENDERS_SEGMENT = 'absender'
+const ADMIN_BRANDING_SEGMENT = 'branding'
 const VERSION_PARAM = 'version'
 const PANEL_PARAM = 'bereich'
 const FOLDER_PARAM = 'ordner'
@@ -131,6 +137,12 @@ export function parseRoute(href: string): AppRoute {
   }
   if (first === ADMIN_SEGMENT && second === ADMIN_ACCOUNTS_SEGMENT && third === undefined) {
     return { kind: 'konten' }
+  }
+  if (first === ADMIN_SEGMENT && second === ADMIN_SENDERS_SEGMENT && third === undefined) {
+    return { kind: 'absender' }
+  }
+  if (first === ADMIN_SEGMENT && second === ADMIN_BRANDING_SEGMENT && third === undefined) {
+    return { kind: 'branding' }
   }
   if (first === WORKSPACES_SEGMENT) {
     if (second === undefined) {
@@ -202,6 +214,10 @@ export function routeHref(route: AppRoute): string {
       return `/${ACCOUNT_SEGMENT}`
     case 'konten':
       return `/${ADMIN_SEGMENT}/${ADMIN_ACCOUNTS_SEGMENT}`
+    case 'absender':
+      return `/${ADMIN_SEGMENT}/${ADMIN_SENDERS_SEGMENT}`
+    case 'branding':
+      return `/${ADMIN_SEGMENT}/${ADMIN_BRANDING_SEGMENT}`
   }
 }
 

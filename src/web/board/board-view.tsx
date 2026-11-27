@@ -105,6 +105,7 @@ import '@excalidraw/excalidraw/index.css'
 
 import type { BoardStatusView, BoardView, MeResponse, WorkspaceView } from '../../contracts/api.js'
 import type { PresenceView } from '../../contracts/realtime.js'
+import { BOARD_ACCESS_REVOKED_CLOSE_CODE, SESSION_REVOKED_CLOSE_CODE } from '../../contracts/realtime.js'
 import type { BinaryFileRef, SceneSnapshot } from '../../contracts/scene.js'
 import { SCENE_SCHEMA_VERSION } from '../../contracts/scene.js'
 import { MAX_BOARD_TITLE_LENGTH } from '../../domain/board/model.js'
@@ -222,6 +223,7 @@ export function BoardEditor({
   guestName,
   member = null,
   onClose,
+  onGuestLinkEnded = null,
 }: {
   readonly boardId: string
   /** Token der eigenen Sitzung - der internen oder der des Gastes. */
@@ -240,6 +242,11 @@ export function BoardEditor({
   readonly member?: BoardMemberContext | null
   /** `null` heisst: es gibt keinen Weg zurueck. Genau das gilt fuer einen Gast. */
   readonly onClose: (() => void) | null
+  /**
+   * Guest view only: the link no longer applies. `confirmed` is true when the server said so, false when only
+   * the connection closed for good - then the caller has to check the link itself.
+   */
+  readonly onGuestLinkEnded?: ((confirmed: boolean, wasWriting: boolean) => void) | null
 }) {
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
   const [save, setSave] = useState<SaveState>({ kind: 'idle' })
@@ -301,6 +308,11 @@ export function BoardEditor({
   const liveRef = useRef(false)
   /** Zuletzt vom Server genanntes Schreibrecht. Er unterscheidet die erste Aussage von einer Aenderung. */
   const canWriteRef = useRef<boolean | null>(null)
+  /** A ref, so a new callback does not rebuild the connection. */
+  const onGuestLinkEndedRef = useRef(onGuestLinkEnded)
+  onGuestLinkEndedRef.current = onGuestLinkEnded
+  /** The server already named the link end; the close code after it needs no recheck. */
+  const guestLinkEndedRef = useRef(false)
   /** Der Ausloeser der Informationsleiste. Angedockt gibt ihm die Ansicht den Fokus selbst zurueck. */
   const panelTriggerRef = useRef<HTMLButtonElement>(null)
   /** Whether the open share dialog was started from the info panel summary rather than its own trigger. */
@@ -782,7 +794,20 @@ export function BoardEditor({
           return { kind: 'saved', at: new Date(message.savedAt) }
         })
       },
+      onTerminalClose(code): void {
+        if (
+          !guestLinkEndedRef.current &&
+          (code === SESSION_REVOKED_CLOSE_CODE || code === BOARD_ACCESS_REVOKED_CLOSE_CODE)
+        ) {
+          onGuestLinkEndedRef.current?.(false, canWriteRef.current === true)
+        }
+      },
       onError(message): void {
+        if (message.code === 'link-ungueltig' && onGuestLinkEndedRef.current) {
+          guestLinkEndedRef.current = true
+          onGuestLinkEndedRef.current(true, canWriteRef.current === true)
+          return
+        }
         if (message.code === 'board-nicht-gefunden') {
           setState({ kind: 'not-found' })
           return

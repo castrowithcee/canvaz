@@ -25,6 +25,7 @@ import { PenLine, RotateCcw } from 'lucide-react'
 import type { GuestSessionResponse } from '../contracts/api.js'
 import { MAX_GUEST_DISPLAY_NAME_LENGTH } from '../domain/board/guest.js'
 import { ApiError, fetchGuestSession, joinBoardAsGuest } from './api.js'
+import { applyGuestAppearance } from './appearance.js'
 import { BoardEditor } from './board/lazy-editor.js'
 import { Button, describedBy, Field, Loading, Notice, PageState } from './ui.js'
 
@@ -49,7 +50,7 @@ type State =
   | { readonly kind: 'join' }
   | { readonly kind: 'ready'; readonly session: GuestSessionResponse }
   /** Kein Token in der Adresse und kein gueltiger Gastzugang im Browser. */
-  | { readonly kind: 'invalid' }
+  | { readonly kind: 'invalid'; readonly lostChanges?: boolean }
   | { readonly kind: 'failed'; readonly message: string }
 
 function Shell({ children }: { readonly children: ReactNode }) {
@@ -159,6 +160,7 @@ export function GuestApp() {
   }, [])
 
   useEffect(load, [load])
+  useEffect(applyGuestAppearance, [])
 
   if (state.kind === 'checking') {
     return (
@@ -186,6 +188,7 @@ export function GuestApp() {
           Oeffne den Freigabelink erneut, den du bekommen hast. Gilt auch er nicht mehr, braucht es einen
           neuen - ein Link laesst sich nicht wiederherstellen.
         </p>
+        {state.lostChanges === true && <p>Nicht gespeicherte Aenderungen gehen dabei verloren.</p>}
       </Shell>
     )
   }
@@ -228,6 +231,24 @@ export function GuestApp() {
         workspaceArchived={false}
         guestName={session.displayName}
         onClose={null}
+        // Either the server named the link end, or the connection just closed for good: then check once
+        // instead of showing another cause as the end of the link.
+        onGuestLinkEnded={(confirmed, wasWriting) => {
+          const ended = () => {
+            setState({ kind: 'invalid', lostChanges: wasWriting })
+          }
+          if (confirmed) {
+            ended()
+            return
+          }
+          fetchGuestSession()
+            .then((current) => {
+              if (current === null) {
+                ended()
+              }
+            })
+            .catch(() => undefined)
+        }}
       />
     </Suspense>
   )
