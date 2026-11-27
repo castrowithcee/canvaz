@@ -92,6 +92,18 @@ export function applyAppearance(appearance: AppearanceView | null): void {
   notify()
 }
 
+/**
+ * Fixes the light scheme and default accent for the guest view. Unlike `applyAppearance` it does not
+ * remember anything: a guest has no choice and must not overwrite an account's stored one.
+ */
+export function applyGuestAppearance(): void {
+  const root = document.documentElement
+  root.dataset['theme'] = 'light'
+  delete root.dataset['accent']
+  applyThemeColor('light')
+  notify()
+}
+
 function subscribe(listener: () => void): () => void {
   const query = window.matchMedia(DARK_QUERY)
   listeners.add(listener)
