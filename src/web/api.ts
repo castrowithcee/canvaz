@@ -140,6 +140,7 @@ import {
   BOARD_RENAME_PATH,
   BOARD_SCENE_PATH,
   BOARD_SHARE_LINK_CREATE_PATH,
+  BOARD_SHARE_LINK_REPLACE_PATH,
   BOARD_SHARE_LINK_REVOKE_PATH,
   BOARD_SHARE_LINKS_PATH,
   BOARD_STATUS_PARAM,
@@ -766,6 +767,14 @@ export async function revokeBoardShareLink(
   change: { readonly boardId: string; readonly shareLinkId: string },
 ): Promise<BoardShareLinkView> {
   return request<BoardShareLinkView>(BOARD_SHARE_LINK_REVOKE_PATH, mutation(csrfToken, change))
+}
+
+/** Revokes a link and creates a new one in the same step. Its address appears once in the response. */
+export async function replaceBoardShareLink(
+  csrfToken: string,
+  change: { readonly boardId: string; readonly shareLinkId: string },
+): Promise<CreateBoardShareLinkResponse> {
+  return request<CreateBoardShareLinkResponse>(BOARD_SHARE_LINK_REPLACE_PATH, mutation(csrfToken, change))
 }
 
 /**

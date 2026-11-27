@@ -853,12 +853,18 @@ Stelle, an der Boardinhalt ohne Workspace-Mitgliedschaft erreichbar wird, und de
   Datenbank oeffnet kein Board.
 - **Das Klartexttoken erscheint genau einmal**, in der Antwort auf das Anlegen. Es laesst sich danach
   nirgends wieder abrufen - auch nicht vom Owner, auch nicht ueber die Liste. Ein verlorener Link wird
-  widerrufen und neu angelegt.
+  durch einen neuen **ersetzt** (oder widerrufen und neu angelegt).
 - Die geteilte Adresse traegt es im **Fragment** (`/gast#<token>`). Ein Fragment sendet der Browser nicht
   mit; damit erreicht das Token weder ein Zugriffsprotokoll noch einen Referrer noch einen Zwischenspeicher.
   Es steht ebenso wenig in einer Protokollzeile, einem Auditereignis oder einer Fehlermeldung.
 - **Optionaler Ablauf, jederzeitiger Widerruf.** Ohne Ablaufangabe laeuft ein Link nicht von selbst ab; das
   steht so in der Liste, und der Widerruf bleibt sein Ende.
+- **Ersetzen statt Wiederanzeigen.** `POST /api/boards/share-links/replace` widerruft einen gueltigen Link und
+  legt in derselben Transaktion unter derselben Boardsperre einen neuen mit gleicher Rolle und gleichem
+  `expires_at` an. Die Antwort ist die der Anlage (201, neue Adresse genau einmal). Ein widerrufener,
+  abgelaufener, fremder oder erfundener Link ergibt dieselbe 404. Die Verbindungen des alten Links fallen wie
+  beim Widerruf erst nach dem Commit; das Audit nennt `board-share-link.revoked` fuer den alten und
+  `board-share-link.created` mit `replacesShareLinkId` fuer den neuen Link.
 
 Aus einem Link entsteht beim Beitritt eine **Gastsession**: serverseitig, widerrufbar, mit einem selbst
 gewaehlten Anzeigenamen und **vier Stunden** Lebensdauer. Sie ueberlebt ihren Link nie - laeuft der Link
@@ -900,9 +906,10 @@ Felder einzeln auf, statt aus der vollen Sicht etwas wegzulassen: ein spaeter er
 anlegen mit Rollenwahl (Voreinstellung `guest-viewer`) und optionalem Ablaufzeitpunkt (Datum und Uhrzeit
 oder Schnellwahl 1, 7 oder 30 Tage; Voreinstellung: kein Ablauf; der Server verlangt 15 Minuten bis 365 Tage
 nach seinem Zeitpunkt), die vorhandenen Links mit Rolle, Erzeuger, Ablauf (Datum und Uhrzeit), Zustand und
-Zahl der Beitritte, und der Widerruf je Zeile. Der Klartextlink erscheint **genau einmal**, unmittelbar nach
-der Anlage und mit dem Hinweis, dass er danach nicht erneut abrufbar ist; die Liste zeigt ihn nie, und
-abgelegt wird er nirgends.
+Zahl der Beitritte, und je Zeile Widerrufen und Ersetzen (mit Bestaetigung, die benennt, dass die bisherige
+Adresse fuer niemanden mehr funktioniert und offene Gastsitzungen enden). Der Klartextlink erscheint **genau
+einmal**, unmittelbar nach der Anlage und mit dem Hinweis, dass er danach nicht erneut abrufbar ist, auch der
+eines Ersatzlinks; die Liste zeigt ihn nie, und abgelegt wird er nirgends.
 
 **Ein Gast oeffnet `/gast#<token>`.** Die SPA behandelt das als eigene Route noch vor jedem Sitzungszustand:
 sie fragt `/api/me` gar nicht erst, liest das Token aus dem Fragment, fragt nach einem Anzeigenamen, tritt
@@ -941,6 +948,7 @@ Die Antwort entsteht in der Transaktion und wird erst nach dem Commit gesendet.
 | GET     | `/api/boards/share-links?boardId=`             | `grant:manage`                                                        | 404 unsichtbar, sonst 403 | —                      |
 | POST    | `/api/boards/share-links/create`               | `grant:manage`                                                        | 404 unsichtbar, sonst 403 | —                      |
 | POST    | `/api/boards/share-links/revoke`               | `grant:manage`                                                        | 404 unsichtbar, sonst 403 | —                      |
+| POST    | `/api/boards/share-links/replace`              | `grant:manage`                                                        | 404 unsichtbar, sonst 403 | —                      |
 | GET     | `/api/boards/versions?boardId=`                | `board:read`                                                          | 404                       | —                      |
 | GET     | `/api/boards/versions/scene?boardId=&version=` | `board:read`                                                          | 404                       | —                      |
 | POST    | `/api/boards/versions/restore`                 | `scene:restore`                                                       | 404 unsichtbar, sonst 403 | 409                    |
@@ -1352,7 +1360,7 @@ Aenderung und Nachweis entstehen in derselben Transaktion; eine abgelehnte Aende
 
 Fuer Gastfreigaben gibt es drei Ereignisse mit `targetType: 'board-share-link'` und dem Link als Ziel:
 `board-share-link.created` und `board-share-link.revoked` (Akteur ist der Owner, `details` traegt Board,
-Rolle und Ablauf) sowie `board-guest.joined`. Dieses eine Ereignis hat **keinen** internen Akteur - ein Gast
+Rolle und Ablauf; beim Ersetzen nennt das neue Ereignis `replacesShareLinkId`) sowie `board-guest.joined`. Dieses eine Ereignis hat **keinen** internen Akteur - ein Gast
 ist kein Nutzer -, und `details` nennt Board, Rolle, Gastsession und den gewaehlten Anzeigenamen. **Kein
 Token steht in einem dieser Ereignisse**, weder das des Links noch das der Gastsession.
 
@@ -1922,7 +1930,7 @@ Workspace-Rolle, Boardrolle, Workspace- und Boardstatus sowie Nutzerstatus gegen
 Erwartungstabelle.
 
 `tests/integration/board-share-links.test.ts` prueft die Gastfreigaben auf demselben Weg: anlegen, auflisten,
-widerrufen, beitreten, ablaufen; dass das Token weder in der Liste noch in der Datenbank, im Log oder im
+widerrufen, ersetzen, beitreten, ablaufen; dass das Token weder in der Liste noch in der Datenbank, im Log oder im
 Nachweis auftaucht; dass **keine** Antwort an einen Gast eine Workspacekennung, eine interne Nutzerkennung
 oder einen internen Anzeigenamen enthaelt - gemessen am Rohkoerper der Antwort und am gesamten
 Nachrichtenprotokoll seiner WebSocket-Verbindung; dass ein Gast an keinem fremden Board, keinem Workspace-,
