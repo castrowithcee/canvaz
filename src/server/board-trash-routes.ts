@@ -27,7 +27,6 @@
  */
 
 import type {
-  BoardTrashEntryView,
   BoardTrashResponse,
   TrashActionResultView,
   TrashSelectionResponse,
@@ -40,20 +39,20 @@ import {
   WORKSPACE_ID_PARAM,
 } from '../contracts/api.js'
 import type { BoardId } from '../domain/board/model.js'
-import { trashPurgeAt } from '../domain/board/model.js'
 import type { BoardAction } from '../domain/board/policy.js'
-import { decideBoardAccess } from '../domain/board/policy.js'
-import type { BoardAccess, BoardStore, TrashedBoardEntry } from '../domain/board/repositories.js'
+import type { BoardAccess, BoardStore } from '../domain/board/repositories.js'
 import type { AuthenticatedSession } from '../domain/identity/model.js'
-import type { Workspace, WorkspaceRole } from '../domain/workspace/model.js'
-import { DENIALS, NOT_FOUND, createBoardGate, withoutBoard } from './board-access.js'
+import { DENIALS, NOT_FOUND, createBoardGate } from './board-access.js'
+import type { BoardFailure } from './board-operations.js'
+import { sessionActor } from './board-operations.js'
+import type { TrashFailure } from './board-trash-operations.js'
+import { createTrashOperations, isTrashFailure } from './board-trash-operations.js'
 import type { AppContext } from './context.js'
 import { requireSession } from './guard.js'
 import type { Route } from './http.js'
 import { sendError } from './http.js'
 import type { Reply } from './reply.js'
 import { fail, guardMutation, ok, readUuid, send } from './reply.js'
-import { asRequester, boardSubject } from './requester.js'
 import { purgeBoardInTransaction, removeAssetBytes } from './trash.js'
 
 /** Der Papierkorb kennt genau diese eine Antwort auf ein Board, das es dort nicht (mehr) gibt. */
@@ -75,45 +74,22 @@ function readSelection(raw: unknown): readonly BoardId[] | null {
 
 export function createBoardTrashRoutes(context: AppContext): readonly Route[] {
   const { boards: store } = context
-  const { deny, withLockedBoard } = createBoardGate(context)
+  const { withLockedBoard } = createBoardGate(context)
+  const operations = createTrashOperations(context)
 
-  /**
-   * Darf der Anfragende diese Zeile des Papierkorbs zuruecknehmen?
-   *
-   * **Dieselbe Funktion, die auch die Endpunkte befragt** - die Liste ist damit keine zweite Auslegung der
-   * Regel, sondern ihre Anwendung auf jede Zeile. Ohne Protokollzeile: ein gefilterter Eintrag ist keine
-   * abgelehnte Aktion, sondern einer, den es fuer diesen Anfragenden nicht gibt.
-   */
-  function mayHandle(
-    auth: AuthenticatedSession,
-    workspace: Workspace,
-    entry: TrashedBoardEntry,
-    role: WorkspaceRole | null,
-  ): boolean {
-    const subject = boardSubject(asRequester(auth), {
-      role,
-      boardRole: entry.boardRole,
-      guestRole: null,
-      board: entry.board,
-    })
-    return decideBoardAccess(subject, workspace, entry.board, 'board:restore').allowed
+  /** Papierkorb und Liste kennen keinen Ordnerfehler; er waere ein Programmfehler. */
+  function denialReply(failure: BoardFailure): Reply {
+    if (failure.kind !== 'denied') {
+      throw new Error('Unerwarteter Fehler im Papierkorb')
+    }
+    const { status, message } = DENIALS[failure.reason]
+    return fail(status, message)
   }
 
-  function toTrashEntryView(entry: TrashedBoardEntry): BoardTrashEntryView {
-    return {
-      id: entry.board.id,
-      workspaceId: entry.board.workspaceId,
-      title: entry.board.title,
-      ownerUserId: entry.board.ownerId,
-      ownerDisplayName: entry.ownerDisplayName,
-      folderId: entry.board.folderId,
-      folderName: entry.folderName,
-      deletedByUserId: entry.deletedByUserId,
-      deletedByDisplayName: entry.deletedByDisplayName,
-      deletedAt: entry.deletedAt.toISOString(),
-      purgeAt: trashPurgeAt(entry.deletedAt, context.config.trashRetentionDays).toISOString(),
-      status: entry.board.status,
-    }
+  /** Ein Nichtmitglied darf nicht einmal erfahren, dass es das Board gab: jede 404 heisst hier gleich. */
+  function trashFailureReply(failure: TrashFailure): Reply {
+    const reply = failure.kind === 'not-found' ? null : denialReply(failure)
+    return reply === null || reply.status === DENIALS['not-visible'].status ? fail(404, TRASH_NOT_FOUND) : reply
   }
 
   /**
@@ -129,17 +105,9 @@ export function createBoardTrashRoutes(context: AppContext): readonly Route[] {
     run: (tx: BoardStore, access: BoardAccess) => Promise<Reply>,
   ): Promise<Reply> {
     return store.transaction(async (tx) => {
-      const access = await tx.boards.findTrashedForUpdate(boardId, auth.user.id)
-      if (access === null) {
-        return fail(404, TRASH_NOT_FOUND)
-      }
-      // Sichtbarkeit zuerst: wer den Arbeitsbereich nicht sieht, bekommt dieselbe Antwort wie fuer eine
-      // erfundene Kennung - `board:read` ist auf einem geloeschten Board fuer niemanden erlaubt, deshalb
-      // entscheidet hier unmittelbar die Aktion selbst.
-      const denial = deny(asRequester(auth), access.workspace, access, action)
-      if (denial !== null) {
-        // Ein Nichtmitglied darf nicht einmal erfahren, dass es das Board gab.
-        return denial.status === DENIALS['not-visible'].status ? fail(404, TRASH_NOT_FOUND) : denial
+      const access = await operations.loadTrashed(tx, sessionActor(auth), boardId, action)
+      if (isTrashFailure(access)) {
+        return trashFailureReply(access)
       }
       return run(tx, access)
     })
@@ -188,12 +156,11 @@ export function createBoardTrashRoutes(context: AppContext): readonly Route[] {
           sendError(response, 404, NOT_FOUND.message)
           return
         }
-        const denial = deny(asRequester(auth), access.workspace, withoutBoard(access.role), 'board:read')
-        if (denial !== null) {
-          send(response, denial)
+        const entries = await operations.listTrash(sessionActor(auth), access)
+        if (isTrashFailure(entries)) {
+          send(response, denialReply(entries))
           return
         }
-        const entries = await store.boards.listTrashed(workspaceId, auth.user.id)
         const body: BoardTrashResponse = {
           workspace: {
             id: access.workspace.id,
@@ -203,9 +170,7 @@ export function createBoardTrashRoutes(context: AppContext): readonly Route[] {
             createdAt: access.workspace.createdAt.toISOString(),
             updatedAt: access.workspace.updatedAt.toISOString(),
           },
-          boards: entries
-            .filter((entry) => mayHandle(auth, access.workspace, entry, access.role))
-            .map(toTrashEntryView),
+          boards: entries.map(operations.toTrashEntryView),
           retentionDays: context.config.trashRetentionDays,
         }
         send(response, ok(200, body))
@@ -225,35 +190,19 @@ export function createBoardTrashRoutes(context: AppContext): readonly Route[] {
       handle: async ({ request, response }) => {
         const trashed: { id: BoardId | null } = { id: null }
         await withLockedBoard(request, response, async (tx, auth, access) => {
-          const denial = deny(asRequester(auth), access.workspace, access, 'board:trash')
-          if (denial !== null) {
-            return denial
+          const result = await operations.trashBoard(tx, sessionActor(auth), access)
+          if (isTrashFailure(result)) {
+            return denialReply(result)
           }
-          const deletedAt = context.now()
-          const board = await tx.boards.moveToTrash(access.board.id, deletedAt, auth.user.id)
-          await tx.audit.record({
-            actorId: auth.user.id,
-            action: 'board.trashed',
-            targetType: 'board',
-            targetId: board.id,
-            workspaceId: board.workspaceId,
-            details: { title: board.title, folderId: board.folderId, status: board.status },
-          })
-          context.logger('info', 'board.trashed', {
-            userId: auth.user.id,
-            boardId: board.id,
-            workspaceId: board.workspaceId,
-          })
-          const folder = board.folderId === null ? null : await tx.folders.find(board.folderId)
-          trashed.id = board.id
+          trashed.id = result.board.id
           return ok(
             200,
-            toTrashEntryView({
-              board,
+            operations.toTrashEntryView({
+              board: result.board,
               ownerDisplayName: access.ownerDisplayName,
               boardRole: access.boardRole,
-              folderName: folder?.name ?? null,
-              deletedAt,
+              folderName: result.folderName,
+              deletedAt: result.deletedAt,
               deletedByUserId: auth.user.id,
               deletedByDisplayName: auth.user.displayName,
             }),
@@ -287,19 +236,9 @@ export function createBoardTrashRoutes(context: AppContext): readonly Route[] {
           return
         }
         const body = await handleSelection(boardIds, (boardId) =>
-          withTrashedBoard(boardId, guarded.auth, 'board:restore', async (tx, access) => {
-            const folder = access.board.folderId === null ? null : await tx.folders.find(access.board.folderId)
-            const folderId = folder !== null && folder.workspaceId === access.workspace.id ? folder.id : null
-            const board = await tx.boards.restoreFromTrash(access.board.id, folderId)
-            await tx.audit.record({
-              actorId: guarded.auth.user.id,
-              action: 'board.restored',
-              targetType: 'board',
-              targetId: board.id,
-              workspaceId: board.workspaceId,
-              details: { title: board.title, folderId, status: board.status },
-            })
-            return ok(200, { boardId: board.id })
+          store.transaction(async (tx) => {
+            const board = await operations.restoreBoard(tx, sessionActor(guarded.auth), boardId)
+            return isTrashFailure(board) ? trashFailureReply(board) : ok(200, { boardId: board.id })
           }),
         )
         send(response, ok(200, body))

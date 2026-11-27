@@ -28,6 +28,7 @@ import {
   BOARD_SCENE_PATH,
   BOARD_SHARE_LINKS_PATH,
   BOARD_SHARE_LINK_CREATE_PATH,
+  BOARD_SHARE_LINK_REPLACE_PATH,
   BOARD_SHARE_LINK_REVOKE_PATH,
   BOARD_STATUS_PATH,
   CSRF_HEADER,
@@ -147,13 +148,20 @@ function szene(boardId: string, elementId = 'a'): SceneSnapshot {
   }
 }
 
+const DAY_MS = 86_400_000
+
+/** An ISO instant with offset, relative to now (the app clock is real time until a test calls `setNow`). */
+function inFrom(ms: number): string {
+  return new Date(Date.now() + ms).toISOString()
+}
+
 type Freigabe = { readonly token: string; readonly id: string }
 
 /** Legt einen Freigabelink ueber den echten Endpunkt an und gibt das genau einmal sichtbare Token zurueck. */
 async function createShareLink(
   owner: Account,
   boardId: string,
-  options: { readonly role?: string; readonly expiresInHours?: number } = {},
+  options: { readonly role?: string; readonly expiresAt?: string } = {},
 ): Promise<Freigabe> {
   const response = await post(app, owner, BOARD_SHARE_LINK_CREATE_PATH, { boardId, ...options })
   expect(response.status, 'Freigabelink anlegen').toBe(201)
@@ -262,10 +270,22 @@ describe('Freigabelinks verwalten', () => {
     for (const role of ['editor', 'viewer', 'owner', 'guest-admin']) {
       expect((await post(app, ada, BOARD_SHARE_LINK_CREATE_PATH, { boardId: board.id, role })).status, role).toBe(400)
     }
-    for (const expiresInHours of [0, -1, 1.5, '24', 8_761]) {
+  })
+
+  it('legt Links mit genau dem gewaehlten Ablauf oder unbefristet an und weist unzulaessige Zeitpunkte ab', async () => {
+    const { ada, board } = await aufbau()
+    const in7Tagen = inFrom(7 * DAY_MS)
+    const befristet = await post(app, ada, BOARD_SHARE_LINK_CREATE_PATH, { boardId: board.id, expiresAt: in7Tagen })
+    expect(befristet.status).toBe(201)
+    expect(((await befristet.json()) as CreateBoardShareLinkResponse).link.expiresAt).toBe(in7Tagen)
+
+    const unbefristet = await post(app, ada, BOARD_SHARE_LINK_CREATE_PATH, { boardId: board.id })
+    expect(((await unbefristet.json()) as CreateBoardShareLinkResponse).link.expiresAt).toBeNull()
+
+    for (const expiresAt of [inFrom(5 * 60_000), inFrom(400 * DAY_MS), '2030-01-01T10:00', 'morgen', 42]) {
       expect(
-        (await post(app, ada, BOARD_SHARE_LINK_CREATE_PATH, { boardId: board.id, expiresInHours })).status,
-        String(expiresInHours),
+        (await post(app, ada, BOARD_SHARE_LINK_CREATE_PATH, { boardId: board.id, expiresAt })).status,
+        String(expiresAt),
       ).toBe(400)
     }
   })
@@ -319,6 +339,81 @@ describe('Freigabelinks verwalten', () => {
     )
     expect(widerrufen).toHaveLength(2)
     expect(widerrufen[0]?.details).toEqual({ boardId: board.id, role: 'guest-viewer' })
+  })
+
+  it('ersetzt einen Link in einem Schritt und beendet den alten samt seiner Verbindung', async () => {
+    const { ada, workspace, board } = await aufbau()
+    const alt = await createShareLink(ada, board.id, { role: 'guest-editor', expiresAt: inFrom(DAY_MS) })
+    const gast = await joinAsGuest(alt.token, 'Schreibgast')
+    const verbindung = await connect(gast.jar.cookieHeader())
+    await verbindung.join(board.id)
+
+    const antwort = await post(app, ada, BOARD_SHARE_LINK_REPLACE_PATH, { boardId: board.id, shareLinkId: alt.id })
+    expect(antwort.status).toBe(201)
+    const ersatz = (await antwort.json()) as CreateBoardShareLinkResponse
+    const neuesToken = new URL(ersatz.url).hash.slice(1)
+    expect(neuesToken).not.toBe(alt.token)
+    expect(ersatz.link.id).not.toBe(alt.id)
+    expect(ersatz.link.role).toBe('guest-editor')
+    const liste = (await (
+      await ada.jar.fetch(`${app.baseUrl}${BOARD_SHARE_LINKS_PATH}?${BOARD_ID_PARAM}=${board.id}`)
+    ).json()) as BoardShareLinksResponse
+    const gelistetAlt = liste.links.find((link) => link.id === alt.id)
+    expect(gelistetAlt?.revokedAt).not.toBeNull()
+    // Expiry is carried over unchanged.
+    expect(ersatz.link.expiresAt).toBe(gelistetAlt?.expiresAt)
+
+    // The old address is dead, the old link's open connection is closed, the new address works.
+    const beitritt = await fetch(`${app.baseUrl}${BOARD_GUEST_JOIN_PATH}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: alt.token, displayName: 'Gast' }),
+    })
+    expect(beitritt.status).toBe(404)
+    expect((await guestGet(gast, BOARD_GUEST_SESSION_PATH)).status).toBe(401)
+    expect(BEENDET).toContain(await verbindung.closeCode)
+    await joinAsGuest(neuesToken, 'Neugast')
+
+    // Evidence for both links, with no token in evidence, log or database.
+    const events = await auditEvents(workspace.id)
+    expect(events.filter((event) => event.action === 'board-share-link.revoked').map((e) => e.targetId)).toEqual([
+      alt.id,
+    ])
+    const erzeugt = events.filter(
+      (event) => event.action === 'board-share-link.created' && event.targetId === ersatz.link.id,
+    )
+    expect(erzeugt).toHaveLength(1)
+    expect(erzeugt[0]?.details).toMatchObject({ replacesShareLinkId: alt.id, role: 'guest-editor' })
+    for (const token of [alt.token, neuesToken]) {
+      expect(JSON.stringify(events)).not.toContain(token)
+      expect(JSON.stringify(app.logs)).not.toContain(token)
+    }
+    const hashes = await pool.query<{ token_hash: string }>('select token_hash from board_share_links')
+    expect(hashes.rows.map((row) => row.token_hash)).not.toContain(neuesToken)
+  })
+
+  it('ersetzt nur gueltige Links des eigenen Boards und nur fuer den Owner', async () => {
+    const { ada, bob, workspace, board } = await aufbau()
+    const zweites = await createBoard(app, ada, workspace.id, 'Zweites')
+    const widerrufen = await createShareLink(ada, board.id)
+    await post(app, ada, BOARD_SHARE_LINK_REVOKE_PATH, { boardId: board.id, shareLinkId: widerrufen.id })
+    const befristet = await createShareLink(ada, board.id, { expiresAt: inFrom(3_600_000) })
+    const gueltig = await createShareLink(ada, board.id)
+    const vorher = (await auditEvents(workspace.id)).length
+
+    const ersetze = (account: Account, boardId: string, shareLinkId: string) =>
+      post(app, account, BOARD_SHARE_LINK_REPLACE_PATH, { boardId, shareLinkId })
+    // Revoked, foreign board and invented id give the same 404.
+    expect((await ersetze(ada, board.id, widerrufen.id)).status).toBe(404)
+    expect((await ersetze(ada, zweites.id, gueltig.id)).status).toBe(404)
+    expect((await ersetze(ada, board.id, FREMDE_KENNUNG)).status).toBe(404)
+    // Bob is an editor without `grant:manage`.
+    expect((await ersetze(bob, board.id, gueltig.id)).status).toBe(403)
+    expect(await auditEvents(workspace.id)).toHaveLength(vorher)
+
+    app.setNow(new Date(Date.now() + 2 * 3600 * 1000))
+    expect((await ersetze(ada, board.id, befristet.id)).status).toBe(404)
+    expect(await pool.query('select 1 from board_share_links')).toHaveProperty('rowCount', 3)
   })
 
   it('laesst einen Link eines fremden Boards nicht ueber das eigene widerrufen', async () => {
@@ -385,7 +480,7 @@ describe('Gastbeitritt', () => {
     const { ada, workspace, board } = await aufbau()
     const gueltig = await createShareLink(ada, board.id)
     const widerrufen = await createShareLink(ada, board.id)
-    await createShareLink(ada, board.id, { expiresInHours: 1 })
+    await createShareLink(ada, board.id, { expiresAt: inFrom(3_600_000) })
     await post(app, ada, BOARD_SHARE_LINK_REVOKE_PATH, { boardId: board.id, shareLinkId: widerrufen.id })
 
     const ids = async () => {
@@ -421,7 +516,7 @@ describe('Gastbeitritt', () => {
     const { ada, board } = await aufbau()
     const widerrufen = await createShareLink(ada, board.id)
     await post(app, ada, BOARD_SHARE_LINK_REVOKE_PATH, { boardId: board.id, shareLinkId: widerrufen.id })
-    const abgelaufen = await createShareLink(ada, board.id, { expiresInHours: 1 })
+    const abgelaufen = await createShareLink(ada, board.id, { expiresAt: inFrom(3600 * 1000) })
 
     const antworten: number[] = []
     for (const token of ['gibt-es-nicht', widerrufen.token, '']) {
@@ -774,7 +869,7 @@ describe('Ablauf und Widerruf einer Gastsession', () => {
 
   it('sperrt eine bestehende Gastsession mit dem Ablauf des Links', async () => {
     const { ada, board } = await aufbau()
-    const link = await createShareLink(ada, board.id, { expiresInHours: 1 })
+    const link = await createShareLink(ada, board.id, { expiresAt: inFrom(3600 * 1000) })
     const gast = await joinAsGuest(link.token, 'Lesegast')
     // Die Gastsession endet nie spaeter als ihr Link.
     expect(new Date(gast.session.expiresAt).getTime()).toBeLessThanOrEqual(Date.now() + 3600 * 1000 + 5_000)
@@ -785,7 +880,7 @@ describe('Ablauf und Widerruf einer Gastsession', () => {
 
   it('gibt einem Gast weiterhin Zugang, solange sein Link gilt', async () => {
     const { ada, board } = await aufbau()
-    const link = await createShareLink(ada, board.id, { expiresInHours: 4 })
+    const link = await createShareLink(ada, board.id, { expiresAt: inFrom(4 * 3600 * 1000) })
     const gast = await joinAsGuest(link.token, 'Lesegast')
 
     app.setNow(new Date(Date.now() + 3600 * 1000))
@@ -853,6 +948,11 @@ describe('Gaeste an der Realtime-Strecke', () => {
 
     await post(app, ada, BOARD_SHARE_LINK_REVOKE_PATH, { boardId: board.id, shareLinkId: link.id })
 
+    // The notice arrives before closing, named and without link, token or board details.
+    const meldung = await verbindung.next('error')
+    expect(meldung.code).toBe('link-ungueltig')
+    expect(JSON.stringify(meldung)).not.toMatch(new RegExp(`${link.id}|${link.token}|${board.id}`))
+
     // Beide Wege beenden die Verbindung und beide sind endgueltig: der Widerruf schliesst sie unmittelbar
     // (`4401`), und die Nachpruefung des Raums wuerde sie andernfalls binnen zwei Sekunden entziehen
     // (`4403`). Welcher zuerst greift, entscheidet nur die Reihenfolge - beide verbieten den Wiederaufbau.
@@ -863,13 +963,14 @@ describe('Gaeste an der Realtime-Strecke', () => {
 
   it('beendet eine offene Gastverbindung mit dem Ablauf des Links', async () => {
     const { ada, board } = await aufbau()
-    const link = await createShareLink(ada, board.id, { role: 'guest-editor', expiresInHours: 1 })
+    const link = await createShareLink(ada, board.id, { role: 'guest-editor', expiresAt: inFrom(3600 * 1000) })
     const gast = await joinAsGuest(link.token, 'Schreibgast')
     const verbindung = await connect(gast.jar.cookieHeader())
     await verbindung.join(board.id)
 
     app.setNow(new Date(Date.now() + 2 * 3600 * 1000))
 
+    expect((await verbindung.next('error')).code).toBe('link-ungueltig')
     expect(BEENDET).toContain(await verbindung.closeCode)
     await expect(openRealtime(app.baseUrl, gast.jar.cookieHeader())).rejects.toThrow()
   })

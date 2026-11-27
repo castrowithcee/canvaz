@@ -5,12 +5,15 @@
  * Skripte, und ein Modul liefe erst nach der ersten Darstellung - ein Neuladen im Dunkelmodus blitzte dann
  * hell auf. Es setzt nur die beiden Attribute und die `theme-color`, die `src/web/appearance.ts` sonst
  * setzt; die massgebliche Wahl kommt danach mit dem Profil vom Server und ersetzt diesen Komfortwert.
- *
- * Die Gastansicht (`GUEST_APP_PATH`) folgt immer der Systemvorgabe: ein Gast hat keine Wahl.
  */
 ;(function () {
   try {
     if (window.location.pathname === '/gast') {
+      // Guests always get the light scheme and never read the remembered choice (it belongs to an account).
+      document.documentElement.setAttribute('data-theme', 'light')
+      document.querySelectorAll('meta[name="theme-color"]').forEach(function (meta) {
+        meta.setAttribute('content', '#f4f4f6')
+      })
       return
     }
     var gemerkt = JSON.parse(window.localStorage.getItem('canvaz:erscheinungsbild') || 'null')

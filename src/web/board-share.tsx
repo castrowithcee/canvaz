@@ -1,9 +1,9 @@
 /**
  * Freigabeverwaltung eines Boards: interne Freigaben, Ownerschaft und oeffentliche Gastlinks.
  *
- * Ein Abschnitt im Fluss seiner Umgebung und kein eigener Dialog: die Ueberschriften bleiben in der
- * Dokumentstruktur, und weder Fokuskaefig noch Escape werden hier nachgebaut. Der Abschnitt steht heute im
- * Bereich "Freigaben" der Informationsleiste (`board-panel.tsx`); sie traegt Name und Schliessweg.
+ * A section in the flow of its surroundings: the headings stay in the document structure, and neither
+ * focus trap nor Escape is rebuilt here. It sits in its own wide dialog (`board-shares-overlay.tsx`),
+ * which carries the name (level 2) and the way to close.
  *
  * Die Oberflaeche entscheidet nichts. Sie bietet an, was der Server laut seiner Antwort ohnehin traegt, und
  * zeigt jede Ablehnung als Text - der Owner steht in `board.ownerUserId`, die Freigaben kommen aus
@@ -27,7 +27,7 @@ import type {
   MeResponse,
   WorkspaceMemberView,
 } from '../contracts/api.js'
-import { MAX_SHARE_LINK_HOURS } from '../domain/board/guest.js'
+import { MAX_SHARE_LINK_LIFETIME_MS, MIN_SHARE_LINK_LIFETIME_MS } from '../domain/board/guest.js'
 import type { EffectiveBoardRole } from '../domain/board/policy.js'
 import { mayManageBoard } from '../domain/board/policy.js'
 import {
@@ -38,11 +38,12 @@ import {
   fetchBoardShareLinks,
   fetchWorkspaceMembers,
   revokeBoardGrant,
+  replaceBoardShareLink,
   revokeBoardShareLink,
   shareBoard,
   transferBoardOwnership,
 } from './api.js'
-import { ConfirmDialog, Empty, Loading, Notice } from './ui.js'
+import { ConfirmDialog, Empty, Field, Loading, Notice, describedBy } from './ui.js'
 
 const GRANT_ROLES: readonly BoardGrantRoleView[] = ['editor', 'viewer']
 
@@ -95,6 +96,18 @@ function viewerRoleOf(board: BoardView): EffectiveBoardRole {
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString('de-DE')
 }
+
+function formatDateTime(iso: string): string {
+  return new Date(iso).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' })
+}
+
+/** The value format of `datetime-local`: browser-local time to the minute. */
+function toLocalInputValue(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${String(date.getFullYear())}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+const QUICK_EXPIRY_DAYS = [1, 7, 30] as const
 
 /** Was ein Nutzer heisst, wenn eine Zeile beides zeigen darf. */
 function nameOf(member: { readonly displayName: string; readonly email: string | null }): string {
@@ -456,7 +469,7 @@ function CreatedLinkNotice({
     <Notice kind="success">
       <p>
         <strong>Dieser Link erscheint genau einmal.</strong> Er laesst sich danach nicht erneut abrufen - auch
-        nicht ueber diese Liste. Kopiere ihn jetzt; ist er verloren, widerrufe ihn und lege einen neuen an.
+        nicht ueber diese Liste. Kopiere ihn jetzt; ist er verloren, ersetze ihn durch einen neuen.
       </p>
       <div className="field">
         <label htmlFor="share-link-url">Freigabelink</label>
@@ -514,30 +527,51 @@ function ShareLinks({
   readonly onChanged: () => void
 }) {
   const [role, setRole] = useState<GuestRoleView>('guest-viewer')
-  const [hours, setHours] = useState('')
+  const [expiry, setExpiry] = useState('')
+  const [expiryError, setExpiryError] = useState<string | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const [revoked, setRevoked] = useState<string | null>(null)
-  const trimmedHours = hours.trim()
+  const now = new Date()
+  // Only a convenience: the server checks the bounds against its own clock. Rounded inward to whole minutes.
+  const minValue = toLocalInputValue(
+    new Date(Math.ceil((now.getTime() + MIN_SHARE_LINK_LIFETIME_MS) / 60_000) * 60_000),
+  )
+  const maxValue = toLocalInputValue(new Date(now.getTime() + MAX_SHARE_LINK_LIFETIME_MS))
+  const expiryHint = 'Mindestens 15 Minuten, hoechstens 365 Tage. Ohne Ablauf endet der Link erst mit dem Widerruf.'
 
   return (
     <>
       <form
         className="stack card"
+        noValidate
         onSubmit={(event) => {
           event.preventDefault()
-          setBusy(true)
           setError(null)
-          const expiresInHours = trimmedHours === '' ? undefined : Number(trimmedHours)
+          // A datetime-local value without an offset is read in the browser's zone, as intended.
+          const expiresAt = expiry === '' ? undefined : new Date(expiry)
+          if (expiresAt !== undefined) {
+            const lifetime = expiresAt.getTime() - Date.now()
+            if (
+              Number.isNaN(lifetime) ||
+              lifetime < MIN_SHARE_LINK_LIFETIME_MS ||
+              lifetime > MAX_SHARE_LINK_LIFETIME_MS
+            ) {
+              setExpiryError('Der Ablauf muss mindestens 15 Minuten und hoechstens 365 Tage in der Zukunft liegen.')
+              return
+            }
+          }
+          setExpiryError(undefined)
+          setBusy(true)
           createBoardShareLink(me.csrfToken, {
             boardId: board.id,
             role,
-            ...(expiresInHours === undefined ? {} : { expiresInHours }),
+            ...(expiresAt === undefined ? {} : { expiresAt: expiresAt.toISOString() }),
           })
             .then((response) => {
               onCreated(response.url)
-              setHours('')
+              setExpiry('')
               onChanged()
             })
             .catch((cause: unknown) => {
@@ -568,24 +602,52 @@ function ShareLinks({
         <p className="hint" id="share-link-role-hint">
           {GUEST_ROLE_HINTS[role]} Ein Gast erreicht ausschliesslich dieses eine Board.
         </p>
-        <div className="field">
-          <label htmlFor="share-link-hours">Laufzeit in Stunden (leer lassen: kein Ablauf)</label>
+        <Field
+          id="share-link-expiry"
+          label="Ablauf"
+          hint={expiryHint}
+          {...(expiryError === undefined ? {} : { error: expiryError })}
+        >
+          <p>
+            <button
+              className="button--quiet"
+              type="button"
+              aria-pressed={expiry === ''}
+              onClick={() => {
+                setExpiry('')
+                setExpiryError(undefined)
+              }}
+            >
+              Kein Ablauf
+            </button>
+            {QUICK_EXPIRY_DAYS.map((days) => (
+              <button
+                key={days}
+                className="button--quiet"
+                type="button"
+                onClick={() => {
+                  setExpiry(toLocalInputValue(new Date(Date.now() + days * 86_400_000)))
+                  setExpiryError(undefined)
+                }}
+              >
+                {days === 1 ? '1 Tag' : `${String(days)} Tage`}
+              </button>
+            ))}
+          </p>
           <input
-            id="share-link-hours"
-            type="number"
-            inputMode="numeric"
-            min={1}
-            max={MAX_SHARE_LINK_HOURS}
-            aria-describedby="share-link-hours-hint"
-            value={hours}
+            id="share-link-expiry"
+            type="datetime-local"
+            min={minValue}
+            max={maxValue}
+            aria-invalid={expiryError !== undefined}
+            aria-describedby={describedBy('share-link-expiry', true, expiryError !== undefined)}
+            value={expiry}
             onChange={(event) => {
-              setHours(event.target.value)
+              setExpiry(event.target.value)
+              setExpiryError(undefined)
             }}
           />
-        </div>
-        <p className="hint" id="share-link-hours-hint">
-          Hoechstens {String(MAX_SHARE_LINK_HOURS)} Stunden. Ohne Angabe endet der Link erst mit dem Widerruf.
-        </p>
+        </Field>
         <p>
           <button className="button--primary" type="submit" disabled={busy}>
             Gastlink anlegen
@@ -624,6 +686,8 @@ function ShareLinks({
                     setRevoked(`Der Gastlink vom ${formatDate(link.createdAt)} ist widerrufen.`)
                     onChanged()
                   }}
+                  onCreated={onCreated}
+                  onChanged={onChanged}
                 />
               ))}
             </tbody>
@@ -639,21 +703,27 @@ function ShareLinkRow({
   board,
   link,
   onRevoked,
+  onCreated,
+  onChanged,
 }: {
   readonly me: MeResponse
   readonly board: BoardView
   readonly link: BoardShareLinkView
   readonly onRevoked: () => void
+  /** Hands the replacement link's address to `BoardShare` exactly once. */
+  readonly onCreated: (url: string) => void
+  readonly onChanged: () => void
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [replacing, setReplacing] = useState(false)
 
   return (
     <tr>
       <td data-label="Rolle">{GUEST_ROLE_LABELS[link.role]}</td>
       <td data-label="Angelegt von">{link.createdByDisplayName ?? '—'}</td>
       <td data-label="Angelegt">{formatDate(link.createdAt)}</td>
-      <td data-label="Ablauf">{link.expiresAt === null ? 'kein Ablauf' : formatDate(link.expiresAt)}</td>
+      <td data-label="Ablauf">{link.expiresAt === null ? 'kein Ablauf' : formatDateTime(link.expiresAt)}</td>
       <td data-label="Gaeste">{String(link.guestCount)}</td>
       <td data-label="Aktion">
         <button
@@ -672,8 +742,63 @@ function ShareLinkRow({
               })
           }}
         >
-        Gastlink vom {formatDate(link.createdAt)} widerrufen
+          Gastlink vom {formatDate(link.createdAt)} widerrufen
         </button>
+        {!replacing && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              setError(null)
+              setReplacing(true)
+            }}
+          >
+            Gastlink vom {formatDate(link.createdAt)} ersetzen
+          </button>
+        )}
+        {replacing && (
+          <ConfirmDialog danger>
+            <p>
+              Gastlink vom {formatDate(link.createdAt)} ersetzen? Die bisherige Adresse funktioniert danach fuer
+              niemanden mehr, offene Gastsitzungen mit ihr enden. Der neue Link hat dieselbe Rolle und denselben
+              Ablauf.
+            </p>
+            <p className="actions">
+              <button
+                className="button--danger"
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setBusy(true)
+                  setError(null)
+                  replaceBoardShareLink(me.csrfToken, { boardId: board.id, shareLinkId: link.id })
+                    .then((response) => {
+                      onCreated(response.url)
+                      onChanged()
+                    })
+                    .catch((cause: unknown) => {
+                      setError(messageOf(cause, 'Der Freigabelink konnte nicht ersetzt werden.'))
+                      setReplacing(false)
+                    })
+                    .finally(() => {
+                      setBusy(false)
+                    })
+                }}
+              >
+                Ersetzen bestaetigen
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setReplacing(false)
+                }}
+              >
+                Abbrechen
+              </button>
+            </p>
+          </ConfirmDialog>
+        )}
         {error !== null && <Notice text={error} />}
       </td>
     </tr>
@@ -765,7 +890,7 @@ export function BoardShare({
   if (state.kind === 'loading') {
     return (
       <section aria-labelledby="board-share-heading">
-        <h5 id="board-share-heading">Freigaben</h5>
+        <h3 id="board-share-heading" className="visually-hidden">Freigaben</h3>
         <Loading text="Freigaben werden geladen …" />
       </section>
     )
@@ -773,7 +898,7 @@ export function BoardShare({
   if (state.kind === 'failed') {
     return (
       <section aria-labelledby="board-share-heading">
-        <h5 id="board-share-heading">Freigaben</h5>
+        <h3 id="board-share-heading" className="visually-hidden">Freigaben</h3>
         <Notice text={state.message} />
       </section>
     )
@@ -804,7 +929,7 @@ export function BoardShare({
 
   return (
     <section aria-labelledby="board-share-heading">
-      <h5 id="board-share-heading">Freigaben von {board.title}</h5>
+      <h3 id="board-share-heading" className="visually-hidden">Freigaben von {board.title}</h3>
       <p>
         Owner: <strong>{board.ownerDisplayName}</strong>
         {board.ownerUserId === me.user.id && <> (du)</>}
@@ -823,7 +948,7 @@ export function BoardShare({
       )}
       {actionError !== null && actionError !== '' && <Notice text={actionError} />}
 
-      <h6>Interne Freigaben</h6>
+      <h3>Interne Freigaben</h3>
       {grants.length === 0 ? (
         <Empty text="Es gibt keine ausdrueckliche Freigabe. Damit gilt fuer jedes Mitglied des Arbeitsbereichs die Rolle seiner Mitgliedschaft." />
       ) : (
@@ -858,15 +983,15 @@ export function BoardShare({
 
       {manageable && (
         <>
-          <h6>Board freigeben</h6>
+          <h3>Board freigeben</h3>
           <AddGrant me={me} board={board} candidates={openMembers} onChanged={reload} />
 
-          <h6>Ownerschaft uebertragen</h6>
+          <h3>Ownerschaft uebertragen</h3>
           <TransferOwnership me={me} board={board} candidates={transferable} onChanged={reload} />
         </>
       )}
 
-      <h6>Gastlinks</h6>
+      <h3>Gastlinks</h3>
       {links.kind === 'loading' && <Loading text="Gastlinks werden geladen …" />}
       {links.kind === 'unavailable' && <Empty text="Gastlinks sieht und verwaltet der Owner dieses Boards." />}
       {links.kind === 'failed' && <Notice text={links.message} />}

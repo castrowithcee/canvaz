@@ -35,11 +35,12 @@
  * zurueck; sonst ist die Freigabe die Hauptaktion. Der Versionsverlauf ist nie hervorgehoben.
  * Ihre Hoehe halten die Bedienelemente der Zeichenflaeche frei; die Zeichnung selbst laeuft darunter weiter.
  *
- * Der Versionsverlauf oeffnet sein eigenes, breiteres Overlay (`board-versions.tsx`) und keinen Bereich der
- * Informationsleiste: die kompakte Liste braucht mehr Platz, als dort neben der Zeichenflaeche stuende, und
- * das Overlay bleibt der einzige Ort dafuer. Alles andere Umfangreichere - Ablage, Arbeitsbereichswechsel,
- * Freigaben, Archiv und Papierkorb, dazu Speicher- und Verbindungsdetails - steht weiterhin in der
- * Informationsleiste (`board-panel.tsx`, sichtbar benannt "Informationen") neben der Zeichenflaeche. Sie ist
+ * Version history opens its own wider overlay (`board-versions.tsx`), not a section of the info panel: the
+ * compact list needs more room than it would have next to the canvas, and the overlay stays the only place
+ * for it. The same holds for share management (`board-shares-overlay.tsx`), which the "Freigeben" icon and
+ * the info panel summary open. Everything else more extensive (filing, workspace switch, archive and trash,
+ * plus saving and connection details) still sits in the info panel (`board-panel.tsx`, visibly named
+ * "Informationen") next to the canvas. Sie ist
  * auf jeder Breite derselbe Knoten: breit eine angedockte Spalte, schmal ein modales Sheet mit Fokusfang,
  * Escape und Fokusrueckgabe von der Plattform. Welcher Bereich offen ist, steht in der Adresse; `Zurueck`
  * schliesst.
@@ -104,6 +105,7 @@ import '@excalidraw/excalidraw/index.css'
 
 import type { BoardStatusView, BoardView, MeResponse, WorkspaceView } from '../../contracts/api.js'
 import type { PresenceView } from '../../contracts/realtime.js'
+import { BOARD_ACCESS_REVOKED_CLOSE_CODE, SESSION_REVOKED_CLOSE_CODE } from '../../contracts/realtime.js'
 import type { BinaryFileRef, SceneSnapshot } from '../../contracts/scene.js'
 import { SCENE_SCHEMA_VERSION } from '../../contracts/scene.js'
 import { MAX_BOARD_TITLE_LENGTH } from '../../domain/board/model.js'
@@ -120,6 +122,7 @@ import {
 } from '../api.js'
 import type { SidebarPanelView } from '../board-panel.js'
 import { BoardPanel } from '../board-panel.js'
+import { BoardSharesOverlay } from '../board-shares-overlay.js'
 import { BoardVersionsOverlay } from '../board-versions.js'
 import { Dialog, Drawer, Menu, MenuItem } from '../overlays.js'
 import type { BoardPanelView } from '../router.js'
@@ -220,6 +223,7 @@ export function BoardEditor({
   guestName,
   member = null,
   onClose,
+  onGuestLinkEnded = null,
 }: {
   readonly boardId: string
   /** Token der eigenen Sitzung - der internen oder der des Gastes. */
@@ -238,6 +242,11 @@ export function BoardEditor({
   readonly member?: BoardMemberContext | null
   /** `null` heisst: es gibt keinen Weg zurueck. Genau das gilt fuer einen Gast. */
   readonly onClose: (() => void) | null
+  /**
+   * Guest view only: the link no longer applies. `confirmed` is true when the server said so, false when only
+   * the connection closed for good - then the caller has to check the link itself.
+   */
+  readonly onGuestLinkEnded?: ((confirmed: boolean, wasWriting: boolean) => void) | null
 }) {
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
   const [save, setSave] = useState<SaveState>({ kind: 'idle' })
@@ -299,8 +308,15 @@ export function BoardEditor({
   const liveRef = useRef(false)
   /** Zuletzt vom Server genanntes Schreibrecht. Er unterscheidet die erste Aussage von einer Aenderung. */
   const canWriteRef = useRef<boolean | null>(null)
+  /** A ref, so a new callback does not rebuild the connection. */
+  const onGuestLinkEndedRef = useRef(onGuestLinkEnded)
+  onGuestLinkEndedRef.current = onGuestLinkEnded
+  /** The server already named the link end; the close code after it needs no recheck. */
+  const guestLinkEndedRef = useRef(false)
   /** Der Ausloeser der Informationsleiste. Angedockt gibt ihm die Ansicht den Fokus selbst zurueck. */
   const panelTriggerRef = useRef<HTMLButtonElement>(null)
+  /** Whether the open share dialog was started from the info panel summary rather than its own trigger. */
+  const sharesFromPanelRef = useRef(false)
   /** Das Titelfeld des Umbenennen-Dialogs. Es bekommt beim Oeffnen und nach einer Ablehnung den Fokus. */
   const renameInputRef = useRef<HTMLInputElement>(null)
   /** Die schwebenden Gruppen. Ihre Hoehe ist der obere Rand, den die Bedienelemente der Zeichenflaeche freihalten. */
@@ -778,7 +794,20 @@ export function BoardEditor({
           return { kind: 'saved', at: new Date(message.savedAt) }
         })
       },
+      onTerminalClose(code): void {
+        if (
+          !guestLinkEndedRef.current &&
+          (code === SESSION_REVOKED_CLOSE_CODE || code === BOARD_ACCESS_REVOKED_CLOSE_CODE)
+        ) {
+          onGuestLinkEndedRef.current?.(false, canWriteRef.current === true)
+        }
+      },
       onError(message): void {
+        if (message.code === 'link-ungueltig' && onGuestLinkEndedRef.current) {
+          guestLinkEndedRef.current = true
+          onGuestLinkEndedRef.current(true, canWriteRef.current === true)
+          return
+        }
         if (message.code === 'board-nicht-gefunden') {
           setState({ kind: 'not-found' })
           return
@@ -889,13 +918,14 @@ export function BoardEditor({
     shareable,
   })
   /**
-   * Der offene Bereich der Informationsleiste - der Versionsverlauf gehoert nicht dazu, er ist ein eigenes
-   * Overlay (`versionsOpen`) und schliesst die Leiste dabei nicht mit ein.
+   * The open section of the info panel. Version history and shares are not part of it, they are their own
+   * dialogs (`versionsOpen`, `sharesOpen`).
    */
   const sidebarPanel: SidebarPanelView | null =
-    member !== null && member.panel !== null && member.panel !== 'versionen' ? member.panel : null
+    member !== null && member.panel === 'uebersicht' ? member.panel : null
   const panelOpen = sidebarPanel !== null
   const versionsOpen = member !== null && member.panel === 'versionen'
+  const sharesOpen = member !== null && member.panel === 'freigaben'
   const StatusSymbol = status.symbol === null ? null : STATUS_SYMBOLS[status.symbol]
   /** Was die Gruppe nur als Symbol zeigt, steht in den Informationen ausgeschrieben. */
   const details = sessionDetails({
@@ -922,6 +952,19 @@ export function BoardEditor({
    */
   function closeVersions(): void {
     member?.onPanel(null)
+  }
+
+  /** Closes the share dialog; as with the version overlay, the platform returns focus. */
+  function closeShares(): void {
+    member?.onPanel(null)
+    if (sharesFromPanelRef.current) {
+      sharesFromPanelRef.current = false
+      // Opened from the info panel summary, whose button is gone once the panel closed: the platform would
+      // return focus to the body, so hand it to the panel trigger after the dialog has closed.
+      setTimeout(() => {
+        panelTriggerRef.current?.focus()
+      }, 0)
+    }
   }
 
   function submitRename(next: string): void {
@@ -1215,9 +1258,11 @@ export function BoardEditor({
                 workspace={member.workspace}
                 workspaces={member.workspaces}
                 boardId={boardId}
-                section={sidebarPanel}
                 revision={panelRevision}
-                onSection={member.onPanel}
+                onShares={() => {
+                  sharesFromPanelRef.current = true
+                  member.onPanel('freigaben')
+                }}
                 onChanged={member.onChanged}
                 onBoard={applyBoard}
                 session={{ state: status.detail, ...details }}
@@ -1250,6 +1295,18 @@ export function BoardEditor({
           onPreview={member.onPreview}
           onChanged={member.onChanged}
           onClose={closeVersions}
+        />
+      )}
+
+      {/* Share management: same dialog route as the version history, outside the info panel. */}
+      {member !== null && (
+        <BoardSharesOverlay
+          me={member.me}
+          boardId={boardId}
+          boardTitle={title}
+          open={sharesOpen}
+          onChanged={member.onChanged}
+          onClose={closeShares}
         />
       )}
 

@@ -300,10 +300,12 @@ export function createAuthRoutes(context: AppContext): readonly Route[] {
           return
         }
         const appearance = await context.identity.appearances.findByUserId(auth.user.id)
+        // Without a stored choice the instance accent is the effective one; no row is created for it.
+        const instanceAccent = appearance === null ? (await context.branding.get()).accent : null
         const body: MeResponse = {
           user: toUserView(auth.user),
           csrfToken: csrfTokenFor(auth.session.id, config.sessionSecret),
-          appearance: appearance ?? DEFAULT_APPEARANCE,
+          appearance: appearance ?? { ...DEFAULT_APPEARANCE, accent: instanceAccent ?? DEFAULT_APPEARANCE.accent },
           secondFactor: await secondFactorOf(context, auth),
           selfRecovery: await selfRecoveryViewOf(context, auth.user),
           apiKeyAccess: await context.identity.apiKeys.getAccess(auth.user.id),

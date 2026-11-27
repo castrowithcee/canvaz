@@ -319,23 +319,25 @@ describe('Hostbefehl sender-block (#35, Meilenstein 2)', () => {
 
     const sd = app.context.identity.senderDefense
     const resolved = resolveSenderAddress(absender)
+    // A window that began at the very instant of the lift still counts, so the lift needs a later instant.
+    app.setNow(new Date(jetzt.getTime() + 1000))
     expect(await sd.blocks.liftActive(resolved!.address, app.context.now())).toBe(true)
 
     expect(await sd.blocks.listActive(app.context.now())).toHaveLength(0)
     const zeile = await pool.query('select 1 from sender_block where address = $1', [resolved!.address])
     expect(zeile.rowCount).toBe(1)
+    // The count restarted at the lift: one more failure does not block again and creates no proposal.
     expect((await versuch(app, absender)).status).toBe(401)
+    expect(await sd.blocks.listActive(app.context.now())).toHaveLength(0)
+    expect(await sd.proposals.listPending()).toHaveLength(0)
 
-    // Erneut die Schwelle erreichen, binnen 30 Tagen nach der ersten Sperre: Sperre plus Vorschlag. Der
-    // Zaehler wird durch unblock nicht zurueckgesetzt, schon der 401-Versuch oben kann neu sperren und den
-    // Vorschlag ausloesen; deshalb nur: mindestens ein offener Vorschlag fuer diese Adresse.
-    app.setNow(new Date(jetzt.getTime() + 25 * 3600_000))
-    for (let i = 0; i < SCHWELLE; i += 1) {
+    // Only reaching the threshold again blocks, and then the history yields the proposal.
+    for (let i = 0; i < SCHWELLE - 1; i += 1) {
       await versuch(app, absender)
     }
     expect((await versuch(app, absender)).status).toBe(429)
     const offen = await sd.proposals.listPending()
-    expect(offen.length).toBeGreaterThan(0)
+    expect(offen).toHaveLength(1)
     expect(new Set(offen.map((p) => p.address))).toEqual(new Set([resolved!.address]))
 
     // Nach der Aufbewahrungsfrist entfernt der Aufraeumlauf die aufgehobene Zeile; eine spaetere Sperre

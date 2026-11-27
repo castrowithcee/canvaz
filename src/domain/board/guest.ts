@@ -128,28 +128,31 @@ export function normalizeGuestDisplayName(raw: unknown): string | null {
 }
 
 /**
- * Hoechste Lebensdauer eines Links in Stunden: ein Jahr.
+ * Bounds of a share link expiry relative to the server time: 15 minutes to 365 days.
  *
- * Ohne Obergrenze waere "abgelaufen" eine Zusage, die nie eintritt. Der Owner kann trotzdem ausdruecklich
- * einen Link ohne Ablauf anlegen - dann ist der Widerruf sein einziges Ende, und das steht so in der Liste.
+ * Without an upper bound "expires" would be a promise that never comes true. The owner can still create a
+ * link without expiry explicitly - then revocation is its only end, and the list says so.
  */
-export const MAX_SHARE_LINK_HOURS = 8_760
+export const MIN_SHARE_LINK_LIFETIME_MS = 15 * 60_000
+export const MAX_SHARE_LINK_LIFETIME_MS = 365 * 86_400_000
 
-/** `undefined` heisst: kein Ablauf gewuenscht. `null` heisst: die Angabe taugt nicht. */
-export function parseShareLinkHours(raw: unknown): number | null | undefined {
+// Requires an explicit offset: a bare local time would be read in the server's zone.
+const ISO_WITH_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/
+
+/** `undefined` means: no expiry wanted. `null` means: the value is unusable or outside the bounds. */
+export function parseShareLinkExpiry(raw: unknown, now: Date): Date | null | undefined {
   if (raw === undefined || raw === null) {
     return undefined
   }
-  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1 || raw > MAX_SHARE_LINK_HOURS) {
+  if (typeof raw !== 'string' || !ISO_WITH_OFFSET.test(raw)) {
     return null
   }
-  return raw
-}
-
-const MILLISECONDS_PER_HOUR = 3_600_000
-
-export function shareLinkExpiry(now: Date, hours: number | undefined): Date | null {
-  return hours === undefined ? null : new Date(now.getTime() + hours * MILLISECONDS_PER_HOUR)
+  const expiresAt = new Date(raw)
+  const lifetime = expiresAt.getTime() - now.getTime()
+  if (Number.isNaN(lifetime) || lifetime < MIN_SHARE_LINK_LIFETIME_MS || lifetime > MAX_SHARE_LINK_LIFETIME_MS) {
+    return null
+  }
+  return expiresAt
 }
 
 /**

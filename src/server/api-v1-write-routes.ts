@@ -9,13 +9,23 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
-import type { ApiV1BoardResponse, ApiV1Error, ApiV1ErrorCode, ApiV1FolderResponse } from '../contracts/api-v1.js'
+import type {
+  ApiV1BoardResponse,
+  ApiV1Error,
+  ApiV1ErrorCode,
+  ApiV1FolderResponse,
+  ApiV1RestoredBoardResponse,
+  ApiV1TrashedBoardResponse,
+} from '../contracts/api-v1.js'
 import {
   API_V1_BOARD_MOVE_PATH,
   API_V1_BOARD_RENAME_PATH,
+  API_V1_BOARD_RESTORE_PATH,
+  API_V1_BOARD_TRASH_PATH,
   API_V1_BOARDS_PATH,
   API_V1_FOLDERS_PATH,
 } from '../contracts/api-v1.js'
+import type { BoardId } from '../domain/board/model.js'
 import { MAX_BOARD_TITLE_LENGTH, normalizeBoardTitle } from '../domain/board/model.js'
 import type { BoardDenialReason } from '../domain/board/policy.js'
 import type { Folder, FolderId } from '../domain/folder/model.js'
@@ -25,10 +35,12 @@ import type { ApiKeyTarget, ResolvedApiKey } from '../domain/identity/api-key.js
 import { apiKeyLevelAllows, isBoardInApiKeyTarget, isPlaceInApiKeyTarget } from '../domain/identity/api-key.js'
 import type { WorkspaceId } from '../domain/workspace/model.js'
 import type { ApiKeyGuard } from './api-key-guard.js'
-import { LEVEL_TOO_LOW, NOT_FOUND, toBoard, toFolder } from './api-v1-routes.js'
+import { LEVEL_TOO_LOW, NOT_FOUND, toBoard, toFolder, toTrashedBoard } from './api-v1-routes.js'
 import { DENIALS } from './board-access.js'
-import type { Actor, BoardFailure } from './board-operations.js'
+import type { BoardFailure } from './board-operations.js'
 import { createBoardOperations, isBoardFailure } from './board-operations.js'
+import type { TrashFailure } from './board-trash-operations.js'
+import { createTrashOperations, isTrashFailure } from './board-trash-operations.js'
 import type { AppContext } from './context.js'
 import type { FolderFailure } from './folder-operations.js'
 import { FOLDER_VIOLATIONS, createFolderOperations, isFolderFailure } from './folder-operations.js'
@@ -36,7 +48,7 @@ import type { Route } from './http.js'
 import { readJsonBodyLimited, sendApiV1Error } from './http.js'
 import type { Reply } from './reply.js'
 import { ok, readUuid, send } from './reply.js'
-import { apiKeyBoardSubject } from './requester.js'
+import { apiKeyActor } from './requester.js'
 
 const MAX_BODY_BYTES = 16_384
 
@@ -82,21 +94,16 @@ function boardFailureRefusal(failure: BoardFailure): Refusal {
   return failure.kind === 'folder-not-found' ? NOT_FOUND : denialRefusal(failure.reason)
 }
 
+function trashFailureRefusal(failure: TrashFailure): Refusal {
+  return failure.kind === 'not-found' ? NOT_FOUND : boardFailureRefusal(failure)
+}
+
 function folderFailureRefusal(failure: FolderFailure): Refusal {
   if (failure.kind === 'denied') {
     return denialRefusal(failure.reason)
   }
   const { status, message } = FOLDER_VIOLATIONS[failure.violation]
   return status === 404 ? NOT_FOUND : { status, code: 'conflict', message }
-}
-
-function apiKeyActor(key: ResolvedApiKey): Actor {
-  return {
-    userId: key.key.userId,
-    subject: (roles) => apiKeyBoardSubject(key, roles),
-    logFields: { userId: key.key.userId, apiKeyId: key.key.id },
-    auditDetails: { apiKeyId: key.key.id },
-  }
 }
 
 /** Only a folder target needs the tree; it is read inside the caller's transaction. */
@@ -111,6 +118,7 @@ async function targetFolders(
 export function createApiV1WriteRoutes(context: AppContext, authenticate: ApiKeyGuard): readonly Route[] {
   const boardOperations = createBoardOperations(context)
   const folderOperations = createFolderOperations(context)
+  const trashOperations = createTrashOperations(context)
 
   function levelRefusal(key: ResolvedApiKey): Refusal | null {
     if (apiKeyLevelAllows(key.level, 'edit')) {
@@ -314,6 +322,95 @@ export function createApiV1WriteRoutes(context: AppContext, authenticate: ApiKey
           }
           const result: ApiV1FolderResponse = { folder: toFolder(created) }
           return ok(201, result)
+        })
+        send(response, reply)
+      },
+    },
+
+    {
+      method: 'POST',
+      path: API_V1_BOARD_TRASH_PATH,
+      handle: async ({ request, response }) => {
+        const key = await authenticate(request, response)
+        const body = key === null ? null : await readBody(request, response)
+        if (key === null || body === null) {
+          return
+        }
+        const boardId = readUuid(body['boardId'])
+        if (boardId === null) {
+          sendRefusal(response, NOT_FOUND)
+          return
+        }
+        const trashed: { id: BoardId | null } = { id: null }
+        const reply = await context.boards.transaction(async (tx) => {
+          const access = await tx.boards.findForUpdate(boardId, { kind: 'user', userId: key.key.userId }, context.now())
+          if (access === null) {
+            return refuse(NOT_FOUND)
+          }
+          const folders = await targetFolders(tx.folders, key.key.target, access.board.workspaceId)
+          if (!isBoardInApiKeyTarget(key.key.target, access.board, folders)) {
+            return refuse(NOT_FOUND)
+          }
+          const level = levelRefusal(key)
+          if (level !== null) {
+            return refuse(level)
+          }
+          const result = await trashOperations.trashBoard(tx, apiKeyActor(key), access)
+          if (isTrashFailure(result)) {
+            return refuse(trashFailureRefusal(result))
+          }
+          trashed.id = result.board.id
+          const trashedBody: ApiV1TrashedBoardResponse = {
+            board: toTrashedBoard(result.board, result.deletedAt, context.config.trashRetentionDays),
+          }
+          return ok(200, trashedBody)
+        })
+        send(response, reply)
+        if (trashed.id !== null) {
+          // After the commit, like the internal route: a rolled back transaction must not have closed anyone out.
+          context.rooms.closeBoard(trashed.id)
+        }
+      },
+    },
+
+    {
+      method: 'POST',
+      path: API_V1_BOARD_RESTORE_PATH,
+      handle: async ({ request, response }) => {
+        const key = await authenticate(request, response)
+        const body = key === null ? null : await readBody(request, response)
+        if (key === null || body === null) {
+          return
+        }
+        const boardId = readUuid(body['boardId'])
+        if (boardId === null) {
+          sendRefusal(response, NOT_FOUND)
+          return
+        }
+        const reply = await context.boards.transaction(async (tx) => {
+          // The target is decided on the trashed board's folder before anything else happens to it.
+          const access = await tx.boards.findTrashedForUpdate(boardId, key.key.userId)
+          if (access === null) {
+            return refuse(NOT_FOUND)
+          }
+          const { target } = key.key
+          const folders = await targetFolders(tx.folders, target, access.board.workspaceId)
+          if (!isBoardInApiKeyTarget(target, access.board, folders)) {
+            return refuse(NOT_FOUND)
+          }
+          const level = levelRefusal(key)
+          if (level !== null) {
+            return refuse(level)
+          }
+          const restored = await trashOperations.restoreBoard(tx, apiKeyActor(key), boardId)
+          if (isTrashFailure(restored)) {
+            return refuse(trashFailureRefusal(restored))
+          }
+          const result: ApiV1RestoredBoardResponse = {
+            board: toBoard(restored),
+            leftTarget: !isBoardInApiKeyTarget(target, restored, folders),
+          }
+          return ok(200, result)
         })
         send(response, reply)
       },
