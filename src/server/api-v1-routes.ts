@@ -9,10 +9,11 @@
 
 import type { ServerResponse } from 'node:http'
 
-import type { ApiV1Board, ApiV1Folder, ApiV1Workspace } from '../contracts/api-v1.js'
+import type { ApiV1Board, ApiV1Folder, ApiV1TrashedBoard, ApiV1Workspace } from '../contracts/api-v1.js'
 import {
   API_V1_BOARD_ID_PARAM,
   API_V1_BOARD_METADATA_PATH,
+  API_V1_BOARD_TRASH_PATH,
   API_V1_BOARDS_PATH,
   API_V1_FOLDER_ID_PARAM,
   API_V1_FOLDER_ROOT,
@@ -21,9 +22,15 @@ import {
   API_V1_WORKSPACE_ID_PARAM,
   API_V1_WORKSPACES_PATH,
 } from '../contracts/api-v1.js'
-import type { ApiV1BoardResponse, ApiV1BoardsResponse, ApiV1FoldersResponse, ApiV1WorkspacesResponse } from '../contracts/api-v1.js'
+import type {
+  ApiV1BoardResponse,
+  ApiV1BoardsResponse,
+  ApiV1FoldersResponse,
+  ApiV1TrashedBoardsResponse,
+  ApiV1WorkspacesResponse,
+} from '../contracts/api-v1.js'
 import type { Board, BoardStatus } from '../domain/board/model.js'
-import { parseBoardStatus } from '../domain/board/model.js'
+import { parseBoardStatus, trashPurgeAt } from '../domain/board/model.js'
 import type { BoardDecision } from '../domain/board/policy.js'
 import { decideBoardAccess } from '../domain/board/policy.js'
 import type { BoardAccess, BoardFilter, BoardViewer } from '../domain/board/repositories.js'
@@ -38,7 +45,8 @@ import type { AppContext } from './context.js'
 import type { Route } from './http.js'
 import { sendApiV1Error, sendJson } from './http.js'
 import { readUuid } from './reply.js'
-import { apiKeyBoardSubject } from './requester.js'
+import { createTrashOperations, isTrashFailure } from './board-trash-operations.js'
+import { apiKeyActor, apiKeyBoardSubject } from './requester.js'
 
 type Denial = { readonly status: 400 | 403 | 404; readonly code: 'bad_request' | 'forbidden' | 'not_found'; readonly message: string }
 
@@ -100,8 +108,22 @@ export function toBoard(board: Board): ApiV1Board {
   }
 }
 
+export function toTrashedBoard(board: Board, deletedAt: Date, retentionDays: number): ApiV1TrashedBoard {
+  return {
+    id: board.id,
+    workspaceId: board.workspaceId,
+    folderId: board.folderId,
+    title: board.title,
+    status: board.status,
+    deletedAt: deletedAt.toISOString(),
+    purgeAt: trashPurgeAt(deletedAt, retentionDays).toISOString(),
+  }
+}
+
 /** `authenticate` is shared with the write routes so that one rate limit counts every call of a key. */
 export function createApiV1Routes(context: AppContext, authenticate: ApiKeyGuard): readonly Route[] {
+  const trashOperations = createTrashOperations(context)
+
   function viewerOf(key: ResolvedApiKey): BoardViewer {
     return { kind: 'user', userId: key.key.userId }
   }
@@ -185,6 +207,29 @@ export function createApiV1Routes(context: AppContext, authenticate: ApiKeyGuard
       return NOT_FOUND
     }
     return admit(key, 'read', () => decideScope(key, scope)) ?? scope
+  }
+
+  /**
+   * Scope of the trash list. A board key's own board may sit in the trash, where `findForViewer` never
+   * finds it, so that case looks there as well; the key still reaches nothing but this one board.
+   */
+  async function loadTrashScope(key: ResolvedApiKey, rawWorkspaceId: string | null): Promise<Scope | Denial> {
+    const { target } = key.key
+    if (target.kind !== 'board') {
+      return loadWorkspaceScope(key, rawWorkspaceId)
+    }
+    const workspaceId = readUuid(rawWorkspaceId)
+    const trashed = await context.boards.transaction((tx) => tx.boards.findTrashedForUpdate(target.boardId, key.key.userId))
+    const access = trashed === null ? (await resolveScope(key))?.access : { workspace: trashed.workspace, role: trashed.role }
+    if (workspaceId === null || access === undefined || access.workspace.id !== workspaceId) {
+      return NOT_FOUND
+    }
+    const denial = admit(key, 'read', () =>
+      decideWorkspaceAccess(apiKeyBoardSubject(key, { role: access.role, boardRole: null }), access.workspace, {
+        kind: 'workspace:read',
+      }),
+    )
+    return denial ?? { access, folders: [], rootInTarget: false, board: null }
   }
 
   /** Folder filter within the target; anything outside it answers like an invented folder. */
@@ -326,6 +371,34 @@ export function createApiV1Routes(context: AppContext, authenticate: ApiKeyGuard
           return
         }
         const body: ApiV1BoardResponse = { board: toBoard(access.board) }
+        sendJson(response, 200, body)
+      },
+    },
+
+    {
+      method: 'GET',
+      path: API_V1_BOARD_TRASH_PATH,
+      handle: async ({ request, response, url }) => {
+        const key = await authenticate(request, response)
+        if (key === null) {
+          return
+        }
+        const scope = await loadTrashScope(key, url.searchParams.get(API_V1_WORKSPACE_ID_PARAM))
+        if (isDenial(scope)) {
+          sendDenial(response, scope)
+          return
+        }
+        const entries = await trashOperations.listTrash(apiKeyActor(key), scope.access)
+        if (isTrashFailure(entries)) {
+          sendDenial(response, entries.kind === 'denied' && entries.reason !== 'not-visible' ? FORBIDDEN : NOT_FOUND)
+          return
+        }
+        const { target } = key.key
+        const body: ApiV1TrashedBoardsResponse = {
+          boards: entries
+            .filter((entry) => isBoardInApiKeyTarget(target, entry.board, scope.folders))
+            .map((entry) => toTrashedBoard(entry.board, entry.deletedAt, context.config.trashRetentionDays)),
+        }
         sendJson(response, 200, body)
       },
     },

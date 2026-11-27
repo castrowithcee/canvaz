@@ -839,12 +839,13 @@ Felder einzeln auf, statt aus der vollen Sicht etwas wegzulassen: ein spaeter er
 `BoardView` landet dadurch nicht von selbst beim Gast.
 
 **In der Oberflaeche** verwaltet der Owner die Gastlinks im selben Abschnitt wie die internen Freigaben:
-anlegen mit Rollenwahl (Voreinstellung `guest-viewer`) und optionaler Laufzeit in Stunden, die vorhandenen
-Links mit Rolle, Erzeuger, Ablauf, Zustand und Zahl der Beitritte, und je Zeile Widerrufen und Ersetzen (mit
-Bestaetigung, die benennt, dass die bisherige Adresse fuer niemanden mehr funktioniert und offene
-Gastsitzungen enden). Der
-Klartextlink erscheint **genau einmal**, unmittelbar nach der Anlage und mit dem Hinweis, dass er danach
-nicht erneut abrufbar ist, gilt auch fuer den Ersatzlink; die Liste zeigt ihn nie, und abgelegt wird er nirgends.
+anlegen mit Rollenwahl (Voreinstellung `guest-viewer`) und optionalem Ablaufzeitpunkt (Datum und Uhrzeit
+oder Schnellwahl 1, 7 oder 30 Tage; Voreinstellung: kein Ablauf; der Server verlangt 15 Minuten bis 365 Tage
+nach seinem Zeitpunkt), die vorhandenen Links mit Rolle, Erzeuger, Ablauf (Datum und Uhrzeit), Zustand und
+Zahl der Beitritte, und je Zeile Widerrufen und Ersetzen (mit Bestaetigung, die benennt, dass die bisherige
+Adresse fuer niemanden mehr funktioniert und offene Gastsitzungen enden). Der Klartextlink erscheint **genau
+einmal**, unmittelbar nach der Anlage und mit dem Hinweis, dass er danach nicht erneut abrufbar ist, auch der
+eines Ersatzlinks; die Liste zeigt ihn nie, und abgelegt wird er nirgends.
 
 **Ein Gast oeffnet `/gast#<token>`.** Die SPA behandelt das als eigene Route noch vor jedem Sitzungszustand:
 sie fragt `/api/me` gar nicht erst, liest das Token aus dem Fragment, fragt nach einem Anzeigenamen, tritt

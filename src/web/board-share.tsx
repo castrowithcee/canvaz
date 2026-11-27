@@ -27,7 +27,7 @@ import type {
   MeResponse,
   WorkspaceMemberView,
 } from '../contracts/api.js'
-import { MAX_SHARE_LINK_HOURS } from '../domain/board/guest.js'
+import { MAX_SHARE_LINK_LIFETIME_MS, MIN_SHARE_LINK_LIFETIME_MS } from '../domain/board/guest.js'
 import type { EffectiveBoardRole } from '../domain/board/policy.js'
 import { mayManageBoard } from '../domain/board/policy.js'
 import {
@@ -43,7 +43,7 @@ import {
   shareBoard,
   transferBoardOwnership,
 } from './api.js'
-import { ConfirmDialog, Empty, Loading, Notice } from './ui.js'
+import { ConfirmDialog, Empty, Field, Loading, Notice, describedBy } from './ui.js'
 
 const GRANT_ROLES: readonly BoardGrantRoleView[] = ['editor', 'viewer']
 
@@ -96,6 +96,18 @@ function viewerRoleOf(board: BoardView): EffectiveBoardRole {
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString('de-DE')
 }
+
+function formatDateTime(iso: string): string {
+  return new Date(iso).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' })
+}
+
+/** The value format of `datetime-local`: browser-local time to the minute. */
+function toLocalInputValue(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${String(date.getFullYear())}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+const QUICK_EXPIRY_DAYS = [1, 7, 30] as const
 
 /** Was ein Nutzer heisst, wenn eine Zeile beides zeigen darf. */
 function nameOf(member: { readonly displayName: string; readonly email: string | null }): string {
@@ -444,7 +456,7 @@ function linkStatus(link: BoardShareLinkView, now: Date): string {
     return `widerrufen am ${formatDate(link.revokedAt)}`
   }
   if (link.expiresAt !== null && new Date(link.expiresAt).getTime() <= now.getTime()) {
-    return `abgelaufen am ${formatDate(link.expiresAt)}`
+    return `abgelaufen am ${formatDateTime(link.expiresAt)}`
   }
   return 'gueltig'
 }
@@ -526,30 +538,50 @@ function ShareLinks({
   readonly onChanged: () => void
 }) {
   const [role, setRole] = useState<GuestRoleView>('guest-viewer')
-  const [hours, setHours] = useState('')
+  const [expiry, setExpiry] = useState('')
+  const [expiryError, setExpiryError] = useState<string | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const now = new Date()
-  const trimmedHours = hours.trim()
+  // Only a convenience: the server checks the bounds against its own clock. Rounded inward to whole minutes.
+  const minValue = toLocalInputValue(
+    new Date(Math.ceil((now.getTime() + MIN_SHARE_LINK_LIFETIME_MS) / 60_000) * 60_000),
+  )
+  const maxValue = toLocalInputValue(new Date(now.getTime() + MAX_SHARE_LINK_LIFETIME_MS))
+  const expiryHint = 'Mindestens 15 Minuten, hoechstens 365 Tage. Ohne Ablauf endet der Link erst mit dem Widerruf.'
 
   return (
     <>
       <form
         className="stack card"
+        noValidate
         onSubmit={(event) => {
           event.preventDefault()
-          setBusy(true)
           setError(null)
-          const expiresInHours = trimmedHours === '' ? undefined : Number(trimmedHours)
+          // A datetime-local value without an offset is read in the browser's zone, as intended.
+          const expiresAt = expiry === '' ? undefined : new Date(expiry)
+          if (expiresAt !== undefined) {
+            const lifetime = expiresAt.getTime() - Date.now()
+            if (
+              Number.isNaN(lifetime) ||
+              lifetime < MIN_SHARE_LINK_LIFETIME_MS ||
+              lifetime > MAX_SHARE_LINK_LIFETIME_MS
+            ) {
+              setExpiryError('Der Ablauf muss mindestens 15 Minuten und hoechstens 365 Tage in der Zukunft liegen.')
+              return
+            }
+          }
+          setExpiryError(undefined)
+          setBusy(true)
           createBoardShareLink(me.csrfToken, {
             boardId: board.id,
             role,
-            ...(expiresInHours === undefined ? {} : { expiresInHours }),
+            ...(expiresAt === undefined ? {} : { expiresAt: expiresAt.toISOString() }),
           })
             .then((response) => {
               onCreated(response.url)
-              setHours('')
+              setExpiry('')
               onChanged()
             })
             .catch((cause: unknown) => {
@@ -580,24 +612,52 @@ function ShareLinks({
         <p className="hint" id="share-link-role-hint">
           {GUEST_ROLE_HINTS[role]} Ein Gast erreicht ausschliesslich dieses eine Board.
         </p>
-        <div className="field">
-          <label htmlFor="share-link-hours">Laufzeit in Stunden (leer lassen: kein Ablauf)</label>
+        <Field
+          id="share-link-expiry"
+          label="Ablauf"
+          hint={expiryHint}
+          {...(expiryError === undefined ? {} : { error: expiryError })}
+        >
+          <p>
+            <button
+              className="button--quiet"
+              type="button"
+              aria-pressed={expiry === ''}
+              onClick={() => {
+                setExpiry('')
+                setExpiryError(undefined)
+              }}
+            >
+              Kein Ablauf
+            </button>
+            {QUICK_EXPIRY_DAYS.map((days) => (
+              <button
+                key={days}
+                className="button--quiet"
+                type="button"
+                onClick={() => {
+                  setExpiry(toLocalInputValue(new Date(Date.now() + days * 86_400_000)))
+                  setExpiryError(undefined)
+                }}
+              >
+                {days === 1 ? '1 Tag' : `${String(days)} Tage`}
+              </button>
+            ))}
+          </p>
           <input
-            id="share-link-hours"
-            type="number"
-            inputMode="numeric"
-            min={1}
-            max={MAX_SHARE_LINK_HOURS}
-            aria-describedby="share-link-hours-hint"
-            value={hours}
+            id="share-link-expiry"
+            type="datetime-local"
+            min={minValue}
+            max={maxValue}
+            aria-invalid={expiryError !== undefined}
+            aria-describedby={describedBy('share-link-expiry', true, expiryError !== undefined)}
+            value={expiry}
             onChange={(event) => {
-              setHours(event.target.value)
+              setExpiry(event.target.value)
+              setExpiryError(undefined)
             }}
           />
-        </div>
-        <p className="hint" id="share-link-hours-hint">
-          Hoechstens {String(MAX_SHARE_LINK_HOURS)} Stunden. Ohne Angabe endet der Link erst mit dem Widerruf.
-        </p>
+        </Field>
         <p>
           <button className="button--primary" type="submit" disabled={busy}>
             Gastlink anlegen
@@ -672,7 +732,7 @@ function ShareLinkRow({
       <td data-label="Rolle">{GUEST_ROLE_LABELS[link.role]}</td>
       <td data-label="Angelegt von">{link.createdByDisplayName ?? '—'}</td>
       <td data-label="Angelegt">{formatDate(link.createdAt)}</td>
-      <td data-label="Ablauf">{link.expiresAt === null ? 'kein Ablauf' : formatDate(link.expiresAt)}</td>
+      <td data-label="Ablauf">{link.expiresAt === null ? 'kein Ablauf' : formatDateTime(link.expiresAt)}</td>
       <td data-label="Zustand">{linkStatus(link, now)}</td>
       <td data-label="Gaeste">{String(link.guestCount)}</td>
       <td data-label="Aktion">
