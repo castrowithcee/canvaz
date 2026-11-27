@@ -38,6 +38,7 @@ import {
   fetchBoardShareLinks,
   fetchWorkspaceMembers,
   revokeBoardGrant,
+  replaceBoardShareLink,
   revokeBoardShareLink,
   shareBoard,
   transferBoardOwnership,
@@ -467,7 +468,7 @@ function CreatedLinkNotice({
     <Notice kind="success">
       <p>
         <strong>Dieser Link erscheint genau einmal.</strong> Er laesst sich danach nicht erneut abrufen - auch
-        nicht ueber diese Liste. Kopiere ihn jetzt; ist er verloren, widerrufe ihn und lege einen neuen an.
+        nicht ueber diese Liste. Kopiere ihn jetzt; ist er verloren, ersetze ihn durch einen neuen.
       </p>
       <div className="field">
         <label htmlFor="share-link-url">Freigabelink</label>
@@ -626,7 +627,15 @@ function ShareLinks({
             </thead>
             <tbody>
               {links.map((link) => (
-                <ShareLinkRow key={link.id} me={me} board={board} link={link} now={now} onChanged={onChanged} />
+                <ShareLinkRow
+                  key={link.id}
+                  me={me}
+                  board={board}
+                  link={link}
+                  now={now}
+                  onCreated={onCreated}
+                  onChanged={onChanged}
+                />
               ))}
             </tbody>
           </table>
@@ -641,16 +650,22 @@ function ShareLinkRow({
   board,
   link,
   now,
+  onCreated,
   onChanged,
 }: {
   readonly me: MeResponse
   readonly board: BoardView
   readonly link: BoardShareLinkView
   readonly now: Date
+  /** Uebergibt die Adresse des Ersatzlinks genau einmal an `BoardShare`. */
+  readonly onCreated: (url: string) => void
   readonly onChanged: () => void
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [replacing, setReplacing] = useState(false)
+  // Der Server ersetzt nur gueltige Links; die Zeile bietet es deshalb nur dort an.
+  const live = link.revokedAt === null && linkStatus(link, now) === 'gueltig'
 
   return (
     <tr>
@@ -680,6 +695,61 @@ function ShareLinkRow({
           >
             Gastlink vom {formatDate(link.createdAt)} widerrufen
           </button>
+        )}
+        {live && !replacing && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              setError(null)
+              setReplacing(true)
+            }}
+          >
+            Gastlink vom {formatDate(link.createdAt)} ersetzen
+          </button>
+        )}
+        {live && replacing && (
+          <ConfirmDialog danger>
+            <p>
+              Gastlink vom {formatDate(link.createdAt)} ersetzen? Die bisherige Adresse funktioniert danach fuer
+              niemanden mehr, offene Gastsitzungen mit ihr enden. Der neue Link hat dieselbe Rolle und denselben
+              Ablauf.
+            </p>
+            <p className="actions">
+              <button
+                className="button--danger"
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setBusy(true)
+                  setError(null)
+                  replaceBoardShareLink(me.csrfToken, { boardId: board.id, shareLinkId: link.id })
+                    .then((response) => {
+                      onCreated(response.url)
+                      onChanged()
+                    })
+                    .catch((cause: unknown) => {
+                      setError(messageOf(cause, 'Der Freigabelink konnte nicht ersetzt werden.'))
+                      setReplacing(false)
+                    })
+                    .finally(() => {
+                      setBusy(false)
+                    })
+                }}
+              >
+                Ersetzen bestaetigen
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setReplacing(false)
+                }}
+              >
+                Abbrechen
+              </button>
+            </p>
+          </ConfirmDialog>
         )}
         {error !== null && <Notice text={error} />}
       </td>

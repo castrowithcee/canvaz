@@ -28,6 +28,7 @@ import {
   BOARD_SCENE_PATH,
   BOARD_SHARE_LINKS_PATH,
   BOARD_SHARE_LINK_CREATE_PATH,
+  BOARD_SHARE_LINK_REPLACE_PATH,
   BOARD_SHARE_LINK_REVOKE_PATH,
   BOARD_STATUS_PATH,
   CSRF_HEADER,
@@ -319,6 +320,81 @@ describe('Freigabelinks verwalten', () => {
     )
     expect(widerrufen).toHaveLength(2)
     expect(widerrufen[0]?.details).toEqual({ boardId: board.id, role: 'guest-viewer' })
+  })
+
+  it('ersetzt einen Link in einem Schritt und beendet den alten samt seiner Verbindung', async () => {
+    const { ada, workspace, board } = await aufbau()
+    const alt = await createShareLink(ada, board.id, { role: 'guest-editor', expiresInHours: 24 })
+    const gast = await joinAsGuest(alt.token, 'Schreibgast')
+    const verbindung = await connect(gast.jar.cookieHeader())
+    await verbindung.join(board.id)
+
+    const antwort = await post(app, ada, BOARD_SHARE_LINK_REPLACE_PATH, { boardId: board.id, shareLinkId: alt.id })
+    expect(antwort.status).toBe(201)
+    const ersatz = (await antwort.json()) as CreateBoardShareLinkResponse
+    const neuesToken = new URL(ersatz.url).hash.slice(1)
+    expect(neuesToken).not.toBe(alt.token)
+    expect(ersatz.link.id).not.toBe(alt.id)
+    expect(ersatz.link.role).toBe('guest-editor')
+    const liste = (await (
+      await ada.jar.fetch(`${app.baseUrl}${BOARD_SHARE_LINKS_PATH}?${BOARD_ID_PARAM}=${board.id}`)
+    ).json()) as BoardShareLinksResponse
+    const gelistetAlt = liste.links.find((link) => link.id === alt.id)
+    expect(gelistetAlt?.revokedAt).not.toBeNull()
+    // Der Ablauf wird unveraendert uebernommen.
+    expect(ersatz.link.expiresAt).toBe(gelistetAlt?.expiresAt)
+
+    // Die alte Adresse ist tot, die offene Verbindung des alten Links ist zu, die neue Adresse traegt.
+    const beitritt = await fetch(`${app.baseUrl}${BOARD_GUEST_JOIN_PATH}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: alt.token, displayName: 'Gast' }),
+    })
+    expect(beitritt.status).toBe(404)
+    expect((await guestGet(gast, BOARD_GUEST_SESSION_PATH)).status).toBe(401)
+    expect(BEENDET).toContain(await verbindung.closeCode)
+    await joinAsGuest(neuesToken, 'Neugast')
+
+    // Nachweis fuer beide Links, ohne Token in Nachweis, Log oder Datenbank.
+    const events = await auditEvents(workspace.id)
+    expect(events.filter((event) => event.action === 'board-share-link.revoked').map((e) => e.targetId)).toEqual([
+      alt.id,
+    ])
+    const erzeugt = events.filter(
+      (event) => event.action === 'board-share-link.created' && event.targetId === ersatz.link.id,
+    )
+    expect(erzeugt).toHaveLength(1)
+    expect(erzeugt[0]?.details).toMatchObject({ replacesShareLinkId: alt.id, role: 'guest-editor' })
+    for (const token of [alt.token, neuesToken]) {
+      expect(JSON.stringify(events)).not.toContain(token)
+      expect(JSON.stringify(app.logs)).not.toContain(token)
+    }
+    const hashes = await pool.query<{ token_hash: string }>('select token_hash from board_share_links')
+    expect(hashes.rows.map((row) => row.token_hash)).not.toContain(neuesToken)
+  })
+
+  it('ersetzt nur gueltige Links des eigenen Boards und nur fuer den Owner', async () => {
+    const { ada, bob, workspace, board } = await aufbau()
+    const zweites = await createBoard(app, ada, workspace.id, 'Zweites')
+    const widerrufen = await createShareLink(ada, board.id)
+    await post(app, ada, BOARD_SHARE_LINK_REVOKE_PATH, { boardId: board.id, shareLinkId: widerrufen.id })
+    const befristet = await createShareLink(ada, board.id, { expiresInHours: 1 })
+    const gueltig = await createShareLink(ada, board.id)
+    const vorher = (await auditEvents(workspace.id)).length
+
+    const ersetze = (account: Account, boardId: string, shareLinkId: string) =>
+      post(app, account, BOARD_SHARE_LINK_REPLACE_PATH, { boardId, shareLinkId })
+    // Widerrufen, fremdes Board und erfundene Kennung ergeben dieselbe 404.
+    expect((await ersetze(ada, board.id, widerrufen.id)).status).toBe(404)
+    expect((await ersetze(ada, zweites.id, gueltig.id)).status).toBe(404)
+    expect((await ersetze(ada, board.id, FREMDE_KENNUNG)).status).toBe(404)
+    // Bob ist Editor ohne `grant:manage`.
+    expect((await ersetze(bob, board.id, gueltig.id)).status).toBe(403)
+    expect(await auditEvents(workspace.id)).toHaveLength(vorher)
+
+    app.setNow(new Date(Date.now() + 2 * 3600 * 1000))
+    expect((await ersetze(ada, board.id, befristet.id)).status).toBe(404)
+    expect(await pool.query('select 1 from board_share_links')).toHaveProperty('rowCount', 3)
   })
 
   it('laesst einen Link eines fremden Boards nicht ueber das eigene widerrufen', async () => {
