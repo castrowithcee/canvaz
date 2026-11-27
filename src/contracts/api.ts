@@ -1280,8 +1280,11 @@ export type CreateBoardShareLinkRequest = {
   readonly boardId: string
   /** Fehlt die Rolle, gilt `guest-viewer`. Schreibrecht ist immer eine ausdrueckliche Entscheidung. */
   readonly role?: GuestRoleView
-  /** Lebensdauer in Stunden. Fehlt sie, laeuft der Link nicht von selbst ab. */
-  readonly expiresInHours?: number
+  /**
+   * Expiry as an ISO-8601 instant with offset, 15 minutes to 365 days after server time. Missing: the link
+   * does not expire by itself.
+   */
+  readonly expiresAt?: string
 }
 
 /**
