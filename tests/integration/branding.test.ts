@@ -1,8 +1,8 @@
 /**
- * Instanz-Branding gegen die echte Anwendung, eine echte Datenbank und den Dateisystem-Adapter.
+ * Instance branding against the real application, a real database and the filesystem adapter.
  *
- * Jeder Test geht ueber die echten HTTP-Endpunkte: der Systemadmin meldet sich mit Passwort und zweitem
- * Faktor an, ein normaler Nutzer ueber den OIDC-Fluss.
+ * Every test goes through the real HTTP endpoints: the system admin signs in with password and second
+ * factor, an ordinary user through the OIDC flow.
  */
 
 import { rm } from 'node:fs/promises'

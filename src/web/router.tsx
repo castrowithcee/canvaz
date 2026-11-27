@@ -69,9 +69,9 @@ export type AppRoute =
   | { readonly kind: 'konto' }
   /** Kontenverwaltung der Systemadministration. */
   | { readonly kind: 'konten' }
-  /** Gesperrte Absender der Systemadministration. */
+  /** Blocked senders page of the system administration. */
   | { readonly kind: 'absender' }
-  /** Branding der Instanz in der Systemadministration. */
+  /** Instance branding page of the system administration. */
   | { readonly kind: 'branding' }
   /** Keine Ansicht dieser Anwendung. */
   | { readonly kind: 'unbekannt' }
