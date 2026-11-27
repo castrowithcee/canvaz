@@ -43,6 +43,7 @@ import { hashPassword } from '../../src/server/password.js'
 import { SESSION_COOKIE } from '../../src/server/session.js'
 import { createJar } from '../support/browser-client.js'
 import type { Jar } from '../support/browser-client.js'
+import { resetInstanceBranding } from '../support/instance-branding.js'
 import {
   TEST_PASSWORD,
   changePassword,
@@ -84,6 +85,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await pool.query('truncate users, workspaces, login_throttle cascade')
+  await resetInstanceBranding(pool)
   app.clearLogs()
   app.setNow(null)
 })
