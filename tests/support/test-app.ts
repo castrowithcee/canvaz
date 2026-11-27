@@ -18,6 +18,7 @@ import type { BoardStore } from '../../src/domain/board/repositories.js'
 import type { IdentityStore } from '../../src/domain/identity/repositories.js'
 import type { WorkspaceStore } from '../../src/domain/workspace/repositories.js'
 import { createAssetStorage } from '../../src/persistence/asset-storage.js'
+import { createBrandingStore } from '../../src/persistence/branding-store.js'
 import { createBoardStore } from '../../src/persistence/board-store.js'
 import { createIdentityStore } from '../../src/persistence/identity-store.js'
 import { createWorkspaceStore } from '../../src/persistence/workspace-store.js'
@@ -172,6 +173,7 @@ export async function startTestApp(options: {
     identity: store,
     workspaces,
     boards,
+    branding: createBrandingStore(options.pool),
     storage: createAssetStorage(config.storage),
     oidc: config.oidc === null ? null : createOidcClient(config.oidc, config.baseUrl),
     mailer,

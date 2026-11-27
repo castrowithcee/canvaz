@@ -88,6 +88,15 @@ export const ADMIN_CLIENT_ADDRESS_PATH = `${API_BASE_PATH}/admin/client-address`
 export const ADMIN_SENDER_BLOCKS_PATH = `${API_BASE_PATH}/admin/sender-blocks`
 export const ADMIN_SENDER_BLOCK_LIFT_PATH = `${API_BASE_PATH}/admin/sender-blocks/lift`
 export const ADMIN_SENDER_BLOCK_PROPOSAL_DECIDE_PATH = `${API_BASE_PATH}/admin/sender-blocks/proposals/decide`
+/** Instance branding. Public: name, default accent and logo version only (GET), no session. */
+export const BRANDING_PATH = `${API_BASE_PATH}/branding`
+/** Public logo bytes; the `v` parameter is the logo version and makes the response cacheable. */
+export const BRANDING_LOGO_PATH = `${API_BASE_PATH}/branding/logo`
+export const BRANDING_LOGO_VERSION_PARAM = 'v'
+/** System administration of the branding: read (GET), change settings, upload and remove the logo (POST). */
+export const ADMIN_BRANDING_PATH = `${API_BASE_PATH}/admin/branding`
+export const ADMIN_BRANDING_LOGO_PATH = `${API_BASE_PATH}/admin/branding/logo`
+export const ADMIN_BRANDING_LOGO_REMOVE_PATH = `${API_BASE_PATH}/admin/branding/logo/remove`
 export const REALTIME_PATH = `${API_BASE_PATH}/realtime`
 
 export const WORKSPACES_PATH = `${API_BASE_PATH}/workspaces`
@@ -343,7 +352,7 @@ export type MeResponse = {
   readonly user: UserView
   /** An die Session gebundenes Token fuer zustandsaendernde Anfragen. */
   readonly csrfToken: string
-  /** Das eigene Erscheinungsbild; ohne gespeicherte Wahl `DEFAULT_APPEARANCE`. */
+  /** The user's effective appearance; without a stored choice `DEFAULT_APPEARANCE` with the instance accent, if set. */
   readonly appearance: AppearanceView
   readonly secondFactor: SecondFactorView
   readonly selfRecovery: SelfRecoveryView | null
@@ -415,6 +424,37 @@ export function parseAppearance(value: unknown): AppearanceView | null {
   const scheme = COLOR_SCHEMES.find((candidate) => candidate === colorScheme)
   const color = ACCENT_COLORS.find((candidate) => candidate === accent)
   return scheme === undefined || color === undefined ? null : { colorScheme: scheme, accent: color }
+}
+
+export const MAX_INSTANCE_NAME_LENGTH = 60
+/** Upper bound of the instance logo upload, checked before anything is stored. */
+export const MAX_BRANDING_LOGO_BYTES = 512 * 1024
+
+/** `null` for an unknown or empty value, which means the default accent. */
+export function parseAccentColor(value: unknown): AccentColor | null {
+  return ACCENT_COLORS.find((candidate) => candidate === value) ?? null
+}
+
+/** What anyone without a session may learn about the instance. */
+export type PublicBrandingResponse = {
+  /** Never empty: the product name when none is set. */
+  readonly instanceName: string
+  readonly accent: AccentColor | null
+  /** `null` means: no logo. Otherwise the value of `v` for `BRANDING_LOGO_PATH`. */
+  readonly logoVersion: string | null
+}
+
+export type AdminBrandingView = PublicBrandingResponse & {
+  /** The stored name; empty means the product name is shown. */
+  readonly storedInstanceName: string
+  /** ISO-8601 of the last change. */
+  readonly updatedAt: string
+}
+
+export type SetBrandingRequest = {
+  /** 0 to 60 characters; empty means the product name. */
+  readonly instanceName: string
+  readonly accent: AccentColor | null
 }
 
 /**

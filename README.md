@@ -586,6 +586,56 @@ im Sinne der DSGVO ist der jeweilige Betreiber der Instanz, nicht dieses Projekt
   und ueberprueft die Sperre spaetestens nach sechs Monaten erneut. Diese Dokumentation setzt dafuer kein
   bestimmtes Werkzeug voraus.
 
+## Branding
+
+Der Systemadmin gibt der Instanz ein eigenes Erscheinungsbild. Es ist ein einzelner Datensatz
+(`instance_branding`, genau eine Zeile) mit diesen Feldern:
+
+| Feld         | Regel                                                                                                |
+| ------------ | ---------------------------------------------------------------------------------------------------- |
+| Instanzname  | 0 bis 60 Zeichen, vorn und hinten gekuerzt. Leer heisst "Canvaz".                                     |
+| Akzentfarbe  | Eine der fuenf vorhandenen Akzentfarben (`violett`, `blau`, `petrol`, `fuchsia`, `graphit`) oder leer. |
+| Logo         | PNG, JPEG oder WebP, hoechstens 512 KB. Kein GIF, kein SVG.                                           |
+
+Es gibt keine freien Markenfarben: der Kontrast der Akzentfarben ist in Hell und Dunkel geprueft. Der Typ des
+Logos folgt dem Inhalt der Datei, nie ihrem Namen oder dem `Content-Type` der Anfrage. Die Groesse wird beim
+Einlesen begrenzt, ein zu grosser Koerper wird nicht gespeichert. Die Bytes liegen ueber den Assetspeicher
+unter dem Schluesselpraefix `branding/`, ein neues Logo ersetzt das alte, das alte wird geloescht. Jede
+Aenderung steht mit dem angemeldeten Konto im Log (`branding.settings.changed`, `branding.logo.changed`,
+`branding.logo.removed`), nie mit Bildinhalt.
+
+Gepflegt wird es auf der Seite "Branding" der Systemadministration, neben der Kontenverwaltung und nur fuer
+Systemadmins: Name, Auswahl der Akzentfarbe mit Vorschau, Logo hochladen mit Vorschau und Entfernen.
+
+### Anzeige
+
+Der Client laedt `GET /api/branding` einmal pro Seitenaufruf. Logo (als `<img>` von der eigenen Herkunft, der
+Instanzname ist sein Alternativtext) und Instanzname ersetzen "Canvaz" in der Kopfzeile der Haupt-Ansicht, auf
+Anmeldung, Einladung, Wiederherstellung und Passwortruecksetzung sowie bei Gastbeitritt und Gastansicht. Der
+Seitentitel nennt den Instanznamen. Ohne gepflegtes Branding oder bei einem Ladefehler bleibt alles wie
+zuvor: "Canvaz", kein Logo, der Standardakzent.
+
+Rangfolge der Akzentwahl: eigene Wahl des Nutzers vor Akzent der Instanz vor Standardakzent (`violett`).
+`GET /api/me` liefert fuer einen Nutzer ohne gespeicherte Wahl den Instanz-Akzent als wirksame Wahl, ohne eine
+Zeile in `user_appearance` anzulegen. Anonyme Seiten und die Gastansicht setzen den Akzent aus dem oeffentlichen
+Branding, die Gastansicht bleibt dabei hell. Die Einstellungen nennen den Standard der Instanz bei der
+Akzentfarbe.
+
+### Endpunkte
+
+| Methode und Pfad                         | Zugriff               | Wirkung                                                                                |
+| ---------------------------------------- | --------------------- | -------------------------------------------------------------------------------------- |
+| `GET /api/branding`                      | oeffentlich           | `instanceName`, `accent` (oder `null`), `logoVersion` (oder `null`). Nichts sonst.       |
+| `GET /api/branding/logo?v=<Version>`     | oeffentlich           | Logo-Bytes mit gespeichertem `Content-Type` und `X-Content-Type-Options: nosniff`.       |
+| `GET /api/admin/branding`                | Systemadmin           | Gepflegte Werte samt Zeitpunkt der letzten Aenderung.                                  |
+| `POST /api/admin/branding`               | Systemadmin, CSRF     | Name und Akzentfarbe setzen (`{ instanceName, accent }`).                              |
+| `POST /api/admin/branding/logo`          | Systemadmin, CSRF     | Logo hochladen: Rohbytes im Koerper. `413` zu gross, `415` kein PNG, JPEG oder WebP.    |
+| `POST /api/admin/branding/logo/remove`   | Systemadmin, CSRF     | Logo entfernen.                                                                        |
+
+Die Logo-Version aendert sich genau mit dem Logo. Eine Anfrage mit der aktuellen Version darf ein Jahr lang
+zwischengespeichert werden (`immutable`), jede andere bekommt das aktuelle Logo mit `no-cache`. Die
+Content-Security-Policy bleibt unveraendert: das Logo kommt von der eigenen Herkunft.
+
 ## Arbeitsbereiche und Rollen
 
 Ein **Arbeitsbereich** ist die aeussere Datengrenze der Instanz: jeder fachliche Datensatz traegt seinen
@@ -773,9 +823,12 @@ Eine Freigabe kann sich **nicht selbst weitergeben**: ein `editor` verwaltet kei
 jede Abstufung mit einem Schritt wieder aufgehoben. Und der Owner kann sich seine Ownerschaft nicht
 entziehen - dafuer gibt es nur die Uebertragung.
 
-**In der Oberflaeche** steht die Freigabeverwaltung als Abschnitt im Fluss der Boardliste und nicht als
-modaler Dialog - dieselbe Entscheidung wie ueberall sonst in dieser SPA: kein Fokuskaefig, keine eigene
-Escape-Behandlung, jede Ueberschrift bleibt in der Dokumentstruktur. Der Abschnitt zeigt den Owner, die
+**In der Oberflaeche** steht die Freigabeverwaltung in einem eigenen, breiten Dialog (`Dialog wide`, wie der
+Versionsverlauf), der nur zu einem Board und nicht zum Editorzustand gehoert. Geoeffnet wird er ueber die
+schwebende Aktion _Freigeben_ (nur mit Verwaltungsrecht), ueber den Knopf der Zusammenfassung _Freigaben_ in
+den Board-Informationen (Zahl der internen Freigaben und gueltigen Gastlinks, soweit der Nutzer sie sehen
+darf) und ueber Direktlinks mit `?bereich=freigaben`, auch aus der Bibliothek; `Escape`, Fokusfang und
+Fokusrueckgabe kommen von der Plattform, und der Inhalt laedt nur, solange der Dialog offen ist. Der Dialog zeigt den Owner, die
 vorhandenen Freigaben mit ihrer Rolle, die Auswahl der Empfaenger aus der Mitgliederliste des
 Arbeitsbereichs und zu jeder Rolle einen Satz ueber ihre Wirkung. Die Uebertragung der Ownerschaft geschieht
 in zwei Schritten: Auswahl, dann eine ausdrueckliche Bestaetigung, die benennt, was danach gilt.
@@ -849,7 +902,7 @@ beiden Sichten entstehen an genau einer Stelle (`src/server/board-views.ts`), un
 Felder einzeln auf, statt aus der vollen Sicht etwas wegzulassen: ein spaeter ergaenztes Feld der
 `BoardView` landet dadurch nicht von selbst beim Gast.
 
-**In der Oberflaeche** verwaltet der Owner die Gastlinks im selben Abschnitt wie die internen Freigaben:
+**In der Oberflaeche** verwaltet der Owner die Gastlinks im selben Dialog wie die internen Freigaben:
 anlegen mit Rollenwahl (Voreinstellung `guest-viewer`) und optionalem Ablaufzeitpunkt (Datum und Uhrzeit
 oder Schnellwahl 1, 7 oder 30 Tage; Voreinstellung: kein Ablauf; der Server verlangt 15 Minuten bis 365 Tage
 nach seinem Zeitpunkt), die vorhandenen Links mit Rolle, Erzeuger, Ablauf (Datum und Uhrzeit), Zustand und
@@ -1062,7 +1115,7 @@ Form haben wie beim Upload. Die Groesse eines Imports ist mit `CANVAZ_MAX_IMPORT
 20 MiB) - deutlich mehr als ein Snapshot, weil Base64 die Bytes um rund ein Drittel aufblaeht.
 
 **In der Oberflaeche** steht das alles in einem eigenen, breiten Overlay statt in einem Abschnitt der
-Informationsleiste - anders als Uebersicht und Freigaben braucht der Verlauf mehr Platz, als dort schmal
+Informationsleiste - anders als die Uebersicht braucht der Verlauf mehr Platz, als dort schmal
 neben der Zeichenflaeche stuende. Geoeffnet wird er ueber ein benanntes Symbol der schwebenden Gruppe am
 Board (Kurzhinweis, Tastatur- und Touch-Zugang); `Escape`, Fokusfang und Fokusrueckgabe an den Ausloeser
 kommen von der Plattform, wie bei jedem Dialog dieser SPA. Das Overlay zeigt den aktuellen Stand und die
@@ -1758,9 +1811,12 @@ Alarm weitergibt.
   Konsistenzzusage: Assets werden nur angelegt, nie geloescht, deshalb liegt ein zwischenzeitlich
   hochgeladenes Bild danach ohne Datensatz im Speicher und stoert niemanden - andersherum verwiese ein
   Datensatz auf Bytes, die im Archiv fehlen.
-- Die Assets als `tar`, nur im Modus `filesystem` aus dem Volume. Im Modus `s3` liegen die Bytes bei einem
-  externen Objektspeicher, den diese Instanz nicht mitliefert; ihre Sicherung ist Sache des Betreibers bzw.
-  des Anbieters, und das Archiv enthaelt dafuer keinen eigenen Stand.
+- Die Assets als `tar`, nur im Modus `filesystem` aus dem Volume, einschliesslich des Instanzlogos (Praefix
+  `branding/`). Anders als Bildassets wird das Logo beim Ersetzen geloescht: ersetzt oder entfernt ein Systemadmin es
+  zwischen Datenbankabzug und Assetabzug, fehlen dem gesicherten Datensatz die Bytes, und das Logo wird nach
+  einer Wiederherstellung neu hochgeladen. Im Modus `s3` liegen die Bytes bei einem externen Objektspeicher,
+  den diese Instanz nicht mitliefert; ihre Sicherung ist Sache des Betreibers bzw. des Anbieters, und das
+  Archiv enthaelt dafuer keinen eigenen Stand.
 - Ein `meta`-Eintrag mit Zeitpunkt, Adapter, Image und angewendeter Schemaversion.
 - Verschluesselt mit `gpg --symmetric` (AES-256) **bevor** das Archiv seinen Platz hat. Die Passphrase steht
   in einer Datei ausserhalb des Repositories (`CANVAZ_BACKUP_PASSPHRASE_FILE`). Aufbewahrung sind 14 Tage;
