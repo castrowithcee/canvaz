@@ -48,12 +48,10 @@ import { normalizeEmail } from '../domain/identity/local-auth.js'
 import {
   DEFAULT_GUEST_ROLE,
   MAX_GUEST_DISPLAY_NAME_LENGTH,
-  MAX_SHARE_LINK_HOURS,
   guestSessionExpiry,
   normalizeGuestDisplayName,
   parseGuestRole,
-  parseShareLinkHours,
-  shareLinkExpiry,
+  parseShareLinkExpiry,
 } from '../domain/board/guest.js'
 import type { BoardAccess, BoardShareLinkEntry, BoardStore } from '../domain/board/repositories.js'
 import { NOT_FOUND, createBoardGate } from './board-access.js'
@@ -335,9 +333,13 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
           if (role === null) {
             return fail(400, 'role muss guest-viewer oder guest-editor sein')
           }
-          const hours = parseShareLinkHours(body['expiresInHours'])
-          if (hours === null) {
-            return fail(400, `expiresInHours muss eine ganze Zahl zwischen 1 und ${String(MAX_SHARE_LINK_HOURS)} sein`)
+          const now = context.now()
+          const expiresAt = parseShareLinkExpiry(body['expiresAt'], now)
+          if (expiresAt === null) {
+            return fail(
+              400,
+              'expiresAt muss ein ISO-8601-Zeitpunkt mit Zeitzone sein, fruehestens in 15 Minuten und hoechstens in 365 Tagen',
+            )
           }
           const denial = deny(asRequester(auth), access.workspace, access, 'grant:manage')
           if (denial !== null) {
@@ -347,11 +349,21 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
           if (isReply(reserved)) {
             return reserved
           }
-          const expiresAt = shareLinkExpiry(context.now(), hours)
-          const created = await issueShareLink(tx, auth, access, { role, expiresAt, recipientCount: reserved.length })
+          const expiry = expiresAt ?? null
+          const created = await issueShareLink(tx, auth, access, {
+            role,
+            expiresAt: expiry,
+            recipientCount: reserved.length,
+          })
           recipients = reserved
           mail = (to, url) =>
-            shareLinkMail(to, { ownerName: auth.user.displayName, boardTitle: access.board.title, role, expiresAt, url })
+            shareLinkMail(to, {
+              ownerName: auth.user.displayName,
+              boardTitle: access.board.title,
+              role,
+              expiresAt: expiry,
+              url,
+            })
           return ok(201, created)
         }, (reply) => sendAfterCommit(mail, recipients)(reply))
       },

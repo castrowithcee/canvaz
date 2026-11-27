@@ -13,15 +13,15 @@ import type { GuestRole } from '../../src/domain/board/guest.js'
 import {
   DEFAULT_GUEST_ROLE,
   GUEST_SESSION_TTL_SECONDS,
-  MAX_SHARE_LINK_HOURS,
+  MAX_SHARE_LINK_LIFETIME_MS,
+  MIN_SHARE_LINK_LIFETIME_MS,
   guestMayWrite,
   guestSessionExpiry,
   isGuestSessionLive,
   isShareLinkLive,
   normalizeGuestDisplayName,
   parseGuestRole,
-  parseShareLinkHours,
-  shareLinkExpiry,
+  parseShareLinkExpiry,
 } from '../../src/domain/board/guest.js'
 import type { BoardAction, BoardDenialReason } from '../../src/domain/board/policy.js'
 import { decideBoardAccess, guestSubject } from '../../src/domain/board/policy.js'
@@ -204,21 +204,18 @@ describe('Gasteingaben und Gueltigkeit', () => {
     expect(normalizeGuestDisplayName(42)).toBeNull()
   })
 
-  it('nimmt als Lebensdauer nur ganze Stunden innerhalb der Obergrenze an', () => {
-    expect(parseShareLinkHours(undefined)).toBeUndefined()
-    expect(parseShareLinkHours(null)).toBeUndefined()
-    expect(parseShareLinkHours(24)).toBe(24)
-    expect(parseShareLinkHours(MAX_SHARE_LINK_HOURS)).toBe(MAX_SHARE_LINK_HOURS)
-    expect(parseShareLinkHours(MAX_SHARE_LINK_HOURS + 1)).toBeNull()
-    expect(parseShareLinkHours(0)).toBeNull()
-    expect(parseShareLinkHours(-1)).toBeNull()
-    expect(parseShareLinkHours(1.5)).toBeNull()
-    expect(parseShareLinkHours('24')).toBeNull()
-  })
-
-  it('rechnet die Lebensdauer in einen Ablaufzeitpunkt um', () => {
-    expect(shareLinkExpiry(jetzt, undefined)).toBeNull()
-    expect(shareLinkExpiry(jetzt, 2)?.toISOString()).toBe('2026-03-01T14:00:00.000Z')
+  it('nimmt als Ablauf nur einen Zeitpunkt mit Offset zwischen 15 Minuten und 365 Tagen an', () => {
+    const at = (ms: number) => new Date(jetzt.getTime() + ms).toISOString()
+    expect(parseShareLinkExpiry(undefined, jetzt)).toBeUndefined()
+    expect(parseShareLinkExpiry(null, jetzt)).toBeUndefined()
+    expect(parseShareLinkExpiry(at(MIN_SHARE_LINK_LIFETIME_MS), jetzt)?.toISOString()).toBe(
+      at(MIN_SHARE_LINK_LIFETIME_MS),
+    )
+    expect(parseShareLinkExpiry(at(MAX_SHARE_LINK_LIFETIME_MS), jetzt)).not.toBeNull()
+    expect(parseShareLinkExpiry(at(MIN_SHARE_LINK_LIFETIME_MS - 1), jetzt)).toBeNull()
+    expect(parseShareLinkExpiry(at(MAX_SHARE_LINK_LIFETIME_MS + 1), jetzt)).toBeNull()
+    expect(parseShareLinkExpiry('2026-03-01T14:00', jetzt)).toBeNull()
+    expect(parseShareLinkExpiry(42, jetzt)).toBeNull()
   })
 
   it('haelt einen Link nur ohne Widerruf und vor dem Ablauf fuer gueltig', () => {

@@ -25,6 +25,7 @@ import { PenLine, RotateCcw } from 'lucide-react'
 import type { GuestSessionResponse } from '../contracts/api.js'
 import { MAX_GUEST_DISPLAY_NAME_LENGTH } from '../domain/board/guest.js'
 import { ApiError, fetchGuestSession, joinBoardAsGuest } from './api.js'
+import { applyGuestAppearance } from './appearance.js'
 import { BoardEditor } from './board/lazy-editor.js'
 import { Button, describedBy, Field, Loading, Notice, PageState } from './ui.js'
 
@@ -159,6 +160,7 @@ export function GuestApp() {
   }, [])
 
   useEffect(load, [load])
+  useEffect(applyGuestAppearance, [])
 
   if (state.kind === 'checking') {
     return (
