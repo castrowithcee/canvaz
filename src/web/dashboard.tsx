@@ -10,16 +10,21 @@
  * steht in der Adresse (siehe `router.tsx`) und ueberlebt damit ein Neuladen und ein Teilen des Links.
  *
  * Von einer externen Freigabe steht hier ausschliesslich, **dass** sie besteht - nie ein Token und nie eine
- * Adresse. Die Verwaltung von Freigaben gehoert nicht hierher.
+ * Adresse. It is not managed here: in the "Mit extern geteilt" view the row menu opens
+ * (only with `canManageShares`, an answer from the server) the same share dialog as the editor
+ * (`BoardSharesOverlay`). The list reloads after closing.
  */
 
+import { EllipsisVertical, Share2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 
 import type { DashboardBoardView, DashboardFilterView, MeResponse, WorkspaceView } from '../contracts/api.js'
 import { DASHBOARD_FILTERS } from '../contracts/api.js'
 import { MAX_BOARD_TITLE_LENGTH } from '../domain/board/model.js'
 import { ApiError, createBoard, fetchDashboard } from './api.js'
+import { BoardSharesOverlay } from './board-shares-overlay.js'
 import { CreateWorkspaceDialog } from './create-workspace.js'
+import { Menu, MenuItem } from './overlays.js'
 import { Link, navigate } from './router.js'
 import { Button, Empty, Loading, Notice } from './ui.js'
 
@@ -89,6 +94,7 @@ export function Dashboard({
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
   const [creatingWorkspace, setCreatingWorkspace] = useState(false)
+  const [managing, setManaging] = useState<DashboardBoardView | null>(null)
 
   const load = useCallback(() => {
     setError(null)
@@ -226,6 +232,11 @@ export function Dashboard({
                 <th scope="col">Zugriff</th>
                 <th scope="col">Meine Rolle</th>
                 <th scope="col">Geaendert</th>
+                {filter === 'shared-externally' && (
+                  <th scope="col">
+                    <span className="visually-hidden">Aktionen</span>
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -251,11 +262,46 @@ export function Dashboard({
                   </td>
                   <td data-label="Meine Rolle">{ROLE_LABELS[board.viewerRole]}</td>
                   <td data-label="Geaendert">{new Date(board.updatedAt).toLocaleString('de-DE')}</td>
+                  {filter === 'shared-externally' && (
+                    <td data-label="Aktionen" className="table__row-menu">
+                      {board.canManageShares && (
+                        <Menu
+                          id={`dashboard-menu-${board.id}`}
+                          label={`Aktionen fuer ${board.title}`}
+                          icon={EllipsisVertical}
+                          variant="quiet"
+                        >
+                          <MenuItem
+                            icon={Share2}
+                            onSelect={() => {
+                              setManaging(board)
+                            }}
+                          >
+                            Freigaben verwalten
+                          </MenuItem>
+                        </Menu>
+                      )}
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+      )}
+      {managing !== null && (
+        <BoardSharesOverlay
+          me={me}
+          boardId={managing.id}
+          boardTitle={managing.title}
+          open
+          // The list reloads once on close, so a revoked row does not vanish under the open dialog.
+          onChanged={() => undefined}
+          onClose={() => {
+            setManaging(null)
+            load()
+          }}
+        />
       )}
       {target !== null && <h3>Neues Board anlegen</h3>}
       {target !== null && (
