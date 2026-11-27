@@ -40,9 +40,11 @@ import {
   BOARD_SHARE_LINK_REVOKE_PATH,
   BOARD_SHARE_LINKS_PATH,
   GUEST_APP_PATH,
+  MAX_SHARE_LINK_RECIPIENTS,
 } from '../contracts/api.js'
 import type { AuthenticatedGuest, BoardShareLink } from '../domain/board/guest.js'
 import type { AuthenticatedSession } from '../domain/identity/model.js'
+import { normalizeEmail } from '../domain/identity/local-auth.js'
 import {
   DEFAULT_GUEST_ROLE,
   MAX_GUEST_DISPLAY_NAME_LENGTH,
@@ -66,8 +68,30 @@ import {
 } from './guest-session.js'
 import type { Route } from './http.js'
 import { readJsonBody, sendError, sendJson } from './http.js'
+import { deliverShareLink, shareLinkMail } from './mailer.js'
+import { createQuota } from './rate-limit.js'
+import type { Reply } from './reply.js'
 import { fail, isReply, ok, readUuid, send } from './reply.js'
 import { asRequester } from './requester.js'
+
+/** Link mails per user and hour. Counts mails (recipients), not requests. */
+const SHARE_LINK_MAILS_PER_HOUR = 20
+const HOUR_MS = 3_600_000
+
+/**
+ * `recipients` from the request body: if absent there are none; otherwise 1 to 5 valid addresses without
+ * duplicates. `null` means invalid.
+ */
+function parseRecipients(raw: unknown): readonly string[] | null {
+  if (raw === undefined) {
+    return []
+  }
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_SHARE_LINK_RECIPIENTS) {
+    return null
+  }
+  const normalized = raw.map(normalizeEmail)
+  return normalized.every((email) => email !== null) ? [...new Set(normalized)] : null
+}
 
 function toShareLinkView(entry: BoardShareLinkEntry): BoardShareLinkView {
   return {
@@ -106,6 +130,55 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
   const { boards: store, config } = context
   const { deny, loadVisibleBoard, withLockedBoard } = createBoardGate(context)
   const allowedOrigin = new URL(config.baseUrl).origin
+  const mailQuota = createQuota({
+    limit: SHARE_LINK_MAILS_PER_HOUR,
+    windowMs: HOUR_MS,
+    now: () => context.now().getTime(),
+  })
+
+  /**
+   * Validates `recipients` and books the mails against the user's limit before a link is created. Returns
+   * the recipients or the finished rejection. Booked even if the transaction fails afterwards:
+   * better a limit too strict than too lax.
+   */
+  function reserveMails(auth: AuthenticatedSession, raw: unknown): readonly string[] | Reply {
+    const recipients = parseRecipients(raw)
+    if (recipients === null) {
+      return fail(400, `recipients muss 1 bis ${String(MAX_SHARE_LINK_RECIPIENTS)} gueltige E-Mail-Adressen nennen`)
+    }
+    if (recipients.length === 0) {
+      return recipients
+    }
+    if (context.mailer === null) {
+      return fail(400, 'Diese Instanz hat keinen Postausgang; recipients ist nicht verfuegbar')
+    }
+    if (!mailQuota.take(auth.user.id, recipients.length)) {
+      return fail(429, `Hoechstens ${String(SHARE_LINK_MAILS_PER_HOUR)} Linkmails pro Stunde`)
+    }
+    return recipients
+  }
+
+  /**
+   * Sends after the commit and outside the board lock and adds the counts to the 201 response.
+   * A failure does not invalidate the link. Address and link never leave this function into the log.
+   */
+  function sendAfterCommit(
+    mail: ((to: string, url: string) => ReturnType<typeof shareLinkMail>) | null,
+    recipients: readonly string[],
+  ): (reply: Reply) => Promise<Reply> {
+    return async (reply) => {
+      const mailer = context.mailer
+      if (mail === null || mailer === null || recipients.length === 0 || reply.status !== 201) {
+        return reply
+      }
+      const created = reply.body as CreateBoardShareLinkResponse
+      const results = await Promise.all(
+        recipients.map((to) => deliverShareLink(mailer, mail(to, created.url))),
+      )
+      const sent = results.filter(Boolean).length
+      return ok(201, { ...created, mails: { sent, failed: results.length - sent } })
+    }
+  }
 
   /**
    * Dieselbe Regel wie beim WebSocket-Upgrade: ein fehlender `Origin` wird angenommen, weil ein Browser ihn
@@ -125,7 +198,12 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
     tx: BoardStore,
     auth: AuthenticatedSession,
     access: BoardAccess,
-    input: { readonly role: BoardShareLink['role']; readonly expiresAt: Date | null; readonly replacesId?: string },
+    input: {
+      readonly role: BoardShareLink['role']
+      readonly expiresAt: Date | null
+      readonly recipientCount: number
+      readonly replacesId?: string
+    },
   ): Promise<CreateBoardShareLinkResponse> {
     // From here on the plaintext token exists only in this variable and in the response.
     const token = createShareToken()
@@ -148,6 +226,8 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
         boardId: access.board.id,
         role: link.role,
         expiresAt: link.expiresAt?.toISOString() ?? null,
+        // Count only: the addresses are stored nowhere.
+        recipientCount: input.recipientCount,
         ...(input.replacesId === undefined ? {} : { replacesShareLinkId: input.replacesId }),
       },
     })
@@ -228,6 +308,7 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
         const body: BoardShareLinksResponse = {
           board: toBoardView(asRequester(auth), access),
           links: links.map(toShareLinkView),
+          mailAvailable: context.mailer !== null,
         }
         send(response, ok(200, body))
       },
@@ -244,6 +325,8 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
       method: 'POST',
       path: BOARD_SHARE_LINK_CREATE_PATH,
       handle: async ({ request, response }) => {
+        let mail: Parameters<typeof sendAfterCommit>[0] = null
+        let recipients: readonly string[] = []
         await withLockedBoard(request, response, async (tx, auth, access, body) => {
           const role = body['role'] === undefined ? DEFAULT_GUEST_ROLE : parseGuestRole(body['role'])
           if (role === null) {
@@ -261,12 +344,27 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
           if (denial !== null) {
             return denial
           }
+          const reserved = reserveMails(auth, body['recipients'])
+          if (isReply(reserved)) {
+            return reserved
+          }
+          const expiry = expiresAt ?? null
           const created = await issueShareLink(tx, auth, access, {
             role,
-            expiresAt: expiresAt ?? null,
+            expiresAt: expiry,
+            recipientCount: reserved.length,
           })
+          recipients = reserved
+          mail = (to, url) =>
+            shareLinkMail(to, {
+              ownerName: auth.user.displayName,
+              boardTitle: access.board.title,
+              role,
+              expiresAt: expiry,
+              url,
+            })
           return ok(201, created)
-        })
+        }, (reply) => sendAfterCommit(mail, recipients)(reply))
       },
     },
 
@@ -323,6 +421,8 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
       path: BOARD_SHARE_LINK_REPLACE_PATH,
       handle: async ({ request, response }) => {
         const revoked: { id: string | null } = { id: null }
+        let mail: Parameters<typeof sendAfterCommit>[0] = null
+        let recipients: readonly string[] = []
         await withLockedBoard(request, response, async (tx, auth, access, body) => {
           const shareLinkId = readUuid(body['shareLinkId'])
           if (shareLinkId === null) {
@@ -336,16 +436,31 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
           if (old === null || old.revokedAt !== null || (old.expiresAt !== null && old.expiresAt <= context.now())) {
             return fail(404, 'Freigabelink nicht gefunden')
           }
+          // Before the revoke: a request over the limit must not end the old link.
+          const reserved = reserveMails(auth, body['recipients'])
+          if (isReply(reserved)) {
+            return reserved
+          }
           // The row is held by the board lock, so the revoke hits the link that was checked.
           await revokeShareLink(tx, auth, access, old.id)
           const created = await issueShareLink(tx, auth, access, {
             role: old.role,
             expiresAt: old.expiresAt,
+            recipientCount: reserved.length,
             replacesId: old.id,
           })
           revoked.id = old.id
+          recipients = reserved
+          mail = (to, url) =>
+            shareLinkMail(to, {
+              ownerName: auth.user.displayName,
+              boardTitle: access.board.title,
+              role: old.role,
+              expiresAt: old.expiresAt,
+              url,
+            })
           return ok(201, created)
-        })
+        }, (reply) => sendAfterCommit(mail, recipients)(reply))
         if (revoked.id !== null) {
           context.realtime.closeShareLink(revoked.id)
         }
