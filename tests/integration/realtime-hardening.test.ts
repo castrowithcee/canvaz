@@ -618,6 +618,9 @@ describe('Backpressure als letztes Mittel', () => {
     const sender = await connect(app, ada)
     const haengt = await connect(app, bob)
     await sender.join(board.id)
+    // `next` also returns older, untaken messages. Taking the solo presence first keeps it from being read
+    // below as the room losing the stalled client.
+    await sender.next('presence', (message) => message.peers.length === 1)
     await haengt.join(board.id)
     await sender.next('presence', (message) => message.peers.length === 2)
 
