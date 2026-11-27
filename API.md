@@ -29,7 +29,8 @@ Was die Leseoperationen je Ziel liefern:
 | Board          | Arbeitsbereich des Boards  | keine                            | genau dieses Board       |
 
 Ein Objekt ausserhalb des Ziels oder ohne Leserecht des Nutzers ergibt dieselbe `404` wie eine erfundene
-Kennung. Boards im Papierkorb gibt es fuer die API nicht.
+Kennung. Boards im Papierkorb erreicht die API nur ueber die Papierkorboperationen unten; ein Board dort zaehlt
+ueber seine erhaltene Ordnerzuordnung zum Ziel.
 
 ## Lebenszyklus
 
@@ -161,6 +162,17 @@ Die Boards im Ziel.
 
 Die Metadaten eines Boards im Ziel, mit denselben Feldern wie in der Boardliste: `{ "board": { … } }`.
 
+### `GET /api/v1/boards/trash?workspaceId=`
+
+Der Papierkorb im Ziel: nur Boards, die im Ziel liegen und die der Nutzer wiederherstellen darf (Board-Owner,
+Owner und Admin des Arbeitsbereichs). Ein Board-Key sieht hoechstens sein eigenes Board.
+
+```json
+{ "boards": [{ "id": "…", "workspaceId": "…", "folderId": null, "title": "…", "status": "active", "deletedAt": "…", "purgeAt": "…" }] }
+```
+
+`purgeAt` ist der Zeitpunkt, ab dem das Board endgueltig entfernt wird. `folderId` bleibt im Papierkorb erhalten.
+
 ## Schreiboperationen
 
 Alle verlangen die Stufe `edit`; ein Key der Stufe `read` erhaelt `403`. Sie sind `POST` mit JSON-Koerper,
@@ -174,6 +186,12 @@ Wohin geschrieben werden darf, entscheidet das Ziel des Keys bei jedem Aufruf ne
 | Arbeitsbereich | ueberall im Arbeitsbereich     | jedes Board darin    | innerhalb des Arbeitsbereichs, auch Wurzel | ueberall im Arbeitsbereich     |
 | Ordner         | nur in einem Ordner des Ziels  | Boards im Teilbaum   | Quelle und Ziel im Teilbaum, nie Wurzel    | nur unter Ordnern des Ziels    |
 | Board          | nicht moeglich                 | genau dieses Board   | nicht moeglich                             | nicht moeglich                 |
+
+| Ziel           | Board in den Papierkorb legen | Board wiederherstellen                 | Papierkorb auflisten     |
+| -------------- | ----------------------------- | -------------------------------------- | ------------------------ |
+| Arbeitsbereich | jedes Board darin             | jedes Board darin                      | alle behandelbaren       |
+| Ordner         | Boards im Teilbaum            | Boards, deren Ordner im Teilbaum liegt | behandelbare im Teilbaum |
+| Board          | genau dieses Board            | genau dieses Board                     | hoechstens dieses Board  |
 
 Ein Ort ausserhalb des Ziels ergibt dieselbe `404` wie eine erfundene Kennung, ebenso ein Board-Key bei
 Anlage und Verschiebung. Ein Wechsel des Arbeitsbereichs, Archivieren sowie Umbenennen, Verschieben und
@@ -220,3 +238,33 @@ Legt einen Ordner an. Verlangt die Rolle Owner oder Admin im Arbeitsbereich.
 `parentId` fehlt oder ist `null`: unmittelbar im Arbeitsbereich. Antwort `201` mit `{ "folder": { … } }` in
 der Form der Ordnerliste. Ein Name ausserhalb von 1 bis 80 Zeichen ergibt `400`; ein doppelter Name unter
 demselben Elternordner oder eine Verschachtelung tiefer als fuenf Ebenen ergibt `409` mit `code: "conflict"`.
+
+### `POST /api/v1/boards/trash`
+
+Legt ein Board in den Papierkorb und schliesst seine offenen Verbindungen wie die Oberflaeche. Verlangt die
+Rolle Board-Owner, Owner oder Admin; ein Member ohne diese Rolle erhaelt dieselbe Ablehnung (`403`) wie in der
+Oberflaeche.
+
+```json
+{ "boardId": "…" }
+```
+
+Antwort `200` mit `{ "board": { … } }` in der Form der Papierkorbliste. Das Board behaelt seinen Ordner und
+bleibt im Ziel des Keys.
+
+### `POST /api/v1/boards/restore`
+
+Holt ein Board aus dem Papierkorb zurueck, mit denselben Rollen. Der Archivzustand bleibt, wie er war.
+
+```json
+{ "boardId": "…" }
+```
+
+Antwort `200` mit `{ "board": { … }, "leftTarget": false }`, das Board in der Form der Boardliste. Existiert
+der urspruengliche Ordner nicht mehr, landet das Board unmittelbar im Arbeitsbereich. Liegt es damit ausserhalb
+des Ziels des Keys (Ordner-Key), wird trotzdem wiederhergestellt und `leftTarget` ist `true`; das Board ist
+dann ueber diesen Key nicht mehr erreichbar.
+
+Ein Board ausserhalb des Ziels, eine erfundene Kennung und ein Board, das nicht im Papierkorb liegt (beim
+Wiederherstellen) oder dort liegt (beim Hineinlegen), ergeben dieselbe `404`. Endgueltiges Loeschen und
+Archivieren gibt es unter `/api/v1` nicht.
