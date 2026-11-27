@@ -736,7 +736,7 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
     },
 
     shareLinks: {
-      async listForBoard(boardId: BoardId): Promise<readonly BoardShareLinkEntry[]> {
+      async listForBoard(boardId: BoardId, now: Date): Promise<readonly BoardShareLinkEntry[]> {
         // Der Zaehler kommt als Unterabfrage mit: eine zweite Abfrage je Zeile waere fuer eine Liste, die
         // ohnehin kurz ist, ein Vielfaches an Rundreisen.
         const result = await db.query<ShareLinkRow & { created_by_display_name: string | null; guest_count: string }>(
@@ -746,8 +746,10 @@ export function createBoardStoreOn(pool: Pool, db: Queryable, inTransaction: boo
              from board_share_links l
              left join users u on u.id = l.created_by_user_id
             where l.board_id = $1
+              and l.revoked_at is null
+              and (l.expires_at is null or l.expires_at > $2)
             order by l.created_at desc, l.id`,
-          [boardId],
+          [boardId, now],
         )
         return result.rows.map((row) => ({
           ...toShareLink(row),

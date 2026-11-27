@@ -437,17 +437,6 @@ function TransferOwnership({
   )
 }
 
-/** Zustand eines Links in einem Wort - abgeleitet aus den Zeitpunkten, die der Server nennt. */
-function linkStatus(link: BoardShareLinkView, now: Date): string {
-  if (link.revokedAt !== null) {
-    return `widerrufen am ${formatDate(link.revokedAt)}`
-  }
-  if (link.expiresAt !== null && new Date(link.expiresAt).getTime() <= now.getTime()) {
-    return `abgelaufen am ${formatDate(link.expiresAt)}`
-  }
-  return 'gueltig'
-}
-
 /**
  * Der Einmal-Hinweis mit dem Klartextlink der letzten Anlage. Er haelt selbst keinen Zustand: Link und
  * Kopierrueckmeldung liegen in `BoardShare`, damit ein Neuladen der Liste ihn nicht aushaengt.
@@ -529,7 +518,7 @@ function ShareLinks({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const now = new Date()
+  const [revoked, setRevoked] = useState<string | null>(null)
   const trimmedHours = hours.trim()
 
   return (
@@ -606,9 +595,10 @@ function ShareLinks({
       </form>
 
       {notice}
+      {revoked !== null && <Notice kind="success" text={revoked} />}
 
       {links.length === 0 ? (
-        <Empty text="Fuer dieses Board gibt es noch keinen Gastlink." />
+        <Empty text="Fuer dieses Board gibt es keine gueltigen Gastlinks." />
       ) : (
         <div className="table-wrap">
           <table className="table">
@@ -619,14 +609,22 @@ function ShareLinks({
                 <th scope="col">Angelegt von</th>
                 <th scope="col">Angelegt</th>
                 <th scope="col">Ablauf</th>
-                <th scope="col">Zustand</th>
                 <th scope="col">Gaeste</th>
                 <th scope="col">Aktion</th>
               </tr>
             </thead>
             <tbody>
               {links.map((link) => (
-                <ShareLinkRow key={link.id} me={me} board={board} link={link} now={now} onChanged={onChanged} />
+                <ShareLinkRow
+                  key={link.id}
+                  me={me}
+                  board={board}
+                  link={link}
+                  onRevoked={() => {
+                    setRevoked(`Der Gastlink vom ${formatDate(link.createdAt)} ist widerrufen.`)
+                    onChanged()
+                  }}
+                />
               ))}
             </tbody>
           </table>
@@ -640,14 +638,12 @@ function ShareLinkRow({
   me,
   board,
   link,
-  now,
-  onChanged,
+  onRevoked,
 }: {
   readonly me: MeResponse
   readonly board: BoardView
   readonly link: BoardShareLinkView
-  readonly now: Date
-  readonly onChanged: () => void
+  readonly onRevoked: () => void
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -658,29 +654,26 @@ function ShareLinkRow({
       <td data-label="Angelegt von">{link.createdByDisplayName ?? '—'}</td>
       <td data-label="Angelegt">{formatDate(link.createdAt)}</td>
       <td data-label="Ablauf">{link.expiresAt === null ? 'kein Ablauf' : formatDate(link.expiresAt)}</td>
-      <td data-label="Zustand">{linkStatus(link, now)}</td>
       <td data-label="Gaeste">{String(link.guestCount)}</td>
       <td data-label="Aktion">
-        {link.revokedAt === null && (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => {
-              setBusy(true)
-              setError(null)
-              revokeBoardShareLink(me.csrfToken, { boardId: board.id, shareLinkId: link.id })
-                .then(onChanged)
-                .catch((cause: unknown) => {
-                  setError(messageOf(cause, 'Der Freigabelink konnte nicht widerrufen werden.'))
-                })
-                .finally(() => {
-                  setBusy(false)
-                })
-            }}
-          >
-            Gastlink vom {formatDate(link.createdAt)} widerrufen
-          </button>
-        )}
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true)
+            setError(null)
+            revokeBoardShareLink(me.csrfToken, { boardId: board.id, shareLinkId: link.id })
+              .then(onRevoked)
+              .catch((cause: unknown) => {
+                setError(messageOf(cause, 'Der Freigabelink konnte nicht widerrufen werden.'))
+              })
+              .finally(() => {
+                setBusy(false)
+              })
+          }}
+        >
+        Gastlink vom {formatDate(link.createdAt)} widerrufen
+        </button>
         {error !== null && <Notice text={error} />}
       </td>
     </tr>

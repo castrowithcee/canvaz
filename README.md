@@ -834,7 +834,7 @@ Felder einzeln auf, statt aus der vollen Sicht etwas wegzulassen: ein spaeter er
 
 **In der Oberflaeche** verwaltet der Owner die Gastlinks im selben Abschnitt wie die internen Freigaben:
 anlegen mit Rollenwahl (Voreinstellung `guest-viewer`) und optionaler Laufzeit in Stunden, die vorhandenen
-Links mit Rolle, Erzeuger, Ablauf, Zustand und Zahl der Beitritte, und der Widerruf je Zeile. Der
+gueltige Links mit Rolle, Erzeuger, Ablauf und Zahl der Beitritte (ohne Spalte "Zustand": widerrufene und abgelaufene Links fehlen in der Liste, ihre Datensaetze bleiben, der Widerruf steht im Audit), und der Widerruf je Zeile mit kurzer Bestaetigung. Der
 Klartextlink erscheint **genau einmal**, unmittelbar nach der Anlage und mit dem Hinweis, dass er danach
 nicht erneut abrufbar ist; die Liste zeigt ihn nie, und abgelegt wird er nirgends.
 

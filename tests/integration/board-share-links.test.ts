@@ -381,6 +381,31 @@ describe('Gastbeitritt', () => {
     expect(JSON.stringify(app.logs)).not.toContain(gast.jar.cookies.get(GUEST_COOKIE))
   })
 
+  it('listet nur gueltige Links: weder widerrufene noch abgelaufene', async () => {
+    const { ada, workspace, board } = await aufbau()
+    const gueltig = await createShareLink(ada, board.id)
+    const widerrufen = await createShareLink(ada, board.id)
+    await createShareLink(ada, board.id, { expiresInHours: 1 })
+    await post(app, ada, BOARD_SHARE_LINK_REVOKE_PATH, { boardId: board.id, shareLinkId: widerrufen.id })
+
+    const ids = async () => {
+      const liste = await ada.jar.fetch(`${app.baseUrl}${BOARD_SHARE_LINKS_PATH}?${BOARD_ID_PARAM}=${board.id}`)
+      return ((await liste.json()) as BoardShareLinksResponse).links.map((link) => link.id)
+    }
+    expect(await ids()).toHaveLength(2)
+    expect(await ids()).not.toContain(widerrufen.id)
+
+    // The clock of the app decides, not the database clock.
+    app.setNow(new Date(Date.now() + 2 * 3600 * 1000))
+    expect(await ids()).toEqual([gueltig.id])
+
+    // Records and audit stay.
+    expect(await pool.query('select 1 from board_share_links')).toHaveProperty('rowCount', 3)
+    expect(
+      (await auditEvents(workspace.id)).filter((event) => event.action === 'board-share-link.revoked'),
+    ).toHaveLength(1)
+  })
+
   it('zaehlt die Beitritte in der Liste des Owners mit', async () => {
     const { ada, board } = await aufbau()
     const link = await createShareLink(ada, board.id)
