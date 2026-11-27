@@ -68,6 +68,8 @@ export type AppRoute =
   | { readonly kind: 'konto' }
   /** Kontenverwaltung der Systemadministration. */
   | { readonly kind: 'konten' }
+  /** Gesperrte Absender der Systemadministration. */
+  | { readonly kind: 'absender' }
   /** Keine Ansicht dieser Anwendung. */
   | { readonly kind: 'unbekannt' }
 
@@ -80,6 +82,7 @@ const DETAILS_SEGMENT = 'details'
 const ACCOUNT_SEGMENT = 'konto'
 const ADMIN_SEGMENT = 'verwaltung'
 const ADMIN_ACCOUNTS_SEGMENT = 'konten'
+const ADMIN_SENDERS_SEGMENT = 'absender'
 const VERSION_PARAM = 'version'
 const PANEL_PARAM = 'bereich'
 const FOLDER_PARAM = 'ordner'
@@ -131,6 +134,9 @@ export function parseRoute(href: string): AppRoute {
   }
   if (first === ADMIN_SEGMENT && second === ADMIN_ACCOUNTS_SEGMENT && third === undefined) {
     return { kind: 'konten' }
+  }
+  if (first === ADMIN_SEGMENT && second === ADMIN_SENDERS_SEGMENT && third === undefined) {
+    return { kind: 'absender' }
   }
   if (first === WORKSPACES_SEGMENT) {
     if (second === undefined) {
@@ -202,6 +208,8 @@ export function routeHref(route: AppRoute): string {
       return `/${ACCOUNT_SEGMENT}`
     case 'konten':
       return `/${ADMIN_SEGMENT}/${ADMIN_ACCOUNTS_SEGMENT}`
+    case 'absender':
+      return `/${ADMIN_SEGMENT}/${ADMIN_SENDERS_SEGMENT}`
   }
 }
 

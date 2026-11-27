@@ -72,6 +72,7 @@ import {
   PasswordSettings,
   RecoveryEmailSettings,
 } from './account.js'
+import { AdminSenderBlocks } from './admin-sender-blocks.js'
 import { AdminUsers } from './admin-users.js'
 import { ApiKeySettings, consumeReturnToAccount } from './api-keys.js'
 import { ApiError, fetchMe, fetchWorkspaces, logout } from './api.js'
@@ -223,6 +224,18 @@ function Header({
                 current={route.kind === 'konten'}
               >
                 Kontenverwaltung
+              </Link>
+            </MenuLinkItem>
+          )}
+          {me.user.isSystemAdmin && (
+            <MenuLinkItem>
+              <Link
+                className="menu__item"
+                role="menuitem"
+                route={{ kind: 'absender' }}
+                current={route.kind === 'absender'}
+              >
+                Gesperrte Absender
               </Link>
             </MenuLinkItem>
           )}
@@ -492,6 +505,12 @@ function Content({
         <AdminUsers me={me} />
       ) : (
         <NotFound forbidden text="Die Kontenverwaltung steht nur der Systemadministration offen." />
+      )
+    case 'absender':
+      return me.user.isSystemAdmin ? (
+        <AdminSenderBlocks me={me} />
+      ) : (
+        <NotFound forbidden text="Die gesperrten Absender stehen nur der Systemadministration offen." />
       )
     case 'unbekannt':
       return <NotFound text="Diese Adresse gehoert zu keiner Ansicht dieser Anwendung." />

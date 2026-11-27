@@ -125,8 +125,13 @@ export interface LoginThrottleRepository {
  * dauerhaften Schluessel.
  */
 export interface SenderFailureCounterRepository {
-  /** Zaehlt einen Fehlschlag und liefert die Zahl im laufenden Fenster, diesen eingeschlossen. */
-  hit(keyHash: string, now: Date, windowStart: Date): Promise<number>
+  /**
+   * Counts one failure and returns the count in the current window, this one included.
+   *
+   * A window that began before `liftedAt` (the address's block was lifted since) is discarded, so the count
+   * restarts at 1.
+   */
+  hit(keyHash: string, now: Date, windowStart: Date, liftedAt: Date | null): Promise<number>
 }
 
 export type SenderBlockAddressKind = 'ipv4' | 'ipv6-64'
@@ -174,11 +179,13 @@ export interface SenderBlockRepository {
     durationHours: number,
     proposalWindowDays: number,
   ): Promise<SenderBlockUpsertResult>
+  /** When the block of this address was last lifted early, or `null` if it never was or was blocked again since. */
+  findLiftedAt(address: string): Promise<Date | null>
   /**
-   * Beendet eine aktive Sperre vorzeitig (Hostbefehl `sender-block unblock`), indem sie ablaeuft. Die Zeile
-   * bleibt als Vorgeschichte bestehen, eine erneute Sperre binnen des Vorschlagsfensters erzeugt also weiter
-   * einen Vorschlag; entfernt wird sie nur ueber die Aufbewahrungsfrist. `false` heisst: keine aktive Sperre
-   * dieser Adresse - eine abgelaufene braucht kein Aufheben mehr.
+   * Lifts an active block early (app and host command `sender-block unblock`) and marks it lifted, so the
+   * failure count of the address restarts. The row stays as history: a new block within the proposal window
+   * still yields a proposal; it is removed only by the retention period. `false` means there is no active
+   * block for this address - an expired one needs no lifting.
    */
   liftActive(address: string, now: Date): Promise<boolean>
 }
