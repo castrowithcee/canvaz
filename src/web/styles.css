@@ -860,6 +860,18 @@
     width: 1.25rem;
   }
 
+  /* Instance logo preview: capped so a large upload never pushes the form out of view. */
+  .branding-logo {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    display: block;
+    max-height: 6rem;
+    max-width: 16rem;
+    object-fit: contain;
+    padding: --spacing(2);
+  }
+
   /* Gestapelte Felder: die Grundform jedes Formulars dieser Anwendung. */
   .stack {
     display: flex;

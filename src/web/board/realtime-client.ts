@@ -99,6 +99,8 @@ export type RealtimeHandlers = {
   onAccess(canWrite: boolean): void
   onSaved(message: SavedMessage): void
   onError(message: Extract<ServerMessage, { type: 'error' }>): void
+  /** The server closed with a code after which no retry follows (`TERMINAL_CLOSE_CODES`). */
+  onTerminalClose(code: number): void
 }
 
 export type BoardRealtime = {
@@ -313,6 +315,7 @@ export function connectBoardRealtime(boardId: string, handlers: RealtimeHandlers
       if (TERMINAL_CLOSE_CODES.includes(event.code)) {
         endgueltig = true
         melde('getrennt')
+        handlers.onTerminalClose(event.code)
         return
       }
       planeVersuch()
