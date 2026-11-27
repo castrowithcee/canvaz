@@ -31,6 +31,10 @@ import type {
   ClientAddressResponse,
   CreateInvitationResponse,
   CreateUserResponse,
+  DecideSenderBlockProposalRequest,
+  LiftSenderBlockRequest,
+  SenderBlockActionResponse,
+  SenderBlocksResponse,
   ApiKeyAccessView,
   RevokeApiKeyResponse,
   SetApiAccessRequest,
@@ -42,6 +46,9 @@ import {
   ADMIN_API_KEY_REVOKE_PATH,
   ADMIN_API_KEYS_PATH,
   ADMIN_CLIENT_ADDRESS_PATH,
+  ADMIN_SENDER_BLOCK_LIFT_PATH,
+  ADMIN_SENDER_BLOCK_PROPOSAL_DECIDE_PATH,
+  ADMIN_SENDER_BLOCKS_PATH,
   ADMIN_USER_API_ACCESS_PATH,
   ADMIN_USER_CREATE_PATH,
   ADMIN_USER_INVITATION_PATH,
@@ -69,6 +76,7 @@ import { deliver, invitationMail, passwordResetMail } from './mailer.js'
 import { clearLoginAttempts } from './login-throttle.js'
 import { hashPassword } from './password.js'
 import { asRequester } from './requester.js'
+import { resolveSenderAddress, senderAddressAsCidr } from './sender-defense.js'
 
 const API_ACCESS_LEVELS: readonly ApiKeyAccessView[] = ['off', 'read', 'edit']
 
@@ -123,6 +131,22 @@ const SELF_RECOVERY_REFUSALS = {
   'user-deactivated': 'Ein deaktiviertes Konto kann nicht freigeschaltet werden.',
   'no-local-password': 'Dieses Konto hat kein lokales Passwort, das sich zuruecksetzen liesse.',
 } as const
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function parseLiftRequest(body: Record<string, unknown> | null): LiftSenderBlockRequest | null {
+  const address = body?.['address']
+  return typeof address === 'string' && address.length > 0 ? { address } : null
+}
+
+function parseDecideRequest(body: Record<string, unknown> | null): DecideSenderBlockProposalRequest | null {
+  const id = body?.['id']
+  const status = body?.['status']
+  // A malformed id would fail the uuid cast in SQL; it is simply not found instead.
+  return typeof id === 'string' && UUID_PATTERN.test(id) && (status === 'accepted' || status === 'rejected')
+    ? { id, status }
+    : null
+}
 
 function readUserId(body: Record<string, unknown> | null): UserId | null {
   const userId = body?.['userId']
@@ -657,6 +681,101 @@ export function createAdminRoutes(context: AppContext): readonly Route[] {
           trustedProxy: config.trustedProxy,
           plausibility: context.addressMonitor.plausibility(),
         }
+        sendJson(response, 200, body)
+      },
+    },
+
+    /** Active sender blocks and open proposals. The only response that names an address; logs never do. */
+    {
+      method: 'GET',
+      path: ADMIN_SENDER_BLOCKS_PATH,
+      handle: async ({ request, response }) => {
+        const auth = await requireSession(context, request, response)
+        if (auth === null || !requireSystemAdmin(context, response, auth)) {
+          return
+        }
+        const { blocks, proposals } = context.identity.senderDefense
+        const [active, pending] = await Promise.all([blocks.listActive(context.now()), proposals.listPending()])
+        const body: SenderBlocksResponse = {
+          blocks: active.map((block) => ({
+            address: senderAddressAsCidr(block),
+            kind: block.kind,
+            reason: block.reason,
+            failureCount: block.failureCount,
+            blockedAt: block.createdAt.toISOString(),
+            expiresAt: block.expiresAt.toISOString(),
+          })),
+          proposals: pending.map((proposal) => ({
+            id: proposal.id,
+            address: senderAddressAsCidr(proposal),
+            kind: proposal.kind,
+            reason: proposal.reason,
+            firstBlockedAt: proposal.firstBlockedAt.toISOString(),
+            secondBlockedAt: proposal.secondBlockedAt.toISOString(),
+          })),
+        }
+        sendJson(response, 200, body)
+      },
+    },
+
+    /** Lifts an active block and restarts the failure count of the address, like the host command. */
+    {
+      method: 'POST',
+      path: ADMIN_SENDER_BLOCK_LIFT_PATH,
+      handle: async ({ request, response }) => {
+        const auth = await requireSession(context, request, response)
+        if (auth === null || !requireCsrfToken(context, request, response, asRequester(auth))) {
+          return
+        }
+        if (!requireSystemAdmin(context, response, auth)) {
+          return
+        }
+        const parsed = parseLiftRequest(await readJsonBody(request))
+        // The response shows an IPv6 prefix as `<prefix>::/64`; the stored form is derived from the address part.
+        const resolved = parsed === null ? null : resolveSenderAddress(parsed.address.replace(/\/64$/, ''))
+        if (resolved === null) {
+          sendError(response, 400, 'Eine gueltige IPv4- oder IPv6-Adresse wird erwartet')
+          return
+        }
+        if (!(await context.identity.senderDefense.blocks.liftActive(resolved.address, context.now()))) {
+          sendError(response, 404, 'Keine aktive Sperre fuer diese Adresse')
+          return
+        }
+        logger('info', 'admin.sender-block.lifted', { actorId: auth.user.id, kind: resolved.kind })
+        const body: SenderBlockActionResponse = { status: 'ok' }
+        sendJson(response, 200, body)
+      },
+    },
+
+    /** Marks an open proposal as accepted or rejected. Canvaz blocks nothing permanently either way. */
+    {
+      method: 'POST',
+      path: ADMIN_SENDER_BLOCK_PROPOSAL_DECIDE_PATH,
+      handle: async ({ request, response }) => {
+        const auth = await requireSession(context, request, response)
+        if (auth === null || !requireCsrfToken(context, request, response, asRequester(auth))) {
+          return
+        }
+        if (!requireSystemAdmin(context, response, auth)) {
+          return
+        }
+        const parsed = parseDecideRequest(await readJsonBody(request))
+        if (parsed === null) {
+          sendError(response, 400, 'id und status (accepted, rejected) werden erwartet')
+          return
+        }
+        const decided = await context.identity.senderDefense.proposals.decide(parsed.id, parsed.status, context.now())
+        if (decided === null) {
+          sendError(response, 404, 'Kein offener Vorschlag mit dieser Kennung')
+          return
+        }
+        logger('info', 'admin.sender-block-proposal.decided', {
+          actorId: auth.user.id,
+          proposalId: decided.id,
+          kind: decided.kind,
+          status: decided.status,
+        })
+        const body: SenderBlockActionResponse = { status: 'ok' }
         sendJson(response, 200, body)
       },
     },
