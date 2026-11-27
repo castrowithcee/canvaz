@@ -307,8 +307,10 @@ dann nicht. Mit Postausgang kommen diese Nachrichten dazu, jede an eine Adresse 
 | Passwort per Ruecksetzungslink gesetzt                                        | an die bestaetigte Wiederherstellungsadresse: die Mitteilung - **ohne** Link und Passwort   |
 | Zweiter Faktor des Systemadmins geaendert oder per Wiederherstellung entfernt | die Mitteilung, dass es geschah - **ohne** Geheimnis oder Ersatzcode                        |
 | `admin:recover` ausgefuehrt                                                   | die Mitteilung an den Systemadmin - **ohne** den Wiederherstellungslink                     |
+| Gastlink angelegt oder ersetzt, mit Empfaengern                               | an bis zu fuenf vom Owner genannte Adressen: der Link, Boardtitel, Rolle und Ablauf         |
 
-Ein Passwort steht in keiner Nachricht. Ein Postfach ist kein Ort fuer ein Geheimnis, das ohne zweiten
+Die Linkmail ist die einzige Nachricht an Adressen, die nicht zu einem Konto gehoeren (siehe
+[Oeffentliche Gastfreigaben](#oeffentliche-gastfreigaben)). Ein Passwort steht in keiner Nachricht. Ein Postfach ist kein Ort fuer ein Geheimnis, das ohne zweiten
 Faktor Zugang gibt; das neue Initialpasswort geht den Weg, den die Administration mit dem Konto vereinbart
 hat.
 
@@ -607,6 +609,20 @@ Aenderung steht mit dem angemeldeten Konto im Log (`branding.settings.changed`, 
 Gepflegt wird es auf der Seite "Branding" der Systemadministration, neben der Kontenverwaltung und nur fuer
 Systemadmins: Name, Auswahl der Akzentfarbe mit Vorschau, Logo hochladen mit Vorschau und Entfernen.
 
+### Anzeige
+
+Der Client laedt `GET /api/branding` einmal pro Seitenaufruf. Logo (als `<img>` von der eigenen Herkunft, der
+Instanzname ist sein Alternativtext) und Instanzname ersetzen "Canvaz" in der Kopfzeile der Haupt-Ansicht, auf
+Anmeldung, Einladung, Wiederherstellung und Passwortruecksetzung sowie bei Gastbeitritt und Gastansicht. Der
+Seitentitel nennt den Instanznamen. Ohne gepflegtes Branding oder bei einem Ladefehler bleibt alles wie
+zuvor: "Canvaz", kein Logo, der Standardakzent.
+
+Rangfolge der Akzentwahl: eigene Wahl des Nutzers vor Akzent der Instanz vor Standardakzent (`violett`).
+`GET /api/me` liefert fuer einen Nutzer ohne gespeicherte Wahl den Instanz-Akzent als wirksame Wahl, ohne eine
+Zeile in `user_appearance` anzulegen. Anonyme Seiten und die Gastansicht setzen den Akzent aus dem oeffentlichen
+Branding, die Gastansicht bleibt dabei hell. Die Einstellungen nennen den Standard der Instanz bei der
+Akzentfarbe.
+
 ### Endpunkte
 
 | Methode und Pfad                         | Zugriff               | Wirkung                                                                                |
@@ -809,9 +825,12 @@ Eine Freigabe kann sich **nicht selbst weitergeben**: ein `editor` verwaltet kei
 jede Abstufung mit einem Schritt wieder aufgehoben. Und der Owner kann sich seine Ownerschaft nicht
 entziehen - dafuer gibt es nur die Uebertragung.
 
-**In der Oberflaeche** steht die Freigabeverwaltung als Abschnitt im Fluss der Boardliste und nicht als
-modaler Dialog - dieselbe Entscheidung wie ueberall sonst in dieser SPA: kein Fokuskaefig, keine eigene
-Escape-Behandlung, jede Ueberschrift bleibt in der Dokumentstruktur. Der Abschnitt zeigt den Owner, die
+**In der Oberflaeche** steht die Freigabeverwaltung in einem eigenen, breiten Dialog (`Dialog wide`, wie der
+Versionsverlauf), der nur zu einem Board und nicht zum Editorzustand gehoert. Geoeffnet wird er ueber die
+schwebende Aktion _Freigeben_ (nur mit Verwaltungsrecht), ueber den Knopf der Zusammenfassung _Freigaben_ in
+den Board-Informationen (Zahl der internen Freigaben und gueltigen Gastlinks, soweit der Nutzer sie sehen
+darf) und ueber Direktlinks mit `?bereich=freigaben`, auch aus der Bibliothek; `Escape`, Fokusfang und
+Fokusrueckgabe kommen von der Plattform, und der Inhalt laedt nur, solange der Dialog offen ist. Der Dialog zeigt den Owner, die
 vorhandenen Freigaben mit ihrer Rolle, die Auswahl der Empfaenger aus der Mitgliederliste des
 Arbeitsbereichs und zu jeder Rolle einen Satz ueber ihre Wirkung. Die Uebertragung der Ownerschaft geschieht
 in zwei Schritten: Auswahl, dann eine ausdrueckliche Bestaetigung, die benennt, was danach gilt.
@@ -821,6 +840,12 @@ Angeboten wird der Abschnitt dort, wo die Serverantwort die Verwaltung ohnehin t
 (`mayChangeBoard`): ein `viewer` bekommt diese Schaltflaechen gar nicht erst angeboten. Das ist
 Bequemlichkeit und keine Grenze: **entschieden wird jede einzelne Aktion serverseitig**, und jede Ablehnung
 erscheint als Text statt zu verschwinden.
+
+**Im Dashboard** hat jede Zeile der Ansicht _Mit extern geteilt_ (`?filter=shared-externally`), deren Freigaben der
+Nutzer verwalten darf, ein Optionsmenue mit _Freigaben verwalten_. Es oeffnet denselben Dialog wie der Editor,
+ohne das Board zu oeffnen; nach dem Schliessen laedt die Liste neu, ein Board ohne gueltigen Gastlink faellt
+heraus. Das Recht kommt hier nicht aus `viewerRole`, sondern als `canManageShares` je Zeile der
+Dashboard-Antwort, gebildet aus derselben Policy-Entscheidung (`grant:manage`) wie in den Endpunkten.
 
 ### Oeffentliche Gastfreigaben
 
@@ -836,12 +861,27 @@ Stelle, an der Boardinhalt ohne Workspace-Mitgliedschaft erreichbar wird, und de
   Datenbank oeffnet kein Board.
 - **Das Klartexttoken erscheint genau einmal**, in der Antwort auf das Anlegen. Es laesst sich danach
   nirgends wieder abrufen - auch nicht vom Owner, auch nicht ueber die Liste. Ein verlorener Link wird
-  widerrufen und neu angelegt.
+  durch einen neuen **ersetzt** (oder widerrufen und neu angelegt).
 - Die geteilte Adresse traegt es im **Fragment** (`/gast#<token>`). Ein Fragment sendet der Browser nicht
   mit; damit erreicht das Token weder ein Zugriffsprotokoll noch einen Referrer noch einen Zwischenspeicher.
   Es steht ebenso wenig in einer Protokollzeile, einem Auditereignis oder einer Fehlermeldung.
 - **Optionaler Ablauf, jederzeitiger Widerruf.** Ohne Ablaufangabe laeuft ein Link nicht von selbst ab; das
   steht so in der Liste, und der Widerruf bleibt sein Ende.
+- **Ersetzen statt Wiederanzeigen.** `POST /api/boards/share-links/replace` widerruft einen gueltigen Link und
+  legt in derselben Transaktion unter derselben Boardsperre einen neuen mit gleicher Rolle und gleichem
+  `expires_at` an. Die Antwort ist die der Anlage (201, neue Adresse genau einmal). Ein widerrufener,
+  abgelaufener, fremder oder erfundener Link ergibt dieselbe 404. Die Verbindungen des alten Links fallen wie
+  beim Widerruf erst nach dem Commit; das Audit nennt `board-share-link.revoked` fuer den alten und
+  `board-share-link.created` mit `replacesShareLinkId` fuer den neuen Link.
+- **Link per E-Mail.** Anlegen und Ersetzen nehmen optional `recipients` (1 bis 5 Adressen, Duplikate fallen
+  weg). Canvaz sendet den Link **nach dem Commit** und ausserhalb der Boardsperre; die 201-Antwort nennt
+  zusaetzlich `mails: { sent, failed }`, und ein Fehlschlag macht den Link nicht ungueltig. Die Adresse
+  wird trotzdem einmal zum Kopieren angezeigt. Empfaengeradressen werden **nicht gespeichert** und stehen
+  weder in Audit noch Log, auch nicht im Fehlerfall; das Audit `board-share-link.created` traegt nur
+  `recipientCount`. Je Nutzer gelten hoechstens 20 Linkmails pro Stunde (gezaehlt werden Mails, nicht
+  Anfragen, im Speicher der Instanz); eine Anfrage darueber ergibt 429, ohne dass ein Link entsteht oder
+  beim Ersetzen der alte widerrufen wird. Ohne Postausgang ergibt `recipients` 400, und die Liste meldet
+  `mailAvailable: false`, worauf die Oberflaeche das Feld weglaesst.
 
 Aus einem Link entsteht beim Beitritt eine **Gastsession**: serverseitig, widerrufbar, mit einem selbst
 gewaehlten Anzeigenamen und **vier Stunden** Lebensdauer. Sie ueberlebt ihren Link nie - laeuft der Link
@@ -879,13 +919,16 @@ beiden Sichten entstehen an genau einer Stelle (`src/server/board-views.ts`), un
 Felder einzeln auf, statt aus der vollen Sicht etwas wegzulassen: ein spaeter ergaenztes Feld der
 `BoardView` landet dadurch nicht von selbst beim Gast.
 
-**In der Oberflaeche** verwaltet der Owner die Gastlinks im selben Abschnitt wie die internen Freigaben:
+**In der Oberflaeche** verwaltet der Owner die Gastlinks im selben Dialog wie die internen Freigaben:
 anlegen mit Rollenwahl (Voreinstellung `guest-viewer`) und optionalem Ablaufzeitpunkt (Datum und Uhrzeit
 oder Schnellwahl 1, 7 oder 30 Tage; Voreinstellung: kein Ablauf; der Server verlangt 15 Minuten bis 365 Tage
 nach seinem Zeitpunkt), die vorhandenen Links mit Rolle, Erzeuger, Ablauf (Datum und Uhrzeit), Zustand und
-Zahl der Beitritte, und der Widerruf je Zeile. Der Klartextlink erscheint **genau einmal**, unmittelbar nach
-der Anlage und mit dem Hinweis, dass er danach nicht erneut abrufbar ist; die Liste zeigt ihn nie, und
-abgelegt wird er nirgends.
+Zahl der Beitritte, und je Zeile Widerrufen und Ersetzen (mit Bestaetigung, die benennt, dass die bisherige
+Adresse fuer niemanden mehr funktioniert und offene Gastsitzungen enden). Mit Postausgang bietet das Formular
+beim Anlegen und die Bestaetigung beim Ersetzen das Feld "An E-Mail-Adressen senden"; der Einmal-Hinweis
+nennt danach, an wie viele Adressen versandt wurde und wie viele Mails scheiterten. Der Klartextlink erscheint
+**genau einmal**, unmittelbar nach der Anlage und mit dem Hinweis, dass er danach nicht erneut abrufbar ist,
+auch der eines Ersatzlinks; die Liste zeigt ihn nie, und abgelegt wird er nirgends.
 
 **Ein Gast oeffnet `/gast#<token>`.** Die SPA behandelt das als eigene Route noch vor jedem Sitzungszustand:
 sie fragt `/api/me` gar nicht erst, liest das Token aus dem Fragment, fragt nach einem Anzeigenamen, tritt
@@ -924,6 +967,7 @@ Die Antwort entsteht in der Transaktion und wird erst nach dem Commit gesendet.
 | GET     | `/api/boards/share-links?boardId=`             | `grant:manage`                                                        | 404 unsichtbar, sonst 403 | —                      |
 | POST    | `/api/boards/share-links/create`               | `grant:manage`                                                        | 404 unsichtbar, sonst 403 | —                      |
 | POST    | `/api/boards/share-links/revoke`               | `grant:manage`                                                        | 404 unsichtbar, sonst 403 | —                      |
+| POST    | `/api/boards/share-links/replace`              | `grant:manage`                                                        | 404 unsichtbar, sonst 403 | —                      |
 | GET     | `/api/boards/versions?boardId=`                | `board:read`                                                          | 404                       | —                      |
 | GET     | `/api/boards/versions/scene?boardId=&version=` | `board:read`                                                          | 404                       | —                      |
 | POST    | `/api/boards/versions/restore`                 | `scene:restore`                                                       | 404 unsichtbar, sonst 403 | 409                    |
@@ -1090,7 +1134,7 @@ Form haben wie beim Upload. Die Groesse eines Imports ist mit `CANVAZ_MAX_IMPORT
 20 MiB) - deutlich mehr als ein Snapshot, weil Base64 die Bytes um rund ein Drittel aufblaeht.
 
 **In der Oberflaeche** steht das alles in einem eigenen, breiten Overlay statt in einem Abschnitt der
-Informationsleiste - anders als Uebersicht und Freigaben braucht der Verlauf mehr Platz, als dort schmal
+Informationsleiste - anders als die Uebersicht braucht der Verlauf mehr Platz, als dort schmal
 neben der Zeichenflaeche stuende. Geoeffnet wird er ueber ein benanntes Symbol der schwebenden Gruppe am
 Board (Kurzhinweis, Tastatur- und Touch-Zugang); `Escape`, Fokusfang und Fokusrueckgabe an den Ausloeser
 kommen von der Plattform, wie bei jedem Dialog dieser SPA. Das Overlay zeigt den aktuellen Stand und die
@@ -1335,7 +1379,7 @@ Aenderung und Nachweis entstehen in derselben Transaktion; eine abgelehnte Aende
 
 Fuer Gastfreigaben gibt es drei Ereignisse mit `targetType: 'board-share-link'` und dem Link als Ziel:
 `board-share-link.created` und `board-share-link.revoked` (Akteur ist der Owner, `details` traegt Board,
-Rolle und Ablauf) sowie `board-guest.joined`. Dieses eine Ereignis hat **keinen** internen Akteur - ein Gast
+Rolle und Ablauf; beim Ersetzen nennt das neue Ereignis `replacesShareLinkId`) sowie `board-guest.joined`. Dieses eine Ereignis hat **keinen** internen Akteur - ein Gast
 ist kein Nutzer -, und `details` nennt Board, Rolle, Gastsession und den gewaehlten Anzeigenamen. **Kein
 Token steht in einem dieser Ereignisse**, weder das des Links noch das der Gastsession.
 
@@ -1905,7 +1949,7 @@ Workspace-Rolle, Boardrolle, Workspace- und Boardstatus sowie Nutzerstatus gegen
 Erwartungstabelle.
 
 `tests/integration/board-share-links.test.ts` prueft die Gastfreigaben auf demselben Weg: anlegen, auflisten,
-widerrufen, beitreten, ablaufen; dass das Token weder in der Liste noch in der Datenbank, im Log oder im
+widerrufen, ersetzen, beitreten, ablaufen; dass das Token weder in der Liste noch in der Datenbank, im Log oder im
 Nachweis auftaucht; dass **keine** Antwort an einen Gast eine Workspacekennung, eine interne Nutzerkennung
 oder einen internen Anzeigenamen enthaelt - gemessen am Rohkoerper der Antwort und am gesamten
 Nachrichtenprotokoll seiner WebSocket-Verbindung; dass ein Gast an keinem fremden Board, keinem Workspace-,

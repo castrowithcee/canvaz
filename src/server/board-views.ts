@@ -28,7 +28,7 @@ import type {
 } from '../contracts/api.js'
 import type { SceneSnapshot } from '../contracts/scene.js'
 import type { EffectiveBoardRole } from '../domain/board/policy.js'
-import { effectiveBoardRole } from '../domain/board/policy.js'
+import { decideBoardAccess, effectiveBoardRole } from '../domain/board/policy.js'
 import type { BoardAccess } from '../domain/board/repositories.js'
 import type { Requester } from './requester.js'
 import { boardSubject } from './requester.js'
@@ -109,6 +109,9 @@ export function toDashboardBoardView(
     accessOrigin: origin,
     sharedInternally: extras.sharedInternally,
     sharedExternally: extras.sharedExternally,
+    // Same decision the share endpoints take, not a re-derivation from `viewerRole`.
+    canManageShares: decideBoardAccess(boardSubject(requester, access), access.workspace, access.board, 'grant:manage')
+      .allowed,
   }
 }
 

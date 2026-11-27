@@ -352,7 +352,7 @@ export type MeResponse = {
   readonly user: UserView
   /** An die Session gebundenes Token fuer zustandsaendernde Anfragen. */
   readonly csrfToken: string
-  /** Das eigene Erscheinungsbild; ohne gespeicherte Wahl `DEFAULT_APPEARANCE`. */
+  /** The user's effective appearance; without a stored choice `DEFAULT_APPEARANCE` with the instance accent, if set. */
   readonly appearance: AppearanceView
   readonly secondFactor: SecondFactorView
   readonly selfRecovery: SelfRecoveryView | null
@@ -950,6 +950,13 @@ export type DashboardBoardView = BoardView & {
   readonly sharedInternally: boolean
   /** Wahr, wenn mindestens ein gueltiger, nicht widerrufener Gastlink besteht. */
   readonly sharedExternally: boolean
+  /**
+   * True if the requester may manage this board's shares (`grant:manage`).
+   *
+   * A policy answer so the UI offers the entry point only where it succeeds. Not a
+   * boundary: listing and revoking guest links are still decided at the endpoint.
+   */
+  readonly canManageShares: boolean
 }
 
 export type DashboardResponse = {
@@ -1275,10 +1282,12 @@ export type TransferBoardOwnershipRequest = {
 /* Oeffentliche Gastfreigaben                                                                            */
 /* ---------------------------------------------------------------------------------------------------- */
 
-/** Freigabelinks eines Boards: lesen (GET), anlegen und widerrufen (POST). Alle drei `grant:manage`. */
+/** Share links of a board: read (GET), create, revoke and replace (POST). All `grant:manage`. */
 export const BOARD_SHARE_LINKS_PATH = `${API_BASE_PATH}/boards/share-links`
 export const BOARD_SHARE_LINK_CREATE_PATH = `${API_BASE_PATH}/boards/share-links/create`
 export const BOARD_SHARE_LINK_REVOKE_PATH = `${API_BASE_PATH}/boards/share-links/revoke`
+/** Revokes the link and creates a new one in the same step; response as for create (201). */
+export const BOARD_SHARE_LINK_REPLACE_PATH = `${API_BASE_PATH}/boards/share-links/replace`
 
 /** Beitritt ueber einen Freigabelink. Der einzige Endpunkt der Boardebene ohne jede Sitzung. */
 export const BOARD_GUEST_JOIN_PATH = `${API_BASE_PATH}/boards/guest/join`
@@ -1314,7 +1323,12 @@ export type BoardShareLinkView = {
 export type BoardShareLinksResponse = {
   readonly board: BoardView
   readonly links: readonly BoardShareLinkView[]
+  /** `false` without an outbox: link mail is not sent, and `recipients` yields 400. */
+  readonly mailAvailable: boolean
 }
+
+/** Maximum recipients per create or replace. */
+export const MAX_SHARE_LINK_RECIPIENTS = 5
 
 export type CreateBoardShareLinkRequest = {
   readonly boardId: string
@@ -1325,6 +1339,15 @@ export type CreateBoardShareLinkRequest = {
    * does not expire by itself.
    */
   readonly expiresAt?: string
+  /** 1 to 5 addresses the server sends the link to. They are stored nowhere. */
+  readonly recipients?: readonly string[]
+}
+
+/** Replace: like create, takes optional `recipients`; role and expiry stay those of the old link. */
+export type ReplaceBoardShareLinkRequest = {
+  readonly boardId: string
+  readonly shareLinkId: string
+  readonly recipients?: readonly string[]
 }
 
 /**
@@ -1337,6 +1360,8 @@ export type CreateBoardShareLinkRequest = {
 export type CreateBoardShareLinkResponse = {
   readonly link: BoardShareLinkView
   readonly url: string
+  /** Only with `recipients`: how many mails the outbox accepted and how many it did not. */
+  readonly mails?: { readonly sent: number; readonly failed: number }
 }
 
 export type RevokeBoardShareLinkRequest = {

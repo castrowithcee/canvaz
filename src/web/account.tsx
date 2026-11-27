@@ -34,6 +34,7 @@ import {
   saveAppearance,
   setRecoveryEmail,
 } from './api.js'
+import { BrandHeading, useAnonymousAppearance, useBranding } from './branding.js'
 import { actionClass, Button, Field, IconButton, Notice } from './ui.js'
 
 function messageOf(cause: unknown, fallback: string): string {
@@ -290,7 +291,7 @@ export function LoginView({ error, onSignedIn }: { readonly error: string | null
 
   return (
     <main className="shell">
-      <h1>Canvaz</h1>
+      <BrandHeading />
       {error !== null && <Notice text={error} />}
       <section aria-labelledby="anmeldung-lokal">
         <h2 id="anmeldung-lokal">Anmelden</h2>
@@ -342,6 +343,7 @@ const REDEEM_TEXTS = {
 } as const
 
 export function InviteApp({ purpose }: { readonly purpose: keyof typeof REDEEM_TEXTS }) {
+  useAnonymousAppearance()
   const texts = REDEEM_TEXTS[purpose]
   const token = useFragmentToken()
   const [password, setPassword] = useState('')
@@ -351,7 +353,7 @@ export function InviteApp({ purpose }: { readonly purpose: keyof typeof REDEEM_T
   if (token === null) {
     return (
       <main className="shell">
-        <h1>Canvaz</h1>
+        <BrandHeading />
         <Notice text={texts.incomplete} />
       </main>
     )
@@ -359,7 +361,7 @@ export function InviteApp({ purpose }: { readonly purpose: keyof typeof REDEEM_T
 
   return (
     <main className="shell">
-      <h1>Canvaz</h1>
+      <BrandHeading />
       <section aria-labelledby="einladung">
         <h2 id="einladung">{texts.heading}</h2>
         <form
@@ -416,6 +418,7 @@ function useFragmentToken(): string | null {
  * Anmeldung mit dem neuen Passwort.
  */
 export function PasswordResetApp() {
+  useAnonymousAppearance()
   const token = useFragmentToken()
   const [password, setPassword] = useState('')
   const [done, setDone] = useState(false)
@@ -424,7 +427,7 @@ export function PasswordResetApp() {
 
   return (
     <main className="shell">
-      <h1>Canvaz</h1>
+      <BrandHeading />
       <section aria-labelledby="zuruecksetzen">
         <h2 id="zuruecksetzen">Passwort zuruecksetzen</h2>
         {token === null && <Notice text="Dieser Link ist unvollstaendig. Bitte den vollstaendigen Link verwenden." />}
@@ -481,6 +484,7 @@ export function PasswordResetApp() {
 
 /** Bestaetigen einer Wiederherstellungsadresse. Ein Klick statt eines automatischen Aufrufs beim Oeffnen. */
 export function ConfirmRecoveryEmailApp() {
+  useAnonymousAppearance()
   const token = useFragmentToken()
   const [done, setDone] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -488,7 +492,7 @@ export function ConfirmRecoveryEmailApp() {
 
   return (
     <main className="shell">
-      <h1>Canvaz</h1>
+      <BrandHeading />
       <section aria-labelledby="adresse-bestaetigen">
         <h2 id="adresse-bestaetigen">Wiederherstellungsadresse bestaetigen</h2>
         {token === null && <Notice text="Dieser Link ist unvollstaendig. Bitte den vollstaendigen Link verwenden." />}
@@ -719,6 +723,7 @@ export function AppearanceSettings({
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState(false)
   const [busy, setBusy] = useState(false)
+  const instanceAccent = useBranding()?.accent ?? null
 
   return (
     <section aria-labelledby="erscheinungsbild">
@@ -784,6 +789,12 @@ export function AppearanceSettings({
               </label>
             ))}
           </div>
+          {instanceAccent !== null && (
+            <p className="hint">
+              Standard dieser Instanz: {ACCENT_LABELS[instanceAccent]}. Er gilt, solange du keine eigene Farbe
+              speicherst.
+            </p>
+          )}
         </fieldset>
         <p>
           <Button variant="primary" icon={Palette} type="submit" busy={busy}>

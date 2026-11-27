@@ -1,9 +1,9 @@
 /**
  * Freigabeverwaltung eines Boards: interne Freigaben, Ownerschaft und oeffentliche Gastlinks.
  *
- * Ein Abschnitt im Fluss seiner Umgebung und kein eigener Dialog: die Ueberschriften bleiben in der
- * Dokumentstruktur, und weder Fokuskaefig noch Escape werden hier nachgebaut. Der Abschnitt steht heute im
- * Bereich "Freigaben" der Informationsleiste (`board-panel.tsx`); sie traegt Name und Schliessweg.
+ * A section in the flow of its surroundings: the headings stay in the document structure, and neither
+ * focus trap nor Escape is rebuilt here. It sits in its own wide dialog (`board-shares-overlay.tsx`),
+ * which carries the name (level 2) and the way to close.
  *
  * Die Oberflaeche entscheidet nichts. Sie bietet an, was der Server laut seiner Antwort ohnehin traegt, und
  * zeigt jede Ablehnung als Text - der Owner steht in `board.ownerUserId`, die Freigaben kommen aus
@@ -23,6 +23,7 @@ import type {
   BoardGrantView,
   BoardShareLinkView,
   BoardView,
+  CreateBoardShareLinkResponse,
   GuestRoleView,
   MeResponse,
   WorkspaceMemberView,
@@ -38,6 +39,7 @@ import {
   fetchBoardShareLinks,
   fetchWorkspaceMembers,
   revokeBoardGrant,
+  replaceBoardShareLink,
   revokeBoardShareLink,
   shareBoard,
   transferBoardOwnership,
@@ -460,17 +462,57 @@ function linkStatus(link: BoardShareLinkView, now: Date): string {
   return 'gueltig'
 }
 
+/** The "An E-Mail-Adressen senden" field: separators are comma, semicolon and whitespace. */
+function parseRecipientInput(text: string): readonly string[] | undefined {
+  const list = text.split(/[\s,;]+/).filter((part) => part !== '')
+  return list.length === 0 ? undefined : list
+}
+
+function RecipientsField({
+  id,
+  value,
+  onChange,
+}: {
+  readonly id: string
+  readonly value: string
+  readonly onChange: (value: string) => void
+}) {
+  return (
+    <>
+      <div className="field">
+        <label htmlFor={id}>An E-Mail-Adressen senden (optional)</label>
+        <input
+          id={id}
+          type="text"
+          autoComplete="off"
+          aria-describedby={`${id}-hint`}
+          value={value}
+          onChange={(event) => {
+            onChange(event.target.value)
+          }}
+        />
+      </div>
+      <p className="hint" id={`${id}-hint`}>
+        Bis zu fuenf Adressen, mit Komma getrennt. Canvaz sendet den Link einmal und speichert die Adressen
+        nicht.
+      </p>
+    </>
+  )
+}
+
 /**
  * Der Einmal-Hinweis mit dem Klartextlink der letzten Anlage. Er haelt selbst keinen Zustand: Link und
  * Kopierrueckmeldung liegen in `BoardShare`, damit ein Neuladen der Liste ihn nicht aushaengt.
  */
 function CreatedLinkNotice({
   url,
+  mails,
   copied,
   onCopied,
   onHide,
 }: {
   readonly url: string
+  readonly mails: CreateBoardShareLinkResponse['mails']
   readonly copied: string | null
   readonly onCopied: (message: string) => void
   readonly onHide: () => void
@@ -479,8 +521,15 @@ function CreatedLinkNotice({
     <Notice kind="success">
       <p>
         <strong>Dieser Link erscheint genau einmal.</strong> Er laesst sich danach nicht erneut abrufen - auch
-        nicht ueber diese Liste. Kopiere ihn jetzt; ist er verloren, widerrufe ihn und lege einen neuen an.
+        nicht ueber diese Liste. Kopiere ihn jetzt; ist er verloren, ersetze ihn durch einen neuen.
       </p>
+      {mails !== undefined && (
+        <p>
+          {mails.sent > 0 && `An ${String(mails.sent)} ${mails.sent === 1 ? 'Adresse' : 'Adressen'} versandt. `}
+          {mails.failed > 0 &&
+            `${String(mails.failed)} ${mails.failed === 1 ? 'Mail konnte' : 'Mails konnten'} nicht versandt werden.`}
+        </p>
+      )}
       <div className="field">
         <label htmlFor="share-link-url">Freigabelink</label>
         <input
@@ -523,6 +572,7 @@ function ShareLinks({
   me,
   board,
   links,
+  mailAvailable,
   notice,
   onCreated,
   onChanged,
@@ -530,15 +580,18 @@ function ShareLinks({
   readonly me: MeResponse
   readonly board: BoardView
   readonly links: readonly BoardShareLinkView[]
+  /** Without an outbox there is no recipients field. */
+  readonly mailAvailable: boolean
   /** Der Einmal-Hinweis der letzten Anlage, falls einer steht - zwischen Formular und Liste. */
   readonly notice: ReactNode
   /** Uebergibt den Klartextlink einer Anlage genau einmal an `BoardShare`. */
-  readonly onCreated: (url: string) => void
+  readonly onCreated: (response: CreateBoardShareLinkResponse) => void
   readonly onChanged: () => void
 }) {
   const [role, setRole] = useState<GuestRoleView>('guest-viewer')
   const [expiry, setExpiry] = useState('')
   const [expiryError, setExpiryError] = useState<string | undefined>(undefined)
+  const [recipients, setRecipients] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -573,14 +626,17 @@ function ShareLinks({
           }
           setExpiryError(undefined)
           setBusy(true)
+          const to = parseRecipientInput(recipients)
           createBoardShareLink(me.csrfToken, {
             boardId: board.id,
             role,
             ...(expiresAt === undefined ? {} : { expiresAt: expiresAt.toISOString() }),
+            ...(to === undefined ? {} : { recipients: to }),
           })
             .then((response) => {
-              onCreated(response.url)
+              onCreated(response)
               setExpiry('')
+              setRecipients('')
               onChanged()
             })
             .catch((cause: unknown) => {
@@ -657,6 +713,7 @@ function ShareLinks({
             }}
           />
         </Field>
+        {mailAvailable && <RecipientsField id="share-link-recipients" value={recipients} onChange={setRecipients} />}
         <p>
           <button className="button--primary" type="submit" disabled={busy}>
             Gastlink anlegen
@@ -686,7 +743,16 @@ function ShareLinks({
             </thead>
             <tbody>
               {links.map((link) => (
-                <ShareLinkRow key={link.id} me={me} board={board} link={link} now={now} onChanged={onChanged} />
+                <ShareLinkRow
+                  key={link.id}
+                  me={me}
+                  board={board}
+                  link={link}
+                  now={now}
+                  mailAvailable={mailAvailable}
+                  onCreated={onCreated}
+                  onChanged={onChanged}
+                />
               ))}
             </tbody>
           </table>
@@ -701,16 +767,25 @@ function ShareLinkRow({
   board,
   link,
   now,
+  mailAvailable,
+  onCreated,
   onChanged,
 }: {
   readonly me: MeResponse
   readonly board: BoardView
   readonly link: BoardShareLinkView
   readonly now: Date
+  readonly mailAvailable: boolean
+  /** Hands the replacement link's response to `BoardShare` exactly once. */
+  readonly onCreated: (response: CreateBoardShareLinkResponse) => void
   readonly onChanged: () => void
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [replacing, setReplacing] = useState(false)
+  const [recipients, setRecipients] = useState('')
+  // The server replaces only valid links, so the row offers it only there.
+  const live = link.revokedAt === null && linkStatus(link, now) === 'gueltig'
 
   return (
     <tr>
@@ -741,6 +816,69 @@ function ShareLinkRow({
             Gastlink vom {formatDate(link.createdAt)} widerrufen
           </button>
         )}
+        {live && !replacing && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              setError(null)
+              setReplacing(true)
+            }}
+          >
+            Gastlink vom {formatDate(link.createdAt)} ersetzen
+          </button>
+        )}
+        {live && replacing && (
+          <ConfirmDialog danger>
+            <p>
+              Gastlink vom {formatDate(link.createdAt)} ersetzen? Die bisherige Adresse funktioniert danach fuer
+              niemanden mehr, offene Gastsitzungen mit ihr enden. Der neue Link hat dieselbe Rolle und denselben
+              Ablauf.
+            </p>
+            {mailAvailable && (
+              <RecipientsField id={`share-link-replace-recipients-${link.id}`} value={recipients} onChange={setRecipients} />
+            )}
+            <p className="actions">
+              <button
+                className="button--danger"
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setBusy(true)
+                  setError(null)
+                  const to = parseRecipientInput(recipients)
+                  replaceBoardShareLink(me.csrfToken, {
+                    boardId: board.id,
+                    shareLinkId: link.id,
+                    ...(to === undefined ? {} : { recipients: to }),
+                  })
+                    .then((response) => {
+                      onCreated(response)
+                      onChanged()
+                    })
+                    .catch((cause: unknown) => {
+                      setError(messageOf(cause, 'Der Freigabelink konnte nicht ersetzt werden.'))
+                      setReplacing(false)
+                    })
+                    .finally(() => {
+                      setBusy(false)
+                    })
+                }}
+              >
+                Ersetzen bestaetigen
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setReplacing(false)
+                }}
+              >
+                Abbrechen
+              </button>
+            </p>
+          </ConfirmDialog>
+        )}
         {error !== null && <Notice text={error} />}
       </td>
     </tr>
@@ -755,7 +893,7 @@ type Loaded = {
 
 type LinkState =
   | { readonly kind: 'loading' }
-  | { readonly kind: 'ready'; readonly links: readonly BoardShareLinkView[] }
+  | { readonly kind: 'ready'; readonly links: readonly BoardShareLinkView[]; readonly mailAvailable: boolean }
   /** Die eigene Rolle traegt die Gastlinks nicht; sie werden deshalb gar nicht erst angefragt. */
   | { readonly kind: 'unavailable' }
   | { readonly kind: 'failed'; readonly message: string }
@@ -780,7 +918,7 @@ export function BoardShare({
    * Das Klartexttoken der letzten Anlage und die Rueckmeldung zum Kopieren. Beides lebt nur hier - oberhalb
    * der Liste, damit ihr Neuladen den Hinweis nicht aushaengt - und wird nirgends gespeichert.
    */
-  const [created, setCreated] = useState<string | null>(null)
+  const [created, setCreated] = useState<CreateBoardShareLinkResponse | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
 
   // Ein anderes Board beginnt ohne die Liste und ohne den Link des vorigen.
@@ -811,7 +949,7 @@ export function BoardShare({
         }
         await fetchBoardShareLinks(boardId)
           .then((linkResponse) => {
-            setLinks({ kind: 'ready', links: linkResponse.links })
+            setLinks({ kind: 'ready', links: linkResponse.links, mailAvailable: linkResponse.mailAvailable })
           })
           .catch((cause: unknown) => {
             setLinks({ kind: 'failed', message: messageOf(cause, 'Die Gastlinks konnten nicht geladen werden.') })
@@ -832,7 +970,7 @@ export function BoardShare({
   if (state.kind === 'loading') {
     return (
       <section aria-labelledby="board-share-heading">
-        <h5 id="board-share-heading">Freigaben</h5>
+        <h3 id="board-share-heading" className="visually-hidden">Freigaben</h3>
         <Loading text="Freigaben werden geladen …" />
       </section>
     )
@@ -840,7 +978,7 @@ export function BoardShare({
   if (state.kind === 'failed') {
     return (
       <section aria-labelledby="board-share-heading">
-        <h5 id="board-share-heading">Freigaben</h5>
+        <h3 id="board-share-heading" className="visually-hidden">Freigaben</h3>
         <Notice text={state.message} />
       </section>
     )
@@ -859,7 +997,8 @@ export function BoardShare({
   const createdNotice =
     created === null ? null : (
       <CreatedLinkNotice
-        url={created}
+        url={created.url}
+        mails={created.mails}
         copied={copied}
         onCopied={setCopied}
         onHide={() => {
@@ -871,7 +1010,7 @@ export function BoardShare({
 
   return (
     <section aria-labelledby="board-share-heading">
-      <h5 id="board-share-heading">Freigaben von {board.title}</h5>
+      <h3 id="board-share-heading" className="visually-hidden">Freigaben von {board.title}</h3>
       <p>
         Owner: <strong>{board.ownerDisplayName}</strong>
         {board.ownerUserId === me.user.id && <> (du)</>}
@@ -890,7 +1029,7 @@ export function BoardShare({
       )}
       {actionError !== null && actionError !== '' && <Notice text={actionError} />}
 
-      <h6>Interne Freigaben</h6>
+      <h3>Interne Freigaben</h3>
       {grants.length === 0 ? (
         <Empty text="Es gibt keine ausdrueckliche Freigabe. Damit gilt fuer jedes Mitglied des Arbeitsbereichs die Rolle seiner Mitgliedschaft." />
       ) : (
@@ -925,15 +1064,15 @@ export function BoardShare({
 
       {manageable && (
         <>
-          <h6>Board freigeben</h6>
+          <h3>Board freigeben</h3>
           <AddGrant me={me} board={board} candidates={openMembers} onChanged={reload} />
 
-          <h6>Ownerschaft uebertragen</h6>
+          <h3>Ownerschaft uebertragen</h3>
           <TransferOwnership me={me} board={board} candidates={transferable} onChanged={reload} />
         </>
       )}
 
-      <h6>Gastlinks</h6>
+      <h3>Gastlinks</h3>
       {links.kind === 'loading' && <Loading text="Gastlinks werden geladen …" />}
       {links.kind === 'unavailable' && <Empty text="Gastlinks sieht und verwaltet der Owner dieses Boards." />}
       {links.kind === 'failed' && <Notice text={links.message} />}
@@ -942,9 +1081,10 @@ export function BoardShare({
           me={me}
           board={board}
           links={links.links}
+          mailAvailable={links.mailAvailable}
           notice={createdNotice}
-          onCreated={(url) => {
-            setCreated(url)
+          onCreated={(response) => {
+            setCreated(response)
             setCopied(null)
           }}
           onChanged={reload}
