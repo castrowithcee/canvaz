@@ -26,6 +26,7 @@ import type { GuestSessionResponse } from '../contracts/api.js'
 import { MAX_GUEST_DISPLAY_NAME_LENGTH } from '../domain/board/guest.js'
 import { ApiError, fetchGuestSession, joinBoardAsGuest } from './api.js'
 import { applyGuestAppearance } from './appearance.js'
+import { BrandHeading, useBranding } from './branding.js'
 import { BoardEditor } from './board/lazy-editor.js'
 import { Button, describedBy, Field, Loading, Notice, PageState } from './ui.js'
 
@@ -56,7 +57,7 @@ type State =
 function Shell({ children }: { readonly children: ReactNode }) {
   return (
     <main className="shell">
-      <h1>Canvaz</h1>
+      <BrandHeading />
       {children}
     </main>
   )
@@ -160,7 +161,10 @@ export function GuestApp() {
   }, [])
 
   useEffect(load, [load])
-  useEffect(applyGuestAppearance, [])
+  const instanceAccent = useBranding()?.accent ?? null
+  useEffect(() => {
+    applyGuestAppearance(instanceAccent)
+  }, [instanceAccent])
 
   if (state.kind === 'checking') {
     return (

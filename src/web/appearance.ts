@@ -26,7 +26,7 @@
 
 import { useSyncExternalStore } from 'react'
 
-import type { AppearanceView } from '../contracts/api.js'
+import type { AccentColor, AppearanceView } from '../contracts/api.js'
 import { DEFAULT_APPEARANCE } from '../contracts/api.js'
 
 /** Derselbe Schluessel steht in `public/erscheinungsbild.js`. */
@@ -74,8 +74,11 @@ function remember(appearance: AppearanceView | null): void {
  * `null` heisst: niemand ist angemeldet. Dann gilt die Standardwahl, und die zuletzt bekannte Wahl wird
  * vergessen - sie gehoert dem Konto, nicht dem Geraet.
  */
-export function applyAppearance(appearance: AppearanceView | null): void {
-  const { colorScheme, accent } = appearance ?? DEFAULT_APPEARANCE
+export function applyAppearance(appearance: AppearanceView | null, instanceAccent: AccentColor | null = null): void {
+  const { colorScheme, accent } = appearance ?? {
+    ...DEFAULT_APPEARANCE,
+    accent: instanceAccent ?? DEFAULT_APPEARANCE.accent,
+  }
   const root = document.documentElement
   if (colorScheme === 'system') {
     delete root.dataset['theme']
@@ -93,13 +96,18 @@ export function applyAppearance(appearance: AppearanceView | null): void {
 }
 
 /**
- * Fixes the light scheme and default accent for the guest view. Unlike `applyAppearance` it does not
- * remember anything: a guest has no choice and must not overwrite an account's stored one.
+ * Fixes the light scheme for the guest view, with the instance accent (if any) or the default accent. Unlike
+ * `applyAppearance` it does not remember anything: a guest has no choice and must not overwrite an account's
+ * stored one.
  */
-export function applyGuestAppearance(): void {
+export function applyGuestAppearance(instanceAccent: AccentColor | null): void {
   const root = document.documentElement
   root.dataset['theme'] = 'light'
-  delete root.dataset['accent']
+  if (instanceAccent === null || instanceAccent === DEFAULT_APPEARANCE.accent) {
+    delete root.dataset['accent']
+  } else {
+    root.dataset['accent'] = instanceAccent
+  }
   applyThemeColor('light')
   notify()
 }
@@ -125,4 +133,21 @@ function currentScheme(): 'light' | 'dark' {
 /** Das gerade sichtbare Farbschema - aufgeloest, also nie `system`. */
 export function useColorScheme(): 'light' | 'dark' {
   return useSyncExternalStore(subscribe, currentScheme)
+}
+
+/**
+ * Sets only the instance accent, for token pages opened from a mail. Scheme and the remembered choice stay
+ * untouched, because the device may belong to a signed-in account.
+ */
+export function applyInstanceAccent(instanceAccent: AccentColor | null): void {
+  if (instanceAccent === null) {
+    return
+  }
+  const root = document.documentElement
+  if (instanceAccent === DEFAULT_APPEARANCE.accent) {
+    delete root.dataset['accent']
+  } else {
+    root.dataset['accent'] = instanceAccent
+  }
+  notify()
 }

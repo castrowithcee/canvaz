@@ -597,6 +597,20 @@ Aenderung steht mit dem angemeldeten Konto im Log (`branding.settings.changed`, 
 Gepflegt wird es auf der Seite "Branding" der Systemadministration, neben der Kontenverwaltung und nur fuer
 Systemadmins: Name, Auswahl der Akzentfarbe mit Vorschau, Logo hochladen mit Vorschau und Entfernen.
 
+### Anzeige
+
+Der Client laedt `GET /api/branding` einmal pro Seitenaufruf. Logo (als `<img>` von der eigenen Herkunft, der
+Instanzname ist sein Alternativtext) und Instanzname ersetzen "Canvaz" in der Kopfzeile der Haupt-Ansicht, auf
+Anmeldung, Einladung, Wiederherstellung und Passwortruecksetzung sowie bei Gastbeitritt und Gastansicht. Der
+Seitentitel nennt den Instanznamen. Ohne gepflegtes Branding oder bei einem Ladefehler bleibt alles wie
+zuvor: "Canvaz", kein Logo, der Standardakzent.
+
+Rangfolge der Akzentwahl: eigene Wahl des Nutzers vor Akzent der Instanz vor Standardakzent (`violett`).
+`GET /api/me` liefert fuer einen Nutzer ohne gespeicherte Wahl den Instanz-Akzent als wirksame Wahl, ohne eine
+Zeile in `user_appearance` anzulegen. Anonyme Seiten und die Gastansicht setzen den Akzent aus dem oeffentlichen
+Branding, die Gastansicht bleibt dabei hell. Die Einstellungen nennen den Standard der Instanz bei der
+Akzentfarbe.
+
 ### Endpunkte
 
 | Methode und Pfad                         | Zugriff               | Wirkung                                                                                |

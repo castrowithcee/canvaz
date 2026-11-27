@@ -348,7 +348,7 @@ export type MeResponse = {
   readonly user: UserView
   /** An die Session gebundenes Token fuer zustandsaendernde Anfragen. */
   readonly csrfToken: string
-  /** Das eigene Erscheinungsbild; ohne gespeicherte Wahl `DEFAULT_APPEARANCE`. */
+  /** Das eigene Erscheinungsbild; ohne gespeicherte Wahl `DEFAULT_APPEARANCE` mit dem Instanz-Akzent, falls gepflegt. */
   readonly appearance: AppearanceView
   readonly secondFactor: SecondFactorView
   readonly selfRecovery: SelfRecoveryView | null
