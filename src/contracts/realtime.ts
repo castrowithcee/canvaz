@@ -24,9 +24,9 @@
  * der Beitritt abgelehnt - ein Browser mit altem Bundle nach einem Deployment soll neu laden und nicht mit
  * halb verstandenen Nachrichten weiterarbeiten.
  *
- * Die Version steigt nur, wenn ein alter und ein neuer Teilnehmer einander nicht mehr verstehen. Ein neuer
- * Fehlercode (`link-ungueltig`) gehoert nicht dazu: ein altes Bundle zeigt ihn als benannte Ablehnung und
- * behandelt den Schliesscode wie bisher.
+ * The version only rises when old and new participants no longer understand each other. A new error code
+ * (`link-ungueltig`) does not: an old bundle shows it as a named rejection and handles the close code as
+ * before.
  */
 
 import type { BinaryFileRef, PersistedAppState, SceneSnapshot, SyncElement } from './scene.js'
@@ -127,8 +127,8 @@ export type RealtimeErrorCode =
   /** Der Raum hat bereits die hoechstzulaessige Zahl gleichzeitiger Teilnehmer. */
   | 'raum-voll'
   /**
-   * Der Freigabelink eines Gastes wurde widerrufen oder ist abgelaufen. Nur an Linkgaeste gesendet, kurz vor
-   * dem Schliessen. Rein Darstellung: die Berechtigung entscheidet der Server unabhaengig davon.
+   * The guest's share link was revoked or expired. Sent to link guests only, right before closing. Display
+   * only: the server decides access independently.
    */
   | 'link-ungueltig'
   /** Dieses Konto haelt bereits die hoechstzulaessige Zahl offener Verbindungen. */

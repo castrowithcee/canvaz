@@ -241,8 +241,8 @@ export function BoardEditor({
   /** `null` heisst: es gibt keinen Weg zurueck. Genau das gilt fuer einen Gast. */
   readonly onClose: (() => void) | null
   /**
-   * Nur Gastansicht: der Link gilt nicht mehr. `confirmed` ist wahr, wenn der Server es gemeldet hat, und falsch,
-   * wenn nur die Verbindung endgueltig geschlossen wurde - dann muss der Aufrufer den Link selbst pruefen.
+   * Guest view only: the link no longer applies. `confirmed` is true when the server said so, false when only
+   * the connection closed for good - then the caller has to check the link itself.
    */
   readonly onGuestLinkEnded?: ((confirmed: boolean, wasWriting: boolean) => void) | null
 }) {
@@ -306,10 +306,10 @@ export function BoardEditor({
   const liveRef = useRef(false)
   /** Zuletzt vom Server genanntes Schreibrecht. Er unterscheidet die erste Aussage von einer Aenderung. */
   const canWriteRef = useRef<boolean | null>(null)
-  /** Als Ref, damit ein neuer Rueckruf die Verbindung nicht neu aufbaut. */
+  /** A ref, so a new callback does not rebuild the connection. */
   const onGuestLinkEndedRef = useRef(onGuestLinkEnded)
   onGuestLinkEndedRef.current = onGuestLinkEnded
-  /** Der Server hat den Linkablauf schon benannt; der Schliesscode danach braucht keine Nachpruefung mehr. */
+  /** The server already named the link end; the close code after it needs no recheck. */
   const guestLinkEndedRef = useRef(false)
   /** Der Ausloeser der Informationsleiste. Angedockt gibt ihm die Ansicht den Fokus selbst zurueck. */
   const panelTriggerRef = useRef<HTMLButtonElement>(null)

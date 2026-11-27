@@ -847,7 +847,7 @@ describe('Gaeste an der Realtime-Strecke', () => {
 
     await post(app, ada, BOARD_SHARE_LINK_REVOKE_PATH, { boardId: board.id, shareLinkId: link.id })
 
-    // Die Meldung kommt vor dem Schliessen, benannt und ohne Link-, Token- oder Boardangaben.
+    // The notice arrives before closing, named and without link, token or board details.
     const meldung = await verbindung.next('error')
     expect(meldung.code).toBe('link-ungueltig')
     expect(JSON.stringify(meldung)).not.toMatch(new RegExp(`${link.id}|${link.token}|${board.id}`))

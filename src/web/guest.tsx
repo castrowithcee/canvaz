@@ -231,8 +231,8 @@ export function GuestApp() {
         workspaceArchived={false}
         guestName={session.displayName}
         onClose={null}
-        // Der Server hat den Link benannt beendet, oder die Verbindung ist nur endgueltig zu: dann einmal
-        // nachpruefen, statt eine andere Ursache als Linkende anzuzeigen.
+        // Either the server named the link end, or the connection just closed for good: then check once
+        // instead of showing another cause as the end of the link.
         onGuestLinkEnded={(confirmed, wasWriting) => {
           const ended = () => {
             setState({ kind: 'invalid', lostChanges: wasWriting })

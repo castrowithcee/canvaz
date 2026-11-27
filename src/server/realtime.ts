@@ -283,8 +283,8 @@ export function createRealtimeGateway(options: RealtimeOptions): RealtimeGateway
   }
 
   /**
-   * `linkNotice` sagt Linkgaesten vor dem Schliessen, dass ihr Link nicht mehr gilt (Widerruf, Ablauf). Nur so,
-   * nicht immer: ein Neustart des Servers schliesst ebenfalls, und dort gilt der Link noch.
+   * `linkNotice` tells link guests before closing that their link no longer applies (revocation, expiry). Not
+   * always: a server restart closes too, and there the link still holds.
    */
   function closeMatching(matches: (connection: Connection) => boolean, linkNotice = false): void {
     for (const connection of connections) {

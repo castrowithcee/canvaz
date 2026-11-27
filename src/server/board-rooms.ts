@@ -944,7 +944,7 @@ export function createBoardRooms(options: BoardRoomOptions): BoardRooms {
       boardId: participant.room?.boardId ?? '',
     })
     leaveRoom(participant)
-    // Ein Linkgast verliert den Raum nur mit seinem Link; interne Nutzer sehen weiter "nicht gefunden".
+    // A link guest only loses the room with their link; internal users keep seeing "not found".
     sendError(participant.socket, participant.requester.kind === 'guest' ? 'link-ungueltig' : 'board-nicht-gefunden')
     participant.socket.close(BOARD_ACCESS_REVOKED_CLOSE_CODE, 'Zugriff entzogen')
   }

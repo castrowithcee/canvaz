@@ -99,7 +99,7 @@ export type RealtimeHandlers = {
   onAccess(canWrite: boolean): void
   onSaved(message: SavedMessage): void
   onError(message: Extract<ServerMessage, { type: 'error' }>): void
-  /** Der Server hat mit einem Code geschlossen, nach dem kein neuer Versuch folgt (`TERMINAL_CLOSE_CODES`). */
+  /** The server closed with a code after which no retry follows (`TERMINAL_CLOSE_CODES`). */
   onTerminalClose(code: number): void
 }
 
