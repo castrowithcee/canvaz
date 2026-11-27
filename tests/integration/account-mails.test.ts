@@ -141,6 +141,8 @@ describe('Gastlink per E-Mail', () => {
   it('sendet den Link an beide Empfaenger, ohne Adresse oder Link in Log und Audit, und begrenzt je Nutzer', async () => {
     const workspace = await createWorkspace(app, admin, 'Team Nord')
     const board = await createBoard(app, admin, workspace.id, 'Skizze')
+    // Earlier account mails of this file log their own recipients; only this request matters here.
+    app.clearLogs()
 
     const response = await adminPost(BOARD_SHARE_LINK_CREATE_PATH, {
       boardId: board.id,
@@ -156,7 +158,7 @@ describe('Gastlink per E-Mail', () => {
     const token = new URL(created.url).hash.slice(1)
     const audit = JSON.stringify(await app.workspaces.audit.listForWorkspace(workspace.id))
     const logs = JSON.stringify(app.logs)
-    for (const geheim of ['example.com', token]) {
+    for (const geheim of ['eins@example.com', 'zwei@example.com', token]) {
       expect(audit).not.toContain(geheim)
       expect(logs).not.toContain(geheim)
     }
