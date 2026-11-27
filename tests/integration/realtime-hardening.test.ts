@@ -227,7 +227,17 @@ describe('Wiederaufnahme nach einem Abbruch', () => {
       const beigetreten = await client.join(board.id)
       // Jede Runde sieht alles, was die vorherigen gezeichnet haben.
       expect(beigetreten.scene.elements).toHaveLength(runde)
-      client.send(change(board.id, [element(`runde-${String(runde)}`, 1, runde + 1)]))
+      const id = `runde-${String(runde)}`
+      client.send(change(board.id, [element(id, 1, runde + 1)]))
+      // The server applies a change only after resolving permissions, so the next round's join could be
+      // answered before it. Terminate only once a resync shows the element in the room.
+      for (;;) {
+        client.send({ type: 'resync', boardId: board.id })
+        if (ids((await client.next('snapshot')).scene.elements).includes(id)) {
+          break
+        }
+        await ruhe(1)
+      }
       client.socket.terminate()
       await client.closeCode
     }
