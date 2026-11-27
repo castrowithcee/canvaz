@@ -104,6 +104,7 @@ import '@excalidraw/excalidraw/index.css'
 
 import type { BoardStatusView, BoardView, MeResponse, WorkspaceView } from '../../contracts/api.js'
 import type { PresenceView } from '../../contracts/realtime.js'
+import { BOARD_ACCESS_REVOKED_CLOSE_CODE, SESSION_REVOKED_CLOSE_CODE } from '../../contracts/realtime.js'
 import type { BinaryFileRef, SceneSnapshot } from '../../contracts/scene.js'
 import { SCENE_SCHEMA_VERSION } from '../../contracts/scene.js'
 import { MAX_BOARD_TITLE_LENGTH } from '../../domain/board/model.js'
@@ -220,6 +221,7 @@ export function BoardEditor({
   guestName,
   member = null,
   onClose,
+  onGuestLinkEnded = null,
 }: {
   readonly boardId: string
   /** Token der eigenen Sitzung - der internen oder der des Gastes. */
@@ -238,6 +240,11 @@ export function BoardEditor({
   readonly member?: BoardMemberContext | null
   /** `null` heisst: es gibt keinen Weg zurueck. Genau das gilt fuer einen Gast. */
   readonly onClose: (() => void) | null
+  /**
+   * Nur Gastansicht: der Link gilt nicht mehr. `confirmed` ist wahr, wenn der Server es gemeldet hat, und falsch,
+   * wenn nur die Verbindung endgueltig geschlossen wurde - dann muss der Aufrufer den Link selbst pruefen.
+   */
+  readonly onGuestLinkEnded?: ((confirmed: boolean, wasWriting: boolean) => void) | null
 }) {
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
   const [save, setSave] = useState<SaveState>({ kind: 'idle' })
@@ -299,6 +306,11 @@ export function BoardEditor({
   const liveRef = useRef(false)
   /** Zuletzt vom Server genanntes Schreibrecht. Er unterscheidet die erste Aussage von einer Aenderung. */
   const canWriteRef = useRef<boolean | null>(null)
+  /** Als Ref, damit ein neuer Rueckruf die Verbindung nicht neu aufbaut. */
+  const onGuestLinkEndedRef = useRef(onGuestLinkEnded)
+  onGuestLinkEndedRef.current = onGuestLinkEnded
+  /** Der Server hat den Linkablauf schon benannt; der Schliesscode danach braucht keine Nachpruefung mehr. */
+  const guestLinkEndedRef = useRef(false)
   /** Der Ausloeser der Informationsleiste. Angedockt gibt ihm die Ansicht den Fokus selbst zurueck. */
   const panelTriggerRef = useRef<HTMLButtonElement>(null)
   /** Das Titelfeld des Umbenennen-Dialogs. Es bekommt beim Oeffnen und nach einer Ablehnung den Fokus. */
@@ -778,7 +790,20 @@ export function BoardEditor({
           return { kind: 'saved', at: new Date(message.savedAt) }
         })
       },
+      onTerminalClose(code): void {
+        if (
+          !guestLinkEndedRef.current &&
+          (code === SESSION_REVOKED_CLOSE_CODE || code === BOARD_ACCESS_REVOKED_CLOSE_CODE)
+        ) {
+          onGuestLinkEndedRef.current?.(false, canWriteRef.current === true)
+        }
+      },
       onError(message): void {
+        if (message.code === 'link-ungueltig' && onGuestLinkEndedRef.current) {
+          guestLinkEndedRef.current = true
+          onGuestLinkEndedRef.current(true, canWriteRef.current === true)
+          return
+        }
         if (message.code === 'board-nicht-gefunden') {
           setState({ kind: 'not-found' })
           return

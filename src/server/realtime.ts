@@ -282,9 +282,21 @@ export function createRealtimeGateway(options: RealtimeOptions): RealtimeGateway
     return offen
   }
 
-  function closeMatching(matches: (connection: Connection) => boolean): void {
+  /**
+   * `linkNotice` sagt Linkgaesten vor dem Schliessen, dass ihr Link nicht mehr gilt (Widerruf, Ablauf). Nur so,
+   * nicht immer: ein Neustart des Servers schliesst ebenfalls, und dort gilt der Link noch.
+   */
+  function closeMatching(matches: (connection: Connection) => boolean, linkNotice = false): void {
     for (const connection of connections) {
       if (matches(connection)) {
+        if (linkNotice && connection.shareLinkId !== null && connection.socket.readyState === connection.socket.OPEN) {
+          const notice: ErrorMessage = {
+            type: 'error',
+            code: 'link-ungueltig',
+            message: REALTIME_ERROR_MESSAGES['link-ungueltig'],
+          }
+          connection.socket.send(JSON.stringify(notice))
+        }
         connection.socket.close(SESSION_REVOKED_CLOSE_CODE, 'Sitzung ungueltig')
         connections.delete(connection)
       }
@@ -319,7 +331,7 @@ export function createRealtimeGateway(options: RealtimeOptions): RealtimeGateway
   // fremden Widerruf auf. `unref` haelt weder Prozess noch Tests offen.
   const expirySweep = setInterval(() => {
     const now = options.now()
-    closeMatching((connection) => connection.expiresAt.getTime() <= now.getTime())
+    closeMatching((connection) => connection.expiresAt.getTime() <= now.getTime(), true)
     if (revalidating) {
       return
     }
@@ -384,7 +396,7 @@ export function createRealtimeGateway(options: RealtimeOptions): RealtimeGateway
       closeMatching((connection) => connection.userId === userId)
     },
     closeShareLink(shareLinkId: BoardShareLinkId): void {
-      closeMatching((connection) => connection.shareLinkId === shareLinkId)
+      closeMatching((connection) => connection.shareLinkId === shareLinkId, true)
     },
     get openConnections(): number {
       return connections.size

@@ -23,6 +23,10 @@
  * `REALTIME_PROTOCOL_VERSION` steht im `ready` des Servers und im `join` des Clients. Weichen sie ab, wird
  * der Beitritt abgelehnt - ein Browser mit altem Bundle nach einem Deployment soll neu laden und nicht mit
  * halb verstandenen Nachrichten weiterarbeiten.
+ *
+ * Die Version steigt nur, wenn ein alter und ein neuer Teilnehmer einander nicht mehr verstehen. Ein neuer
+ * Fehlercode (`link-ungueltig`) gehoert nicht dazu: ein altes Bundle zeigt ihn als benannte Ablehnung und
+ * behandelt den Schliesscode wie bisher.
  */
 
 import type { BinaryFileRef, PersistedAppState, SceneSnapshot, SyncElement } from './scene.js'
@@ -122,6 +126,11 @@ export type RealtimeErrorCode =
   | 'raum-zu-gross'
   /** Der Raum hat bereits die hoechstzulaessige Zahl gleichzeitiger Teilnehmer. */
   | 'raum-voll'
+  /**
+   * Der Freigabelink eines Gastes wurde widerrufen oder ist abgelaufen. Nur an Linkgaeste gesendet, kurz vor
+   * dem Schliessen. Rein Darstellung: die Berechtigung entscheidet der Server unabhaengig davon.
+   */
+  | 'link-ungueltig'
   /** Dieses Konto haelt bereits die hoechstzulaessige Zahl offener Verbindungen. */
   | 'zu-viele-verbindungen'
   /** Der ausgehende Puffer dieser Verbindung ist nicht mehr abgeflossen. */
@@ -140,6 +149,7 @@ export const REALTIME_ERROR_MESSAGES: Readonly<Record<RealtimeErrorCode, string>
   'zu-viele-nachrichten': 'Zu viele Nachrichten in zu kurzer Zeit',
   'raum-zu-gross': 'Dieses Board hat seine Hoechstgroesse erreicht. Die Aenderung wurde nicht uebernommen.',
   'raum-voll': 'Dieses Board hat bereits die hoechstzulaessige Zahl gleichzeitiger Teilnehmer',
+  'link-ungueltig': 'Dieser Freigabelink gilt nicht mehr',
   'zu-viele-verbindungen': 'Dieses Konto hat bereits die hoechstzulaessige Zahl offener Verbindungen',
   'zu-langsam': 'Die Verbindung kommt nicht mehr hinterher und wird neu aufgebaut',
 }

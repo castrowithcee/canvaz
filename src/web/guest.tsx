@@ -49,7 +49,7 @@ type State =
   | { readonly kind: 'join' }
   | { readonly kind: 'ready'; readonly session: GuestSessionResponse }
   /** Kein Token in der Adresse und kein gueltiger Gastzugang im Browser. */
-  | { readonly kind: 'invalid' }
+  | { readonly kind: 'invalid'; readonly lostChanges?: boolean }
   | { readonly kind: 'failed'; readonly message: string }
 
 function Shell({ children }: { readonly children: ReactNode }) {
@@ -186,6 +186,7 @@ export function GuestApp() {
           Oeffne den Freigabelink erneut, den du bekommen hast. Gilt auch er nicht mehr, braucht es einen
           neuen - ein Link laesst sich nicht wiederherstellen.
         </p>
+        {state.lostChanges === true && <p>Nicht gespeicherte Aenderungen gehen dabei verloren.</p>}
       </Shell>
     )
   }
@@ -228,6 +229,24 @@ export function GuestApp() {
         workspaceArchived={false}
         guestName={session.displayName}
         onClose={null}
+        // Der Server hat den Link benannt beendet, oder die Verbindung ist nur endgueltig zu: dann einmal
+        // nachpruefen, statt eine andere Ursache als Linkende anzuzeigen.
+        onGuestLinkEnded={(confirmed, wasWriting) => {
+          const ended = () => {
+            setState({ kind: 'invalid', lostChanges: wasWriting })
+          }
+          if (confirmed) {
+            ended()
+            return
+          }
+          fetchGuestSession()
+            .then((current) => {
+              if (current === null) {
+                ended()
+              }
+            })
+            .catch(() => undefined)
+        }}
       />
     </Suspense>
   )
