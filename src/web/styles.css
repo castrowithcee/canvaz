@@ -2240,7 +2240,9 @@
       margin: 0;
       max-height: none;
       max-width: none;
-      position: static;
+      /* Containing block for absolute descendants (.visually-hidden): with `static` they escaped the
+         scroller and stretched the page. */
+      position: relative;
       width: 22rem;
     }
   }
