@@ -19,6 +19,7 @@ import {
   REALTIME_PATH,
 } from '../../src/contracts/api.js'
 import type { AdminUsersResponse, LogoutResponse, MeResponse } from '../../src/contracts/api.js'
+import type { IdentityStore } from '../../src/domain/identity/repositories.js'
 import { migrate } from '../../src/persistence/migrate.js'
 import { createPool } from '../../src/persistence/pool.js'
 import { SESSION_COOKIE } from '../../src/server/session.js'
@@ -207,6 +208,55 @@ describe('Anmeldung', () => {
     }
     expect(await app.store.users.count()).toBe(1)
     expect(app.logs.filter((entry) => entry.level === 'error')).toEqual([])
+  })
+
+  it('meldet einen Anlauf an, dessen Konto zwischen Identitaets- und Adresslesung entsteht', async () => {
+    // The second attempt reads the identity (unknown), then waits until the first has committed, so it sees
+    // a profile with an external identity under the same address.
+    const context = app.context as { identity: IdentityStore }
+    const original = context.identity
+    let transactions = 0
+    let firstDone: Promise<unknown> = Promise.resolve()
+    context.identity = {
+      ...original,
+      transaction: (run) => {
+        transactions += 1
+        if (transactions === 1) {
+          const first = original.transaction(run)
+          firstDone = first.catch(() => undefined)
+          return first
+        }
+        if (transactions !== 2) {
+          return original.transaction(run)
+        }
+        return original.transaction((tx) =>
+          run({
+            ...tx,
+            externalIdentities: {
+              ...tx.externalIdentities,
+              findByKey: async (key) => {
+                const found = await tx.externalIdentities.findByKey(key)
+                await firstDone
+                return found
+              },
+            },
+          }),
+        )
+      },
+    }
+    try {
+      const ergebnisse = await Promise.all(
+        [1, 2].map(() => login(app, createJar(), { subject: 'ada', email: 'ada@example.com' })),
+      )
+
+      for (const ergebnis of ergebnisse) {
+        expect(ergebnis.error).toBeNull()
+      }
+      expect(await app.store.users.count()).toBe(1)
+      expect(app.logs.filter((entry) => entry.level === 'error')).toEqual([])
+    } finally {
+      context.identity = original
+    }
   })
 
   it('verwirft den Flow-Zustand nach einmaliger Verwendung', async () => {
