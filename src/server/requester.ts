@@ -23,6 +23,7 @@ import type { BoardViewer } from '../domain/board/repositories.js'
 import type { ResolvedApiKey } from '../domain/identity/api-key.js'
 import type { AuthenticatedSession, User } from '../domain/identity/model.js'
 import type { WorkspaceRole } from '../domain/workspace/model.js'
+import type { Actor } from './board-operations.js'
 import type { LogFields } from './log.js'
 
 export type Requester =
@@ -107,4 +108,14 @@ export function apiKeyBoardSubject(
   roles: { readonly role: WorkspaceRole | null; readonly boardRole: BoardRole | null },
 ): BoardSubject {
   return { user: key.subject, workspaceRole: roles.role, boardRole: roles.boardRole, guestGrant: null }
+}
+
+/** The acting side of an API key for the shared operations; the audit names the key. */
+export function apiKeyActor(key: ResolvedApiKey): Actor {
+  return {
+    userId: key.key.userId,
+    subject: (roles) => apiKeyBoardSubject(key, roles),
+    logFields: { userId: key.key.userId, apiKeyId: key.key.id },
+    auditDetails: { apiKeyId: key.key.id },
+  }
 }

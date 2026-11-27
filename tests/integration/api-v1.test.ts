@@ -6,6 +6,7 @@ import type { Pool } from 'pg'
 import { WORKSPACES_PATH } from '../../src/contracts/api.js'
 import {
   API_V1_BOARD_METADATA_PATH,
+  API_V1_BOARD_TRASH_PATH,
   API_V1_BOARDS_PATH,
   API_V1_FOLDERS_PATH,
   API_V1_WORKSPACES_PATH,
@@ -189,6 +190,47 @@ describe('Ziel', () => {
     expect((await get(API_V1_WORKSPACES_PATH, value)).body).toEqual({ workspaces: [] })
     expect((await get(API_V1_BOARDS_PATH, value, { workspaceId: b.workspace.id })).status).toBe(404)
     expect((await get(API_V1_BOARD_METADATA_PATH, value, { boardId: b.wurzel.id })).status).toBe(404)
+  })
+})
+
+describe('Papierkorb', () => {
+  async function inPapierkorb(b: Awaited<ReturnType<typeof bestand>>) {
+    for (const board of [b.wurzel, b.tief, b.nebenan]) {
+      await app.boards.transaction((tx) => tx.boards.moveToTrash(board.id, new Date(), b.owner.id))
+    }
+  }
+
+  it('listet je Ziel nur Boards im Ziel; der Board-Key hoechstens sein eigenes', async () => {
+    const b = await bestand()
+    await inPapierkorb(b)
+    const query = { workspaceId: b.workspace.id }
+    const workspace = await keyFor(b.owner.id, { kind: 'workspace', workspaceId: b.workspace.id })
+    const ordner = await keyFor(b.owner.id, { kind: 'folder', folderId: b.oben.id })
+    const board = await keyFor(b.owner.id, { kind: 'board', boardId: b.tief.id })
+
+    const alle = await get(API_V1_BOARD_TRASH_PATH, workspace.value, query)
+
+    expect(ids(alle.body, 'boards')).toEqual([b.wurzel.id, b.tief.id, b.nebenan.id].sort())
+    expect(Object.keys((alle.body['boards'] as object[])[0] ?? {})).toEqual(expect.arrayContaining(['deletedAt', 'purgeAt']))
+    expect(ids((await get(API_V1_BOARD_TRASH_PATH, ordner.value, query)).body, 'boards')).toEqual([b.tief.id])
+    expect(ids((await get(API_V1_BOARD_TRASH_PATH, board.value, query)).body, 'boards')).toEqual([b.tief.id])
+    const fremd = await app.workspaces.workspaces.create('Fremd', b.owner.id)
+    expect((await get(API_V1_BOARD_TRASH_PATH, workspace.value, { workspaceId: fremd.id })).status).toBe(404)
+    expect((await get(API_V1_BOARD_TRASH_PATH, board.value, { workspaceId: fremd.id })).status).toBe(404)
+  })
+
+  it('zeigt einem Member nur, was er wiederherstellen darf', async () => {
+    const b = await bestand()
+    const member = await user()
+    await app.workspaces.workspaces.addMember(b.workspace.id, member.id, 'member')
+    const eigenes = await app.boards.boards.create(b.workspace.id, 'Eigenes', member.id, null)
+    await inPapierkorb(b)
+    await app.boards.transaction((tx) => tx.boards.moveToTrash(eigenes.id, new Date(), member.id))
+    const { value } = await keyFor(member.id, { kind: 'workspace', workspaceId: b.workspace.id })
+
+    const liste = await get(API_V1_BOARD_TRASH_PATH, value, { workspaceId: b.workspace.id })
+
+    expect(ids(liste.body, 'boards')).toEqual([eigenes.id])
   })
 })
 
