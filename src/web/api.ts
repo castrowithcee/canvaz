@@ -66,6 +66,7 @@ import type {
   RenameFolderRequest,
   CreateBoardShareLinkRequest,
   CreateBoardShareLinkResponse,
+  ReplaceBoardShareLinkRequest,
   DashboardFilterView,
   DashboardResponse,
   GuestSessionResponse,
@@ -772,7 +773,7 @@ export async function revokeBoardShareLink(
 /** Revokes a link and creates a new one in the same step. Its address appears once in the response. */
 export async function replaceBoardShareLink(
   csrfToken: string,
-  change: { readonly boardId: string; readonly shareLinkId: string },
+  change: ReplaceBoardShareLinkRequest,
 ): Promise<CreateBoardShareLinkResponse> {
   return request<CreateBoardShareLinkResponse>(BOARD_SHARE_LINK_REPLACE_PATH, mutation(csrfToken, change))
 }

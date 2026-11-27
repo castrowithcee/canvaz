@@ -1323,7 +1323,12 @@ export type BoardShareLinkView = {
 export type BoardShareLinksResponse = {
   readonly board: BoardView
   readonly links: readonly BoardShareLinkView[]
+  /** `false` without an outbox: link mail is not sent, and `recipients` yields 400. */
+  readonly mailAvailable: boolean
 }
+
+/** Maximum recipients per create or replace. */
+export const MAX_SHARE_LINK_RECIPIENTS = 5
 
 export type CreateBoardShareLinkRequest = {
   readonly boardId: string
@@ -1334,6 +1339,15 @@ export type CreateBoardShareLinkRequest = {
    * does not expire by itself.
    */
   readonly expiresAt?: string
+  /** 1 to 5 addresses the server sends the link to. They are stored nowhere. */
+  readonly recipients?: readonly string[]
+}
+
+/** Replace: like create, takes optional `recipients`; role and expiry stay those of the old link. */
+export type ReplaceBoardShareLinkRequest = {
+  readonly boardId: string
+  readonly shareLinkId: string
+  readonly recipients?: readonly string[]
 }
 
 /**
@@ -1346,6 +1360,8 @@ export type CreateBoardShareLinkRequest = {
 export type CreateBoardShareLinkResponse = {
   readonly link: BoardShareLinkView
   readonly url: string
+  /** Only with `recipients`: how many mails the outbox accepted and how many it did not. */
+  readonly mails?: { readonly sent: number; readonly failed: number }
 }
 
 export type RevokeBoardShareLinkRequest = {

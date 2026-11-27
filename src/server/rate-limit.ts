@@ -67,6 +67,42 @@ export function createRateLimiter(options: {
   }
 }
 
+export type Quota = {
+  /** Books `count` units if all still fit; otherwise books nothing and returns `false`. */
+  take(key: string, count: number): boolean
+}
+
+/**
+ * Fixed maximum per key in a sliding window. Unlike the bucket above it books several
+ * units at once, all or nothing: a request that would exceed the limit must not
+ * count partially either.
+ */
+export function createQuota(options: {
+  readonly limit: number
+  readonly windowMs: number
+  readonly now: () => number
+}): Quota {
+  const usage = new Map<string, number[]>()
+  return {
+    take(key, count) {
+      const at = options.now()
+      const recent = (usage.get(key) ?? []).filter((time) => time > at - options.windowMs)
+      const allowed = recent.length + count <= options.limit
+      if (allowed) {
+        for (let i = 0; i < count; i += 1) {
+          recent.push(at)
+        }
+      }
+      if (recent.length === 0) {
+        usage.delete(key)
+      } else {
+        usage.set(key, recent)
+      }
+      return allowed
+    },
+  }
+}
+
 /**
  * Wen die Grenze zaehlt.
  *

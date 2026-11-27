@@ -6,7 +6,9 @@
  * Aenderung seines zweiten Faktors und ueber eine Betreiber-Wiederherstellung. Jede geht an die Adresse des
  * betroffenen Kontos und an keine andere. Die Selbstwiederherstellung schreibt stattdessen an die
  * Wiederherstellungsadresse: den Bestaetigungslink an die neue, Ruecksetzungslink und Mitteilung ueber die
- * Ruecksetzung an die bestaetigte.
+ * Ruecksetzung an die bestaetigte. The only exception is the link mail of a guest link: it goes to the
+ * addresses the owner names on create or replace, and `deliverShareLink` logs neither these
+ * addresses nor the link.
  *
  * ## Was in einer Mail steht und was nicht
  *
@@ -93,6 +95,53 @@ export async function deliver(
     logger('info', 'mail.sent', { kind, to: mail.to })
   } catch (error) {
     logger('error', 'mail.failed', { kind, to: mail.to, error: describeError(error) })
+  }
+}
+
+/**
+ * Delivery attempt of a link mail. Unlike `deliver` it logs nothing: neither address nor link
+ * may reach the log, not even on failure, and the transport's error message can name both.
+ * The caller only learns whether it worked.
+ */
+export async function deliverShareLink(mailer: Mailer, mail: Mail): Promise<boolean> {
+  try {
+    await mailer(mail)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function shareLinkMail(
+  to: string,
+  input: {
+    readonly ownerName: string
+    readonly boardTitle: string
+    readonly role: 'guest-viewer' | 'guest-editor'
+    readonly expiresAt: Date | null
+    readonly url: string
+  },
+): Mail {
+  const right = input.role === 'guest-editor' ? 'zu bearbeiten' : 'anzusehen'
+  const expiry =
+    input.expiresAt === null
+      ? 'unbefristet'
+      : `bis ${input.expiresAt.toISOString().slice(0, 16).replace('T', ' ')} UTC`
+  return {
+    to,
+    subject: 'Einladung zu einem Canvaz-Board',
+    text: [
+      'Guten Tag,',
+      '',
+      `${input.ownerName} laedt Sie ein, das Board "${input.boardTitle}" in Canvaz ${right}. Ueber diesen Link`,
+      'gelangen Sie ohne Konto hinein:',
+      '',
+      input.url,
+      '',
+      `Der Link gilt ${expiry}. Leiten Sie ihn nur an Personen weiter, die das Board sehen sollen.`,
+      'Haben Sie diese Nachricht nicht erwartet, ignorieren Sie sie.',
+      '',
+    ].join('\n'),
   }
 }
 
