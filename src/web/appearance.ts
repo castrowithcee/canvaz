@@ -69,10 +69,10 @@ function remember(appearance: AppearanceView | null): void {
 }
 
 /**
- * Setzt ein Erscheinungsbild sofort und merkt es sich fuer das naechste Laden.
+ * Applies an appearance at once and remembers it for the next load.
  *
- * `null` heisst: niemand ist angemeldet. Dann gilt die Standardwahl, und die zuletzt bekannte Wahl wird
- * vergessen - sie gehoert dem Konto, nicht dem Geraet.
+ * `null` means nobody is signed in: the default choice with the instance accent applies, and the last known
+ * choice is forgotten, because it belongs to the account, not the device.
  */
 export function applyAppearance(appearance: AppearanceView | null, instanceAccent: AccentColor | null = null): void {
   const { colorScheme, accent } = appearance ?? {
