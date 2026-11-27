@@ -119,7 +119,7 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
 
   return [
     /**
-     * Liste der gueltigen Freigabelinks eines Boards (nicht widerrufen, nicht abgelaufen).
+     * List of the valid share links of a board (not revoked, not expired).
      *
      * Hinter `grant:manage` und nicht hinter `board:read`: wer ein Board nur sieht, muss nicht wissen, ueber
      * welche Wege es sonst noch erreichbar ist. Die Liste zeigt Rolle, Ablauf, Widerruf und die Zahl der

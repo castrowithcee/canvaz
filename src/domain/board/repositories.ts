@@ -442,8 +442,8 @@ export type NewBoardShareLink = {
 
 export interface BoardShareLinkRepository {
   /**
-   * Ausschliesslich gueltige (nicht widerrufene, zu `now` nicht abgelaufene) Links genau dieses Boards. Die
-   * Berechtigung prueft der Aufrufer.
+   * Only valid links (not revoked, not expired at `now`) of exactly this board. The caller checks the
+   * permission.
    */
   listForBoard(boardId: BoardId, now: Date): Promise<readonly BoardShareLinkEntry[]>
   /** Link und Board zusammen; es gibt keine Abfrage allein ueber die Linkkennung. */
