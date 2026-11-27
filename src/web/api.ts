@@ -8,6 +8,9 @@
 
 import type {
   AddWorkspaceMemberRequest,
+  AdminBrandingView,
+  PublicBrandingResponse,
+  SetBrandingRequest,
   AppearanceView,
   AdminUsersResponse,
   AuthMethodsResponse,
@@ -85,6 +88,12 @@ import type {
   WorkspacesResponse,
 } from '../contracts/api.js'
 import {
+  ADMIN_BRANDING_LOGO_PATH,
+  ADMIN_BRANDING_LOGO_REMOVE_PATH,
+  ADMIN_BRANDING_PATH,
+  BRANDING_LOGO_PATH,
+  BRANDING_LOGO_VERSION_PARAM,
+  BRANDING_PATH,
   ADMIN_CLIENT_ADDRESS_PATH,
   ADMIN_SENDER_BLOCK_LIFT_PATH,
   ADMIN_SENDER_BLOCK_PROPOSAL_DECIDE_PATH,
@@ -364,6 +373,37 @@ export async function decideSenderBlockProposal(
   change: DecideSenderBlockProposalRequest,
 ): Promise<SenderBlockActionResponse> {
   return request<SenderBlockActionResponse>(ADMIN_SENDER_BLOCK_PROPOSAL_DECIDE_PATH, mutation(csrfToken, change))
+}
+
+/** Public and without session: the login page and the guest view read it before anything else. */
+export async function fetchPublicBranding(): Promise<PublicBrandingResponse> {
+  return request<PublicBrandingResponse>(BRANDING_PATH)
+}
+
+/** URL of the public logo; the version keeps a replaced logo from being served out of the cache. */
+export function brandingLogoUrl(logoVersion: string): string {
+  return `${BRANDING_LOGO_PATH}?${new URLSearchParams({ [BRANDING_LOGO_VERSION_PARAM]: logoVersion }).toString()}`
+}
+
+export async function fetchAdminBranding(): Promise<AdminBrandingView> {
+  return request<AdminBrandingView>(ADMIN_BRANDING_PATH)
+}
+
+export async function saveAdminBranding(csrfToken: string, change: SetBrandingRequest): Promise<AdminBrandingView> {
+  return request<AdminBrandingView>(ADMIN_BRANDING_PATH, mutation(csrfToken, change))
+}
+
+/** The file is sent as raw bytes; the server decides the type by content, not by this header. */
+export async function uploadAdminBrandingLogo(csrfToken: string, file: Blob): Promise<AdminBrandingView> {
+  return request<AdminBrandingView>(ADMIN_BRANDING_LOGO_PATH, {
+    method: 'POST',
+    headers: { [CSRF_HEADER]: csrfToken, 'content-type': 'application/octet-stream' },
+    body: file,
+  })
+}
+
+export async function removeAdminBrandingLogo(csrfToken: string): Promise<AdminBrandingView> {
+  return request<AdminBrandingView>(ADMIN_BRANDING_LOGO_REMOVE_PATH, mutation(csrfToken))
 }
 
 function withWorkspace(path: string, workspaceId: string): string {

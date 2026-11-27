@@ -7,6 +7,7 @@
 
 import type { Pool } from 'pg'
 
+import type { BrandingStore } from '../domain/branding/repositories.js'
 import type { BoardStore } from '../domain/board/repositories.js'
 import type { IdentityStore } from '../domain/identity/repositories.js'
 import type { AssetStoragePort } from '../domain/storage/asset-storage-port.js'
@@ -27,6 +28,7 @@ export type AppContext = {
   readonly identity: IdentityStore
   readonly workspaces: WorkspaceStore
   readonly boards: BoardStore
+  readonly branding: BrandingStore
   /** Bytes der Bildassets. Welcher Adapter dahintersteht, weiss nur die Composition Root. */
   readonly storage: AssetStoragePort
   /** `null` heisst: kein Identity Provider konfiguriert. Dann gibt es die OIDC-Routen gar nicht erst. */
