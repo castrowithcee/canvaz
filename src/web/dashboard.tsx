@@ -10,9 +10,9 @@
  * steht in der Adresse (siehe `router.tsx`) und ueberlebt damit ein Neuladen und ein Teilen des Links.
  *
  * Von einer externen Freigabe steht hier ausschliesslich, **dass** sie besteht - nie ein Token und nie eine
- * Adresse. Verwaltet wird sie nicht hier: in der Ansicht "Mit extern geteilt" oeffnet das Zeilenmenue
- * (nur mit `canManageShares`, einer Auskunft des Servers) denselben Freigabedialog wie der Editor
- * (`BoardSharesOverlay`). Nach dem Schliessen laedt die Liste neu.
+ * Adresse. It is not managed here: in the "Mit extern geteilt" view the row menu opens
+ * (only with `canManageShares`, an answer from the server) the same share dialog as the editor
+ * (`BoardSharesOverlay`). The list reloads after closing.
  */
 
 import { EllipsisVertical, Share2 } from 'lucide-react'

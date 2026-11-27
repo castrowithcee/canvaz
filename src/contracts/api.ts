@@ -865,10 +865,10 @@ export type DashboardBoardView = BoardView & {
   /** Wahr, wenn mindestens ein gueltiger, nicht widerrufener Gastlink besteht. */
   readonly sharedExternally: boolean
   /**
-   * Wahr, wenn der Anfragende die Freigaben dieses Boards verwalten darf (`grant:manage`).
+   * True if the requester may manage this board's shares (`grant:manage`).
    *
-   * Eine Auskunft aus der Policy, damit die Oberflaeche den Einstieg nur dort anbietet, wo er gelingt. Keine
-   * Grenze: Liste und Widerruf der Gastlinks entscheiden weiterhin am Endpunkt.
+   * A policy answer so the UI offers the entry point only where it succeeds. Not a
+   * boundary: listing and revoking guest links are still decided at the endpoint.
    */
   readonly canManageShares: boolean
 }
