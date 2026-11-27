@@ -191,8 +191,8 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
   }
 
   /**
-   * Legt in der laufenden Transaktion einen Link samt Audit und Log an. Gemeinsam fuer Anlegen und Ersetzen,
-   * damit beide dieselben Nachweise schreiben. Das Token steht nur im Rueckgabewert.
+   * Creates a link with audit and log in the running transaction. Shared by create and replace so both
+   * write the same evidence. The token exists only in the return value.
    */
   async function issueShareLink(
     tx: BoardStore,
@@ -205,7 +205,7 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
       readonly replacesId?: string
     },
   ): Promise<CreateBoardShareLinkResponse> {
-    // Das Klartexttoken existiert ab hier ausschliesslich in dieser Variablen und in der Antwort.
+    // From here on the plaintext token exists only in this variable and in the response.
     const token = createShareToken()
     const link = await tx.shareLinks.create({
       boardId: access.board.id,
@@ -221,7 +221,7 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
       targetType: 'board-share-link',
       targetId: link.id,
       workspaceId: access.workspace.id,
-      // Metadaten der Freigabe, nie das Token und nie Boardinhalt.
+      // Share metadata, never the token and never board content.
       details: {
         boardId: access.board.id,
         role: link.role,
@@ -240,13 +240,12 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
     })
     return {
       link: toCreatedView(link, auth.user.displayName),
-      // Fragment statt Abfragezeichenfolge: so erreicht das Token nie einen Server, ein Protokoll oder
-      // einen Referrer - auch nicht den eigenen.
+      // Fragment instead of query string: the token never reaches a server, log or referrer, not even ours.
       url: `${new URL(GUEST_APP_PATH, config.baseUrl).href}#${token}`,
     }
   }
 
-  /** Widerruft in der laufenden Transaktion einen Link samt Audit und Log; `null`, wenn es ihn nicht gibt. */
+  /** Revokes a link with audit and log in the running transaction; `null` if it does not exist. */
   async function revokeShareLink(
     tx: BoardStore,
     auth: AuthenticatedSession,
@@ -410,12 +409,12 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
     },
 
     /**
-     * Freigabelink in einem Schritt ersetzen.
+     * Replaces a share link in one step.
      *
-     * Widerruf des alten und Anlage des neuen Links geschehen in einer Transaktion unter der Boardsperre:
-     * scheitert eines, entsteht das andere nicht. Rolle und Ablauf uebernimmt der neue Link unveraendert.
-     * Ersetzt werden nur gueltige Links; ein widerrufener, abgelaufener, fremder oder erfundener ergibt
-     * dieselbe 404. Die Verbindungen des alten Links fallen wie beim Widerruf erst nach dem Commit.
+     * Revoking the old and creating the new link run in one transaction under the board lock: if one
+     * fails, the other does not happen. The new link keeps role and expiry unchanged. Only valid links
+     * are replaced; a revoked, expired, foreign or invented one gives the same 404. The old link's
+     * connections close only after the commit, as with revoke.
      */
     {
       method: 'POST',
@@ -437,12 +436,12 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
           if (old === null || old.revokedAt !== null || (old.expiresAt !== null && old.expiresAt <= context.now())) {
             return fail(404, 'Freigabelink nicht gefunden')
           }
-          // Vor dem Widerruf: eine Anfrage ueber der Grenze darf den alten Link nicht beenden.
+          // Before the revoke: a request over the limit must not end the old link.
           const reserved = reserveMails(auth, body['recipients'])
           if (isReply(reserved)) {
             return reserved
           }
-          // Die Zeile ist durch die Boardsperre festgehalten; der Widerruf trifft damit den geprueften Link.
+          // The row is held by the board lock, so the revoke hits the link that was checked.
           await revokeShareLink(tx, auth, access, old.id)
           const created = await issueShareLink(tx, auth, access, {
             role: old.role,

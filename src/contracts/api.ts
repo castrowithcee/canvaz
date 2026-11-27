@@ -1189,11 +1189,11 @@ export type TransferBoardOwnershipRequest = {
 /* Oeffentliche Gastfreigaben                                                                            */
 /* ---------------------------------------------------------------------------------------------------- */
 
-/** Freigabelinks eines Boards: lesen (GET), anlegen, widerrufen und ersetzen (POST). Alle `grant:manage`. */
+/** Share links of a board: read (GET), create, revoke and replace (POST). All `grant:manage`. */
 export const BOARD_SHARE_LINKS_PATH = `${API_BASE_PATH}/boards/share-links`
 export const BOARD_SHARE_LINK_CREATE_PATH = `${API_BASE_PATH}/boards/share-links/create`
 export const BOARD_SHARE_LINK_REVOKE_PATH = `${API_BASE_PATH}/boards/share-links/revoke`
-/** Widerruft den Link und legt im selben Schritt einen neuen an; Antwort wie beim Anlegen (201). */
+/** Revokes the link and creates a new one in the same step; response as for create (201). */
 export const BOARD_SHARE_LINK_REPLACE_PATH = `${API_BASE_PATH}/boards/share-links/replace`
 
 /** Beitritt ueber einen Freigabelink. Der einzige Endpunkt der Boardebene ohne jede Sitzung. */

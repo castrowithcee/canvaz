@@ -776,7 +776,7 @@ function ShareLinkRow({
   readonly link: BoardShareLinkView
   readonly now: Date
   readonly mailAvailable: boolean
-  /** Uebergibt die Adresse des Ersatzlinks genau einmal an `BoardShare`. */
+  /** Hands the replacement link's response to `BoardShare` exactly once. */
   readonly onCreated: (response: CreateBoardShareLinkResponse) => void
   readonly onChanged: () => void
 }) {
@@ -784,7 +784,7 @@ function ShareLinkRow({
   const [error, setError] = useState<string | null>(null)
   const [replacing, setReplacing] = useState(false)
   const [recipients, setRecipients] = useState('')
-  // Der Server ersetzt nur gueltige Links; die Zeile bietet es deshalb nur dort an.
+  // The server replaces only valid links, so the row offers it only there.
   const live = link.revokedAt === null && linkStatus(link, now) === 'gueltig'
 
   return (
