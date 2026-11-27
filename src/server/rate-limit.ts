@@ -67,6 +67,42 @@ export function createRateLimiter(options: {
   }
 }
 
+export type Quota = {
+  /** Bucht `count` Einheiten, wenn sie alle noch passen; sonst bucht sie nichts und liefert `false`. */
+  take(key: string, count: number): boolean
+}
+
+/**
+ * Feste Hoechstzahl je Schluessel in einem gleitenden Fenster. Anders als der Eimer oben bucht sie mehrere
+ * Einheiten auf einmal und ganz oder gar nicht: eine Anfrage, die die Grenze ueberschritte, darf auch
+ * nicht teilweise zaehlen.
+ */
+export function createQuota(options: {
+  readonly limit: number
+  readonly windowMs: number
+  readonly now: () => number
+}): Quota {
+  const usage = new Map<string, number[]>()
+  return {
+    take(key, count) {
+      const at = options.now()
+      const recent = (usage.get(key) ?? []).filter((time) => time > at - options.windowMs)
+      const allowed = recent.length + count <= options.limit
+      if (allowed) {
+        for (let i = 0; i < count; i += 1) {
+          recent.push(at)
+        }
+      }
+      if (recent.length === 0) {
+        usage.delete(key)
+      } else {
+        usage.set(key, recent)
+      }
+      return allowed
+    },
+  }
+}
+
 /**
  * Wen die Grenze zaehlt.
  *

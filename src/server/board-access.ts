@@ -58,6 +58,8 @@ export type BoardGate = {
       access: BoardAccess,
       body: Record<string, unknown>,
     ) => Promise<Reply>,
+    /** Laeuft nach dem Commit und vor dem Senden; nur hier darf ein Nebeneffekt die Antwort ergaenzen. */
+    afterCommit?: (reply: Reply) => Promise<Reply>,
   ): Promise<void>
 }
 
@@ -122,6 +124,7 @@ export function createBoardGate(context: AppContext): BoardGate {
       access: BoardAccess,
       body: Record<string, unknown>,
     ) => Promise<Reply>,
+    afterCommit?: (reply: Reply) => Promise<Reply>,
   ): Promise<void> {
     const guarded = await guardMutation(context, request, response)
     if (guarded === null) {
@@ -139,7 +142,7 @@ export function createBoardGate(context: AppContext): BoardGate {
       }
       return run(tx, guarded.auth, access, guarded.body)
     })
-    send(response, reply)
+    send(response, afterCommit === undefined ? reply : await afterCommit(reply))
   }
 
   return { deny, loadVisibleBoard, withLockedBoard }

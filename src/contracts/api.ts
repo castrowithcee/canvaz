@@ -1230,7 +1230,12 @@ export type BoardShareLinkView = {
 export type BoardShareLinksResponse = {
   readonly board: BoardView
   readonly links: readonly BoardShareLinkView[]
+  /** `false` ohne Postausgang: dann gibt es keinen Linkversand, und `recipients` ergibt 400. */
+  readonly mailAvailable: boolean
 }
+
+/** Hoechstzahl Empfaenger je Anlage oder Ersetzung. */
+export const MAX_SHARE_LINK_RECIPIENTS = 5
 
 export type CreateBoardShareLinkRequest = {
   readonly boardId: string
@@ -1238,6 +1243,15 @@ export type CreateBoardShareLinkRequest = {
   readonly role?: GuestRoleView
   /** Lebensdauer in Stunden. Fehlt sie, laeuft der Link nicht von selbst ab. */
   readonly expiresInHours?: number
+  /** 1 bis 5 Adressen, an die der Server den Link sendet. Sie werden nirgends gespeichert. */
+  readonly recipients?: readonly string[]
+}
+
+/** Ersetzen: wie Anlegen nimmt es optional `recipients`; Rolle und Ablauf bleiben die des alten Links. */
+export type ReplaceBoardShareLinkRequest = {
+  readonly boardId: string
+  readonly shareLinkId: string
+  readonly recipients?: readonly string[]
 }
 
 /**
@@ -1250,6 +1264,8 @@ export type CreateBoardShareLinkRequest = {
 export type CreateBoardShareLinkResponse = {
   readonly link: BoardShareLinkView
   readonly url: string
+  /** Nur mit `recipients`: wie viele Mails der Postausgang angenommen hat und wie viele nicht. */
+  readonly mails?: { readonly sent: number; readonly failed: number }
 }
 
 export type RevokeBoardShareLinkRequest = {

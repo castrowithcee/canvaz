@@ -247,9 +247,30 @@ describe('Freigabelinks verwalten', () => {
     const erzeugt = events.filter((event) => event.action === 'board-share-link.created')
     expect(erzeugt).toHaveLength(1)
     expect(erzeugt[0]?.targetId).toBe(angelegt.link.id)
-    expect(erzeugt[0]?.details).toEqual({ boardId: board.id, role: 'guest-viewer', expiresAt: null })
+    expect(erzeugt[0]?.details).toEqual({ boardId: board.id, role: 'guest-viewer', expiresAt: null, recipientCount: 0 })
     expect(JSON.stringify(events)).not.toContain(token)
     expect(JSON.stringify(app.logs)).not.toContain(token)
+  })
+
+  it('weist Empfaenger ohne Postausgang beim Anlegen und Ersetzen ab', async () => {
+    const { ada, board } = await aufbau()
+    const link = await createShareLink(ada, board.id)
+
+    const anlegen = await post(app, ada, BOARD_SHARE_LINK_CREATE_PATH, { boardId: board.id, recipients: ['x@example.com'] })
+    expect(anlegen.status).toBe(400)
+    const ersetzen = await post(app, ada, BOARD_SHARE_LINK_REPLACE_PATH, {
+      boardId: board.id,
+      shareLinkId: link.id,
+      recipients: ['x@example.com'],
+    })
+    expect(ersetzen.status).toBe(400)
+
+    const liste = await ada.jar.fetch(`${app.baseUrl}${BOARD_SHARE_LINKS_PATH}?${BOARD_ID_PARAM}=${board.id}`)
+    const gelistet = (await liste.json()) as BoardShareLinksResponse
+    // Kein neuer Link, der alte lebt noch, und die Oberflaeche erfaehrt, dass es kein Feld gibt.
+    expect(gelistet.links).toHaveLength(1)
+    expect(gelistet.links[0]?.revokedAt).toBeNull()
+    expect(gelistet.mailAvailable).toBe(false)
   })
 
   it('nimmt die schreibende Rolle nur ausdruecklich und weist Unbekanntes ab', async () => {

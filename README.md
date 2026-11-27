@@ -307,8 +307,10 @@ dann nicht. Mit Postausgang kommen diese Nachrichten dazu, jede an eine Adresse 
 | Passwort per Ruecksetzungslink gesetzt                                        | an die bestaetigte Wiederherstellungsadresse: die Mitteilung - **ohne** Link und Passwort   |
 | Zweiter Faktor des Systemadmins geaendert oder per Wiederherstellung entfernt | die Mitteilung, dass es geschah - **ohne** Geheimnis oder Ersatzcode                        |
 | `admin:recover` ausgefuehrt                                                   | die Mitteilung an den Systemadmin - **ohne** den Wiederherstellungslink                     |
+| Gastlink angelegt oder ersetzt, mit Empfaengern                               | an bis zu fuenf vom Owner genannte Adressen: der Link, Boardtitel, Rolle und Ablauf         |
 
-Ein Passwort steht in keiner Nachricht. Ein Postfach ist kein Ort fuer ein Geheimnis, das ohne zweiten
+Die Linkmail ist die einzige Nachricht an Adressen, die nicht zu einem Konto gehoeren (siehe
+[Oeffentliche Gastfreigaben](#oeffentliche-gastfreigaben)). Ein Passwort steht in keiner Nachricht. Ein Postfach ist kein Ort fuer ein Geheimnis, das ohne zweiten
 Faktor Zugang gibt; das neue Initialpasswort geht den Weg, den die Administration mit dem Konto vereinbart
 hat.
 
@@ -802,6 +804,15 @@ Stelle, an der Boardinhalt ohne Workspace-Mitgliedschaft erreichbar wird, und de
   abgelaufener, fremder oder erfundener Link ergibt dieselbe 404. Die Verbindungen des alten Links fallen wie
   beim Widerruf erst nach dem Commit; das Audit nennt `board-share-link.revoked` fuer den alten und
   `board-share-link.created` mit `replacesShareLinkId` fuer den neuen Link.
+- **Link per E-Mail.** Anlegen und Ersetzen nehmen optional `recipients` (1 bis 5 Adressen, Duplikate fallen
+  weg). Canvaz sendet den Link **nach dem Commit** und ausserhalb der Boardsperre; die 201-Antwort nennt
+  zusaetzlich `mails: { sent, failed }`, und ein Fehlschlag macht den Link nicht ungueltig. Die Adresse
+  wird trotzdem einmal zum Kopieren angezeigt. Empfaengeradressen werden **nicht gespeichert** und stehen
+  weder in Audit noch Log, auch nicht im Fehlerfall; das Audit `board-share-link.created` traegt nur
+  `recipientCount`. Je Nutzer gelten hoechstens 20 Linkmails pro Stunde (gezaehlt werden Mails, nicht
+  Anfragen, im Speicher der Instanz); eine Anfrage darueber ergibt 429, ohne dass ein Link entsteht oder
+  beim Ersetzen der alte widerrufen wird. Ohne Postausgang ergibt `recipients` 400, und die Liste meldet
+  `mailAvailable: false`, worauf die Oberflaeche das Feld weglaesst.
 
 Aus einem Link entsteht beim Beitritt eine **Gastsession**: serverseitig, widerrufbar, mit einem selbst
 gewaehlten Anzeigenamen und **vier Stunden** Lebensdauer. Sie ueberlebt ihren Link nie - laeuft der Link
@@ -842,7 +853,9 @@ Felder einzeln auf, statt aus der vollen Sicht etwas wegzulassen: ein spaeter er
 anlegen mit Rollenwahl (Voreinstellung `guest-viewer`) und optionaler Laufzeit in Stunden, die vorhandenen
 Links mit Rolle, Erzeuger, Ablauf, Zustand und Zahl der Beitritte, und je Zeile Widerrufen und Ersetzen (mit
 Bestaetigung, die benennt, dass die bisherige Adresse fuer niemanden mehr funktioniert und offene
-Gastsitzungen enden). Der
+Gastsitzungen enden). Mit Postausgang bietet das Formular beim Anlegen und die Bestaetigung beim Ersetzen
+das Feld "An E-Mail-Adressen senden"; der Einmal-Hinweis nennt danach, an wie viele Adressen versandt wurde
+und wie viele Mails scheiterten. Der
 Klartextlink erscheint **genau einmal**, unmittelbar nach der Anlage und mit dem Hinweis, dass er danach
 nicht erneut abrufbar ist, gilt auch fuer den Ersatzlink; die Liste zeigt ihn nie, und abgelegt wird er nirgends.
 

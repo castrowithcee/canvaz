@@ -16,13 +16,23 @@ import type { Pool } from 'pg'
 
 import {
   ADMIN_USER_CREATE_PATH,
+  BOARD_SHARE_LINKS_PATH,
+  BOARD_SHARE_LINK_CREATE_PATH,
+  BOARD_SHARE_LINK_REPLACE_PATH,
+  BOARD_ID_PARAM,
   ADMIN_USER_INVITATION_PATH,
   ADMIN_USER_PASSWORD_PATH,
   CSRF_HEADER,
 } from '../../src/contracts/api.js'
-import type { CreateInvitationResponse, CreateUserResponse } from '../../src/contracts/api.js'
+import type {
+  BoardShareLinksResponse,
+  CreateBoardShareLinkResponse,
+  CreateInvitationResponse,
+  CreateUserResponse,
+} from '../../src/contracts/api.js'
 import { migrate } from '../../src/persistence/migrate.js'
 import { createPool } from '../../src/persistence/pool.js'
+import { createBoard, createWorkspace } from '../support/board-fixture.js'
 import { signedInAsSystemAdmin } from '../support/local-accounts.js'
 import type { Account } from '../support/local-accounts.js'
 import { startTestApp } from '../support/test-app.js'
@@ -124,5 +134,58 @@ describe('Instanz mit Postausgang', () => {
     expect(app.mails).toHaveLength(1)
     expect(app.mails[0]?.to).toBe('drei@example.com')
     expect(app.mails[0]?.text).not.toContain(NEUES_PASSWORT)
+  })
+})
+
+describe('Gastlink per E-Mail', () => {
+  it('sendet den Link an beide Empfaenger, ohne Adresse oder Link in Log und Audit, und begrenzt je Nutzer', async () => {
+    const workspace = await createWorkspace(app, admin, 'Team Nord')
+    const board = await createBoard(app, admin, workspace.id, 'Skizze')
+
+    const response = await adminPost(BOARD_SHARE_LINK_CREATE_PATH, {
+      boardId: board.id,
+      recipients: ['eins@example.com', 'zwei@example.com', 'EINS@example.com'],
+    })
+    expect(response.status).toBe(201)
+    const created = (await response.json()) as CreateBoardShareLinkResponse
+    expect(created.mails).toEqual({ sent: 2, failed: 0 })
+    expect(app.mails.map((mail) => mail.to).sort()).toEqual(['eins@example.com', 'zwei@example.com'])
+    expect(app.mails[0]?.text).toContain(created.url)
+    expect(app.mails[0]?.text).toContain('Skizze')
+
+    const token = new URL(created.url).hash.slice(1)
+    const audit = JSON.stringify(await app.workspaces.audit.listForWorkspace(workspace.id))
+    const logs = JSON.stringify(app.logs)
+    for (const geheim of ['example.com', token]) {
+      expect(audit).not.toContain(geheim)
+      expect(logs).not.toContain(geheim)
+    }
+    expect(audit).toContain('"recipientCount":2')
+
+    const liste = await admin.jar.fetch(`${app.baseUrl}${BOARD_SHARE_LINKS_PATH}?${BOARD_ID_PARAM}=${board.id}`)
+    expect(((await liste.json()) as BoardShareLinksResponse).mailAvailable).toBe(true)
+
+    // 2 Mails sind verbraucht, 18 bleiben: neun weitere Anfragen mit zwei Empfaengern fuellen die Grenze.
+    for (let i = 0; i < 9; i += 1) {
+      const weiter = await adminPost(BOARD_SHARE_LINK_CREATE_PATH, {
+        boardId: board.id,
+        recipients: ['a@example.com', 'b@example.com'],
+      })
+      expect(weiter.status).toBe(201)
+    }
+    const links = async () => (await pool.query('select id from board_share_links where revoked_at is null')).rowCount
+    const before = await links()
+
+    const ueber = await adminPost(BOARD_SHARE_LINK_CREATE_PATH, { boardId: board.id, recipients: ['c@example.com'] })
+    expect(ueber.status).toBe(429)
+    const ersetzt = await adminPost(BOARD_SHARE_LINK_REPLACE_PATH, {
+      boardId: board.id,
+      shareLinkId: created.link.id,
+      recipients: ['c@example.com'],
+    })
+    expect(ersetzt.status).toBe(429)
+    // Weder ein neuer Link noch ein Widerruf, und keine 21. Mail.
+    expect(await links()).toBe(before)
+    expect(app.mails).toHaveLength(20)
   })
 })
