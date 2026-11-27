@@ -131,6 +131,16 @@ export function folderPath(folders: readonly FolderView[], folderId: string | nu
   return path
 }
 
+/** More than two ancestors: only the direct parent stays visible, the rest (outermost first) go into the menu. */
+export function splitAncestors<T>(ancestors: readonly T[]): {
+  readonly hidden: readonly T[]
+  readonly shown: readonly T[]
+} {
+  return ancestors.length > 2
+    ? { hidden: ancestors.slice(0, -1), shown: ancestors.slice(-1) }
+    : { hidden: [], shown: ancestors }
+}
+
 /** Titelfilter wie im Endpunkt: eine Teilzeichenkette ohne Ruecksicht auf Gross- und Kleinschreibung. */
 export function matchesTitle(title: string, term: string): boolean {
   return term === '' || title.toLowerCase().includes(term.toLowerCase())
