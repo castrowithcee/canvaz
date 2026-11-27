@@ -1729,10 +1729,7 @@
     margin: 0;
   }
 
-  /*
-   * Pfadleiste: immer eine Zeile. Die Namen kuerzen sich mit Ellipse (der volle Name steht als `title`),
-   * Arbeitsbereich, Auslassung und Chevrons behalten ihre Breite.
-   */
+  /* Always one line: names truncate with an ellipsis (full name in `title`), chevrons and the menu keep their width. */
   .breadcrumb {
     align-items: center;
     color: var(--color-text-muted);

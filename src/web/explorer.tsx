@@ -131,10 +131,7 @@ export function folderPath(folders: readonly FolderView[], folderId: string | nu
   return path
 }
 
-/**
- * Teilt die Vorfahren eines Ordners fuer die Pfadleiste: bei mehr als zwei bleibt nur der direkte Elternordner
- * sichtbar, die uebrigen (aussen zuerst) gehen ins Auslassungsmenue.
- */
+/** More than two ancestors: only the direct parent stays visible, the rest (outermost first) go into the menu. */
 export function splitAncestors<T>(ancestors: readonly T[]): {
   readonly hidden: readonly T[]
   readonly shown: readonly T[]
