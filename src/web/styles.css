@@ -485,6 +485,23 @@
     text-decoration: none;
   }
 
+  .brand {
+    align-items: center;
+    display: inline-flex;
+    gap: --spacing(2);
+  }
+
+  /* The surface keeps a logo with a transparent background readable in both schemes. */
+  .brand__logo {
+    background: var(--color-surface);
+    border-radius: var(--radius-sm);
+    height: 2rem;
+    max-width: 10rem;
+    object-fit: contain;
+    padding: --spacing(0.5);
+    width: auto;
+  }
+
   .app__nav {
     align-items: center;
     display: flex;
