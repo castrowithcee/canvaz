@@ -343,7 +343,8 @@ describe('Freigabelinks verwalten', () => {
 
   it('ersetzt einen Link in einem Schritt und beendet den alten samt seiner Verbindung', async () => {
     const { ada, workspace, board } = await aufbau()
-    const alt = await createShareLink(ada, board.id, { role: 'guest-editor', expiresAt: inFrom(DAY_MS) })
+    const ablauf = inFrom(DAY_MS)
+    const alt = await createShareLink(ada, board.id, { role: 'guest-editor', expiresAt: ablauf })
     const gast = await joinAsGuest(alt.token, 'Schreibgast')
     const verbindung = await connect(gast.jar.cookieHeader())
     await verbindung.join(board.id)
@@ -358,10 +359,10 @@ describe('Freigabelinks verwalten', () => {
     const liste = (await (
       await ada.jar.fetch(`${app.baseUrl}${BOARD_SHARE_LINKS_PATH}?${BOARD_ID_PARAM}=${board.id}`)
     ).json()) as BoardShareLinksResponse
-    const gelistetAlt = liste.links.find((link) => link.id === alt.id)
-    expect(gelistetAlt?.revokedAt).not.toBeNull()
+    // The list shows valid links only: the replaced one is gone, its replacement is there.
+    expect(liste.links.map((link) => link.id)).toEqual([ersatz.link.id])
     // Expiry is carried over unchanged.
-    expect(ersatz.link.expiresAt).toBe(gelistetAlt?.expiresAt)
+    expect(ersatz.link.expiresAt).toBe(ablauf)
 
     // The old address is dead, the old link's open connection is closed, the new address works.
     const beitritt = await fetch(`${app.baseUrl}${BOARD_GUEST_JOIN_PATH}`, {
