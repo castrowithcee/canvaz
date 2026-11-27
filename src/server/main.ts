@@ -8,6 +8,7 @@
 import { createServer } from 'node:http'
 
 import { createAssetStorage } from '../persistence/asset-storage.js'
+import { createBrandingStore } from '../persistence/branding-store.js'
 import { createBoardStore } from '../persistence/board-store.js'
 import { createIdentityStore } from '../persistence/identity-store.js'
 import { createPool } from '../persistence/pool.js'
@@ -74,6 +75,7 @@ const context: AppContext = {
   identity,
   workspaces,
   boards,
+  branding: createBrandingStore(pool),
   storage,
   // Ohne konfigurierten Provider gibt es keinen Client - und damit auch keine OIDC-Routen.
   oidc: config.oidc === null ? null : createOidcClient(config.oidc, config.baseUrl),

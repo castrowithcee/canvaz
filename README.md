@@ -576,6 +576,42 @@ im Sinne der DSGVO ist der jeweilige Betreiber der Instanz, nicht dieses Projekt
   und ueberprueft die Sperre spaetestens nach sechs Monaten erneut. Diese Dokumentation setzt dafuer kein
   bestimmtes Werkzeug voraus.
 
+## Branding
+
+Der Systemadmin gibt der Instanz ein eigenes Erscheinungsbild. Es ist ein einzelner Datensatz
+(`instance_branding`, genau eine Zeile) mit diesen Feldern:
+
+| Feld         | Regel                                                                                                |
+| ------------ | ---------------------------------------------------------------------------------------------------- |
+| Instanzname  | 0 bis 60 Zeichen, vorn und hinten gekuerzt. Leer heisst "Canvaz".                                     |
+| Akzentfarbe  | Eine der fuenf vorhandenen Akzentfarben (`violett`, `blau`, `petrol`, `fuchsia`, `graphit`) oder leer. |
+| Logo         | PNG, JPEG oder WebP, hoechstens 512 KB. Kein GIF, kein SVG.                                           |
+
+Es gibt keine freien Markenfarben: der Kontrast der Akzentfarben ist in Hell und Dunkel geprueft. Der Typ des
+Logos folgt dem Inhalt der Datei, nie ihrem Namen oder dem `Content-Type` der Anfrage. Die Groesse wird beim
+Einlesen begrenzt, ein zu grosser Koerper wird nicht gespeichert. Die Bytes liegen ueber den Assetspeicher
+unter dem Schluesselpraefix `branding/`, ein neues Logo ersetzt das alte, das alte wird geloescht. Jede
+Aenderung steht mit dem angemeldeten Konto im Log (`branding.settings.changed`, `branding.logo.changed`,
+`branding.logo.removed`), nie mit Bildinhalt.
+
+Gepflegt wird es auf der Seite "Branding" der Systemadministration, neben der Kontenverwaltung und nur fuer
+Systemadmins: Name, Auswahl der Akzentfarbe mit Vorschau, Logo hochladen mit Vorschau und Entfernen.
+
+### Endpunkte
+
+| Methode und Pfad                         | Zugriff               | Wirkung                                                                                |
+| ---------------------------------------- | --------------------- | -------------------------------------------------------------------------------------- |
+| `GET /api/branding`                      | oeffentlich           | `instanceName`, `accent` (oder `null`), `logoVersion` (oder `null`). Nichts sonst.       |
+| `GET /api/branding/logo?v=<Version>`     | oeffentlich           | Logo-Bytes mit gespeichertem `Content-Type` und `X-Content-Type-Options: nosniff`.       |
+| `GET /api/admin/branding`                | Systemadmin           | Gepflegte Werte samt Zeitpunkt der letzten Aenderung.                                  |
+| `POST /api/admin/branding`               | Systemadmin, CSRF     | Name und Akzentfarbe setzen (`{ instanceName, accent }`).                              |
+| `POST /api/admin/branding/logo`          | Systemadmin, CSRF     | Logo hochladen: Rohbytes im Koerper. `413` zu gross, `415` kein PNG, JPEG oder WebP.    |
+| `POST /api/admin/branding/logo/remove`   | Systemadmin, CSRF     | Logo entfernen.                                                                        |
+
+Die Logo-Version aendert sich genau mit dem Logo. Eine Anfrage mit der aktuellen Version darf ein Jahr lang
+zwischengespeichert werden (`immutable`), jede andere bekommt das aktuelle Logo mit `no-cache`. Die
+Content-Security-Policy bleibt unveraendert: das Logo kommt von der eigenen Herkunft.
+
 ## Arbeitsbereiche und Rollen
 
 Ein **Arbeitsbereich** ist die aeussere Datengrenze der Instanz: jeder fachliche Datensatz traegt seinen
@@ -1729,9 +1765,12 @@ Alarm weitergibt.
   Konsistenzzusage: Assets werden nur angelegt, nie geloescht, deshalb liegt ein zwischenzeitlich
   hochgeladenes Bild danach ohne Datensatz im Speicher und stoert niemanden - andersherum verwiese ein
   Datensatz auf Bytes, die im Archiv fehlen.
-- Die Assets als `tar`, nur im Modus `filesystem` aus dem Volume. Im Modus `s3` liegen die Bytes bei einem
-  externen Objektspeicher, den diese Instanz nicht mitliefert; ihre Sicherung ist Sache des Betreibers bzw.
-  des Anbieters, und das Archiv enthaelt dafuer keinen eigenen Stand.
+- Die Assets als `tar`, nur im Modus `filesystem` aus dem Volume, einschliesslich des Instanzlogos (Praefix
+  `branding/`). Anders als Bildassets wird das Logo beim Ersetzen geloescht: ersetzt oder entfernt ein Systemadmin es
+  zwischen Datenbankabzug und Assetabzug, fehlen dem gesicherten Datensatz die Bytes, und das Logo wird nach
+  einer Wiederherstellung neu hochgeladen. Im Modus `s3` liegen die Bytes bei einem externen Objektspeicher,
+  den diese Instanz nicht mitliefert; ihre Sicherung ist Sache des Betreibers bzw. des Anbieters, und das
+  Archiv enthaelt dafuer keinen eigenen Stand.
 - Ein `meta`-Eintrag mit Zeitpunkt, Adapter, Image und angewendeter Schemaversion.
 - Verschluesselt mit `gpg --symmetric` (AES-256) **bevor** das Archiv seinen Platz hat. Die Passphrase steht
   in einer Datei ausserhalb des Repositories (`CANVAZ_BACKUP_PASSPHRASE_FILE`). Aufbewahrung sind 14 Tage;
