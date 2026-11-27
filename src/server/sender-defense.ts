@@ -268,7 +268,10 @@ export function createSenderDefenseGuard(config: Pick<AppConfig, 'loginBlock'>):
       // keine abgelaufene Zeile bleibt laenger liegen als bis zum naechsten Versuch.
       await context.identity.senderDefense.purgeExpired(cutoffs)
       const hash = hashSenderKey(keyring.current(), key.hashInput)
-      const attempts = await context.identity.senderDefense.counters.hit(hash, now, cutoffs.counterWindowStart)
+      // The counter only knows the hash, so the plaintext address supplies the lift time: one more failure
+      // after an operator lifted the block must not block again at once.
+      const liftedAt = await context.identity.senderDefense.blocks.findLiftedAt(key.address)
+      const attempts = await context.identity.senderDefense.counters.hit(hash, now, cutoffs.counterWindowStart, liftedAt)
       if (attempts < loginBlock.threshold) {
         return
       }
