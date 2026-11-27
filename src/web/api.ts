@@ -15,6 +15,10 @@ import type {
   AdminUsersResponse,
   AuthMethodsResponse,
   ClientAddressResponse,
+  DecideSenderBlockProposalRequest,
+  LiftSenderBlockRequest,
+  SenderBlockActionResponse,
+  SenderBlocksResponse,
   ChangePasswordRequest,
   CreateInvitationResponse,
   CreateUserRequest,
@@ -91,6 +95,9 @@ import {
   BRANDING_LOGO_VERSION_PARAM,
   BRANDING_PATH,
   ADMIN_CLIENT_ADDRESS_PATH,
+  ADMIN_SENDER_BLOCK_LIFT_PATH,
+  ADMIN_SENDER_BLOCK_PROPOSAL_DECIDE_PATH,
+  ADMIN_SENDER_BLOCKS_PATH,
   ADMIN_API_KEY_REVOKE_PATH,
   ADMIN_API_KEYS_PATH,
   ADMIN_USER_API_ACCESS_PATH,
@@ -351,6 +358,21 @@ export async function setUserStatus(csrfToken: string, change: SetUserStatusRequ
 
 export async function fetchClientAddress(): Promise<ClientAddressResponse> {
   return request<ClientAddressResponse>(ADMIN_CLIENT_ADDRESS_PATH)
+}
+
+export async function fetchSenderBlocks(): Promise<SenderBlocksResponse> {
+  return request<SenderBlocksResponse>(ADMIN_SENDER_BLOCKS_PATH)
+}
+
+export async function liftSenderBlock(csrfToken: string, change: LiftSenderBlockRequest): Promise<SenderBlockActionResponse> {
+  return request<SenderBlockActionResponse>(ADMIN_SENDER_BLOCK_LIFT_PATH, mutation(csrfToken, change))
+}
+
+export async function decideSenderBlockProposal(
+  csrfToken: string,
+  change: DecideSenderBlockProposalRequest,
+): Promise<SenderBlockActionResponse> {
+  return request<SenderBlockActionResponse>(ADMIN_SENDER_BLOCK_PROPOSAL_DECIDE_PATH, mutation(csrfToken, change))
 }
 
 /** Public and without session: the login page and the guest view read it before anything else. */

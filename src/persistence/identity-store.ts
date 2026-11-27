@@ -592,9 +592,15 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Identit
 
     senderDefense: {
       counters: {
-        async hit(keyHash: string, now: Date, windowStart: Date): Promise<number> {
-          // Dasselbe Vorgehen wie bei `loginThrottle.hit`: abgelaufene Fenster zuerst weg, dann buchen.
-          await db.query('delete from sender_failure_counter where window_started_at < $1', [windowStart])
+        async hit(keyHash: string, now: Date, windowStart: Date, liftedAt: Date | null): Promise<number> {
+          // Same approach as `loginThrottle.hit`: expired windows go first, then the failure is booked. A
+          // window that began before the block was lifted counts as expired for this address only.
+          await db.query(
+            `delete from sender_failure_counter
+             where window_started_at < $1
+                or (key_hash = $2 and window_started_at < $3::timestamptz)`,
+            [windowStart, keyHash, liftedAt],
+          )
           const result = await db.query<{ attempts: number }>(
             `insert into sender_failure_counter (key_hash, attempts, window_started_at)
              values ($1, 1, $2)
@@ -644,7 +650,8 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Identit
                reason = excluded.reason,
                failure_count = excluded.failure_count,
                created_at = excluded.created_at,
-               expires_at = excluded.expires_at
+               expires_at = excluded.expires_at,
+               lifted_at = null
              returning address, address_kind, reason, failure_count, created_at, expires_at`,
             [entry.address, entry.kind, entry.reason, entry.failureCount, now, expiresAt],
           )
@@ -657,13 +664,22 @@ function createStore(pool: Pool, db: Queryable, inTransaction: boolean): Identit
           return { record, priorBlockWithinProposalWindow }
         },
 
+        async findLiftedAt(address: string): Promise<Date | null> {
+          const result = await db.query<{ lifted_at: Date | null }>(
+            'select lifted_at from sender_block where address = $1',
+            [address],
+          )
+          return result.rows[0]?.lifted_at ?? null
+        },
+
         async liftActive(address: string, now: Date): Promise<boolean> {
-          // Beendet nur die aktive Sperre: die Zeile bleibt als Vorgeschichte fuer den Vorschlag bei einer
-          // zweiten Sperre erhalten und faellt erst ueber die Aufbewahrungsfrist weg. created_at wird hoechstens
-          // um eine Millisekunde zurueckgesetzt, damit `expires_at > created_at` auch bei gleicher Uhrzeit gilt.
+          // Ends only the active block: the row stays as history for the proposal on a second block and is
+          // removed by the retention period. created_at moves back by at most a millisecond so that
+          // `expires_at > created_at` holds even at the same instant.
           const result = await db.query(
             `update sender_block
              set expires_at = $2::timestamptz,
+                 lifted_at = $2::timestamptz,
                  created_at = least(created_at, $2::timestamptz - interval '1 millisecond')
              where address = $1 and expires_at > $2::timestamptz`,
             [address, now],

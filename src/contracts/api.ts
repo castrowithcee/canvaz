@@ -84,6 +84,10 @@ export const ADMIN_API_KEY_REVOKE_PATH = `${API_BASE_PATH}/admin/api-keys/revoke
  * Speichert nichts; die Antwort gilt genau fuer diese eine Anfrage.
  */
 export const ADMIN_CLIENT_ADDRESS_PATH = `${API_BASE_PATH}/admin/client-address`
+/** Active sender blocks and open proposals for a permanent block, system admin only. */
+export const ADMIN_SENDER_BLOCKS_PATH = `${API_BASE_PATH}/admin/sender-blocks`
+export const ADMIN_SENDER_BLOCK_LIFT_PATH = `${API_BASE_PATH}/admin/sender-blocks/lift`
+export const ADMIN_SENDER_BLOCK_PROPOSAL_DECIDE_PATH = `${API_BASE_PATH}/admin/sender-blocks/proposals/decide`
 /** Instance branding. Public: name, default accent and logo version only (GET), no session. */
 export const BRANDING_PATH = `${API_BASE_PATH}/branding`
 /** Public logo bytes; the `v` parameter is the logo version and makes the response cacheable. */
@@ -495,6 +499,48 @@ export type ClientAddressResponse = {
   /** Urteil ueber die Anfragen dieses Prozesses insgesamt, nicht nur ueber diese eine. */
   readonly plausibility: ClientAddressPlausibility
 }
+
+/** Kind of a blocked sender: a single IPv4 address or an IPv6 /64 prefix. */
+export type SenderBlockKindView = 'ipv4' | 'ipv6-64'
+
+export type SenderBlockView = {
+  /** IPv4 address or IPv6 /64 prefix in CIDR notation (`2001:db8:0:1::/64`). Appears only in this response. */
+  readonly address: string
+  readonly kind: SenderBlockKindView
+  readonly reason: string
+  readonly failureCount: number
+  readonly blockedAt: string
+  readonly expiresAt: string
+}
+
+export type SenderBlockProposalView = {
+  readonly id: string
+  /** Same notation as `SenderBlockView.address`. */
+  readonly address: string
+  readonly kind: SenderBlockKindView
+  readonly reason: string
+  readonly firstBlockedAt: string
+  readonly secondBlockedAt: string
+}
+
+export type SenderBlocksResponse = {
+  readonly blocks: readonly SenderBlockView[]
+  /** Only open proposals; a decided one is gone. */
+  readonly proposals: readonly SenderBlockProposalView[]
+}
+
+/** `address` as shown in `SenderBlockView`; a bare IPv6 address of the /64 network works as well. */
+export type LiftSenderBlockRequest = {
+  readonly address: string
+}
+
+/** `accepted`: the permanent block was set outside Canvaz. `rejected`: no permanent block. */
+export type DecideSenderBlockProposalRequest = {
+  readonly id: string
+  readonly status: 'accepted' | 'rejected'
+}
+
+export type SenderBlockActionResponse = { readonly status: 'ok' }
 
 /**
  * Kontoanlage durch den Systemadmin.
