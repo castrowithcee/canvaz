@@ -36,11 +36,13 @@ import {
   BOARD_GUEST_SESSION_PATH,
   BOARD_ID_PARAM,
   BOARD_SHARE_LINK_CREATE_PATH,
+  BOARD_SHARE_LINK_REPLACE_PATH,
   BOARD_SHARE_LINK_REVOKE_PATH,
   BOARD_SHARE_LINKS_PATH,
   GUEST_APP_PATH,
 } from '../contracts/api.js'
 import type { AuthenticatedGuest, BoardShareLink } from '../domain/board/guest.js'
+import type { AuthenticatedSession } from '../domain/identity/model.js'
 import {
   DEFAULT_GUEST_ROLE,
   MAX_GUEST_DISPLAY_NAME_LENGTH,
@@ -49,7 +51,7 @@ import {
   parseGuestRole,
   parseShareLinkExpiry,
 } from '../domain/board/guest.js'
-import type { BoardAccess, BoardShareLinkEntry } from '../domain/board/repositories.js'
+import type { BoardAccess, BoardShareLinkEntry, BoardStore } from '../domain/board/repositories.js'
 import { NOT_FOUND, createBoardGate } from './board-access.js'
 import { toBoardView, toGuestBoardView } from './board-views.js'
 import type { AppContext } from './context.js'
@@ -113,6 +115,81 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
   function hasAllowedOrigin(request: IncomingMessage): boolean {
     const origin = request.headers.origin
     return origin === undefined || origin === allowedOrigin
+  }
+
+  /**
+   * Creates a link with audit and log in the running transaction. Shared by create and replace so both
+   * write the same evidence. The token exists only in the return value.
+   */
+  async function issueShareLink(
+    tx: BoardStore,
+    auth: AuthenticatedSession,
+    access: BoardAccess,
+    input: { readonly role: BoardShareLink['role']; readonly expiresAt: Date | null; readonly replacesId?: string },
+  ): Promise<CreateBoardShareLinkResponse> {
+    // From here on the plaintext token exists only in this variable and in the response.
+    const token = createShareToken()
+    const link = await tx.shareLinks.create({
+      boardId: access.board.id,
+      workspaceId: access.workspace.id,
+      tokenHash: hashGuestToken(token),
+      role: input.role,
+      createdByUserId: auth.user.id,
+      expiresAt: input.expiresAt,
+    })
+    await tx.audit.record({
+      actorId: auth.user.id,
+      action: 'board-share-link.created',
+      targetType: 'board-share-link',
+      targetId: link.id,
+      workspaceId: access.workspace.id,
+      // Share metadata, never the token and never board content.
+      details: {
+        boardId: access.board.id,
+        role: link.role,
+        expiresAt: link.expiresAt?.toISOString() ?? null,
+        ...(input.replacesId === undefined ? {} : { replacesShareLinkId: input.replacesId }),
+      },
+    })
+    context.logger('info', 'board.share-link.created', {
+      userId: auth.user.id,
+      boardId: access.board.id,
+      shareLinkId: link.id,
+      role: link.role,
+      ...(input.replacesId === undefined ? {} : { replacesShareLinkId: input.replacesId }),
+    })
+    return {
+      link: toCreatedView(link, auth.user.displayName),
+      // Fragment instead of query string: the token never reaches a server, log or referrer, not even ours.
+      url: `${new URL(GUEST_APP_PATH, config.baseUrl).href}#${token}`,
+    }
+  }
+
+  /** Revokes a link with audit and log in the running transaction; `null` if it does not exist. */
+  async function revokeShareLink(
+    tx: BoardStore,
+    auth: AuthenticatedSession,
+    access: BoardAccess,
+    shareLinkId: string,
+  ): Promise<BoardShareLink | null> {
+    const link = await tx.shareLinks.revoke(access.board.id, shareLinkId, context.now())
+    if (link === null) {
+      return null
+    }
+    await tx.audit.record({
+      actorId: auth.user.id,
+      action: 'board-share-link.revoked',
+      targetType: 'board-share-link',
+      targetId: link.id,
+      workspaceId: access.workspace.id,
+      details: { boardId: access.board.id, role: link.role },
+    })
+    context.logger('info', 'board.share-link.revoked', {
+      userId: auth.user.id,
+      boardId: access.board.id,
+      shareLinkId: link.id,
+    })
+    return link
   }
 
   return [
@@ -184,41 +261,10 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
           if (denial !== null) {
             return denial
           }
-          // Das Klartexttoken existiert ab hier ausschliesslich in dieser Variablen und in der Antwort.
-          const token = createShareToken()
-          const link = await tx.shareLinks.create({
-            boardId: access.board.id,
-            workspaceId: access.workspace.id,
-            tokenHash: hashGuestToken(token),
+          const created = await issueShareLink(tx, auth, access, {
             role,
-            createdByUserId: auth.user.id,
             expiresAt: expiresAt ?? null,
           })
-          await tx.audit.record({
-            actorId: auth.user.id,
-            action: 'board-share-link.created',
-            targetType: 'board-share-link',
-            targetId: link.id,
-            workspaceId: access.workspace.id,
-            // Metadaten der Freigabe, nie das Token und nie Boardinhalt.
-            details: {
-              boardId: access.board.id,
-              role: link.role,
-              expiresAt: link.expiresAt?.toISOString() ?? null,
-            },
-          })
-          context.logger('info', 'board.share-link.created', {
-            userId: auth.user.id,
-            boardId: access.board.id,
-            shareLinkId: link.id,
-            role: link.role,
-          })
-          const created: CreateBoardShareLinkResponse = {
-            link: toCreatedView(link, auth.user.displayName),
-            // Fragment statt Abfragezeichenfolge: so erreicht das Token nie einen Server, ein Protokoll oder
-            // einen Referrer - auch nicht den eigenen.
-            url: `${new URL(GUEST_APP_PATH, config.baseUrl).href}#${token}`,
-          }
           return ok(201, created)
         })
       },
@@ -250,28 +296,57 @@ export function createBoardShareRoutes(context: AppContext): readonly Route[] {
           if (denial !== null) {
             return denial
           }
-          const link = await tx.shareLinks.revoke(access.board.id, shareLinkId, context.now())
+          const link = await revokeShareLink(tx, auth, access, shareLinkId)
           if (link === null) {
             return fail(404, 'Freigabelink nicht gefunden')
           }
-          await tx.audit.record({
-            actorId: auth.user.id,
-            action: 'board-share-link.revoked',
-            targetType: 'board-share-link',
-            targetId: link.id,
-            workspaceId: access.workspace.id,
-            details: { boardId: access.board.id, role: link.role },
-          })
-          context.logger('info', 'board.share-link.revoked', {
-            userId: auth.user.id,
-            boardId: access.board.id,
-            shareLinkId: link.id,
-          })
           revoked.id = link.id
           return ok(200, toShareLinkView({ ...link, createdByDisplayName: null, guestCount: 0 }))
         })
         if (revoked.id !== null) {
           // Erst nach dem Commit: eine zurueckgerollte Transaktion darf keine Verbindung beendet haben.
+          context.realtime.closeShareLink(revoked.id)
+        }
+      },
+    },
+
+    /**
+     * Replaces a share link in one step.
+     *
+     * Revoking the old and creating the new link run in one transaction under the board lock: if one
+     * fails, the other does not happen. The new link keeps role and expiry unchanged. Only valid links
+     * are replaced; a revoked, expired, foreign or invented one gives the same 404. The old link's
+     * connections close only after the commit, as with revoke.
+     */
+    {
+      method: 'POST',
+      path: BOARD_SHARE_LINK_REPLACE_PATH,
+      handle: async ({ request, response }) => {
+        const revoked: { id: string | null } = { id: null }
+        await withLockedBoard(request, response, async (tx, auth, access, body) => {
+          const shareLinkId = readUuid(body['shareLinkId'])
+          if (shareLinkId === null) {
+            return fail(400, 'shareLinkId wird erwartet')
+          }
+          const denial = deny(asRequester(auth), access.workspace, access, 'grant:manage')
+          if (denial !== null) {
+            return denial
+          }
+          const old = await tx.shareLinks.find(access.board.id, shareLinkId)
+          if (old === null || old.revokedAt !== null || (old.expiresAt !== null && old.expiresAt <= context.now())) {
+            return fail(404, 'Freigabelink nicht gefunden')
+          }
+          // The row is held by the board lock, so the revoke hits the link that was checked.
+          await revokeShareLink(tx, auth, access, old.id)
+          const created = await issueShareLink(tx, auth, access, {
+            role: old.role,
+            expiresAt: old.expiresAt,
+            replacesId: old.id,
+          })
+          revoked.id = old.id
+          return ok(201, created)
+        })
+        if (revoked.id !== null) {
           context.realtime.closeShareLink(revoked.id)
         }
       },

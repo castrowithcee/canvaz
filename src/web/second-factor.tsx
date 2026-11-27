@@ -25,6 +25,7 @@ import {
   renewBackupCodes,
   verifySecondFactor,
 } from './api.js'
+import { BrandHeading } from './branding.js'
 import { Button, Field, Notice } from './ui.js'
 
 function messageOf(cause: unknown, fallback: string): string {
@@ -316,7 +317,7 @@ export function SecondFactorGate({
 
   return (
     <main className="shell">
-      <h1>Canvaz</h1>
+      <BrandHeading />
       <section aria-labelledby="zweiter-faktor">
         <h2 id="zweiter-faktor">{setup ? 'Zweiten Faktor einrichten' : 'Anmeldung bestaetigen'}</h2>
         <p>

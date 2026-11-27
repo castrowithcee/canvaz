@@ -18,6 +18,7 @@ import {
   BRANDING_PATH,
   CSRF_HEADER,
   MAX_BRANDING_LOGO_BYTES,
+  ME_APPEARANCE_PATH,
   ME_PATH,
 } from '../../src/contracts/api.js'
 import type { AdminBrandingView, MeResponse, PublicBrandingResponse } from '../../src/contracts/api.js'
@@ -189,5 +190,19 @@ describe('Branding', () => {
     })
     expect(noToken.status).toBe(403)
     expect((await publicBranding()).instanceName).toBe('Canvaz')
+  })
+
+  it('liefert dem Nutzer ohne eigene Wahl den Instanz-Akzent, ohne eine Zeile anzulegen, und laesst die eigene Wahl vorgehen', async () => {
+    const admin = await signedInAsSystemAdmin(app)
+    expect((await postJson(admin, ADMIN_BRANDING_PATH, { instanceName: '', accent: 'petrol' })).status).toBe(200)
+    const ada = await ordinaryUser()
+    const accentOf = async (): Promise<string> =>
+      ((await (await ada.jar.fetch(`${app.baseUrl}${ME_PATH}`)).json()) as MeResponse).appearance.accent
+
+    expect(await accentOf()).toBe('petrol')
+    expect((await pool.query('select 1 from user_appearance')).rowCount).toBe(0)
+
+    expect((await postJson(ada, ME_APPEARANCE_PATH, { colorScheme: 'system', accent: 'blau' })).status).toBe(200)
+    expect(await accentOf()).toBe('blau')
   })
 })

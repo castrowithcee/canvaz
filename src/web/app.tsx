@@ -78,6 +78,7 @@ import { AdminUsers } from './admin-users.js'
 import { ApiKeySettings, consumeReturnToAccount } from './api-keys.js'
 import { ApiError, fetchMe, fetchWorkspaces, logout } from './api.js'
 import { applyAppearance } from './appearance.js'
+import { BrandHeading, BrandMark, useBranding } from './branding.js'
 import { BoardEditor } from './board/lazy-editor.js'
 import { BoardTrash } from './board-trash.js'
 import { Boards } from './boards.js'
@@ -203,7 +204,9 @@ function Header({
           onClick={onToggleNav}
         />
         <h1 className="app__brand">
-          <Link route={{ kind: 'einstieg', filter: null }}>Canvaz</Link>
+          <Link route={{ kind: 'einstieg', filter: null }}>
+            <BrandMark />
+          </Link>
         </h1>
       </div>
       <nav className="app__nav" aria-label="Konto und Verwaltung">
@@ -631,7 +634,7 @@ function Shell({
   if (workspaces === null) {
     return (
       <main className="shell">
-        <h1>Canvaz</h1>
+        <BrandHeading />
         <Loading text="Arbeitsbereiche werden geladen …" />
       </main>
     )
@@ -672,7 +675,7 @@ function Shell({
       <Suspense
         fallback={
           <main className="shell">
-            <h1>Canvaz</h1>
+            <BrandHeading />
             <Loading text="Editor wird geladen …" />
           </main>
         }
@@ -835,11 +838,12 @@ function MemberApp() {
   // Das Erscheinungsbild folgt dem Profil: angemeldet die Wahl des Kontos, abgemeldet die Standardwahl.
   // Waehrend des Ladens bleibt stehen, was schon gilt - sonst blitzte ein Neuladen auf.
   const appearance = state.kind === 'authenticated' ? state.me.appearance : state.kind === 'anonymous' ? null : undefined
+  const instanceAccent = useBranding()?.accent ?? null
   useEffect(() => {
     if (appearance !== undefined) {
-      applyAppearance(appearance)
+      applyAppearance(appearance, instanceAccent)
     }
-  }, [appearance])
+  }, [appearance, instanceAccent])
 
   /** Eine gespeicherte Wahl gilt sofort; das Profil wird dafuer nicht neu geladen. */
   const changeAppearance = useCallback((next: AppearanceView) => {
@@ -851,7 +855,7 @@ function MemberApp() {
   if (state.kind === 'loading') {
     return (
       <main className="shell">
-        <h1>Canvaz</h1>
+        <BrandHeading />
         <Loading text="Sitzung wird geprueft …" />
       </main>
     )
@@ -859,7 +863,7 @@ function MemberApp() {
   if (state.kind === 'failed') {
     return (
       <main className="shell">
-        <h1>Canvaz</h1>
+        <BrandHeading />
         <LoadFailed text={state.message} onRetry={load} />
       </main>
     )
