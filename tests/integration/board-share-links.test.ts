@@ -360,10 +360,10 @@ describe('Freigabelinks verwalten', () => {
     ).json()) as BoardShareLinksResponse
     const gelistetAlt = liste.links.find((link) => link.id === alt.id)
     expect(gelistetAlt?.revokedAt).not.toBeNull()
-    // Der Ablauf wird unveraendert uebernommen.
+    // Expiry is carried over unchanged.
     expect(ersatz.link.expiresAt).toBe(gelistetAlt?.expiresAt)
 
-    // Die alte Adresse ist tot, die offene Verbindung des alten Links ist zu, die neue Adresse traegt.
+    // The old address is dead, the old link's open connection is closed, the new address works.
     const beitritt = await fetch(`${app.baseUrl}${BOARD_GUEST_JOIN_PATH}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -374,7 +374,7 @@ describe('Freigabelinks verwalten', () => {
     expect(BEENDET).toContain(await verbindung.closeCode)
     await joinAsGuest(neuesToken, 'Neugast')
 
-    // Nachweis fuer beide Links, ohne Token in Nachweis, Log oder Datenbank.
+    // Evidence for both links, with no token in evidence, log or database.
     const events = await auditEvents(workspace.id)
     expect(events.filter((event) => event.action === 'board-share-link.revoked').map((e) => e.targetId)).toEqual([
       alt.id,
@@ -403,11 +403,11 @@ describe('Freigabelinks verwalten', () => {
 
     const ersetze = (account: Account, boardId: string, shareLinkId: string) =>
       post(app, account, BOARD_SHARE_LINK_REPLACE_PATH, { boardId, shareLinkId })
-    // Widerrufen, fremdes Board und erfundene Kennung ergeben dieselbe 404.
+    // Revoked, foreign board and invented id give the same 404.
     expect((await ersetze(ada, board.id, widerrufen.id)).status).toBe(404)
     expect((await ersetze(ada, zweites.id, gueltig.id)).status).toBe(404)
     expect((await ersetze(ada, board.id, FREMDE_KENNUNG)).status).toBe(404)
-    // Bob ist Editor ohne `grant:manage`.
+    // Bob is an editor without `grant:manage`.
     expect((await ersetze(bob, board.id, gueltig.id)).status).toBe(403)
     expect(await auditEvents(workspace.id)).toHaveLength(vorher)
 

@@ -707,7 +707,7 @@ export async function revokeBoardShareLink(
   return request<BoardShareLinkView>(BOARD_SHARE_LINK_REVOKE_PATH, mutation(csrfToken, change))
 }
 
-/** Widerruft einen Link und legt im selben Schritt einen neuen an. Dessen Adresse steht genau einmal in der Antwort. */
+/** Revokes a link and creates a new one in the same step. Its address appears once in the response. */
 export async function replaceBoardShareLink(
   csrfToken: string,
   change: { readonly boardId: string; readonly shareLinkId: string },
