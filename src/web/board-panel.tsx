@@ -7,18 +7,18 @@
  * Handlung sichtbar. Fuer dieselbe Handlung gibt es damit **einen** Ort - die alte Adresse fuehrt hierher
  * (siehe `router.tsx`).
  *
- * Sie hat einen Bereich: die **Uebersicht** (wo liegt das Board, wem gehoert es, wie steht es um Speicherung
- * und Verbindung, wie geht es weg), dazu nur eine Zusammenfassung der Freigaben. Der offene Bereich steht in
- * der Adresse; geschlossen wird ueber `closeLayer` (`router.tsx`), das Board bleibt dabei offen.
+ * It has one section: the **overview** (where the board is, who owns it, how saving and connection stand,
+ * how it leaves), plus only a summary of the shares. The open section is in the address; it is closed via
+ * `closeLayer` (`router.tsx`), the board stays open.
  *
- * Versionsverlauf und Freigabeverwaltung sind **keine** Bereiche dieser Leiste mehr: ihre Tabellen sind
- * breiter, als hier schmal neben der Zeichenflaeche Platz haette, und stehen deshalb in eigenen Dialogen
- * (`board-versions.tsx`, `board-shares-overlay.tsx`, gemountet in `board/board-view.tsx`). Alte Direktlinks
- * auf `versionen` und `freigaben` fuehren weiterhin dorthin.
+ * Version history and share management are **no longer** sections of this panel: their tables are wider
+ * than the narrow space beside the canvas, so they live in their own dialogs (`board-versions.tsx`,
+ * `board-shares-overlay.tsx`, mounted in `board/board-view.tsx`). Old direct links to `versionen` and
+ * `freigaben` still lead there.
  *
  * Die Ansicht entscheidet nichts. Was sie anbietet, leitet sie aus der vom Server genannten Rolle mit
  * **denselben** Funktionen ab, mit denen der Server entscheidet (`mayChangeBoard`, `mayManageBoard`,
- * `mayRestoreBoard`); jede Ablehnung erscheint als Text. Die Freigaben selbst bleiben in `board-share.tsx`
+ * `mayRestoreBoard`); every refusal appears as text. The shares themselves stay in `board-share.tsx`
  * - hier entsteht keine zweite Fachlogik.
  *
  * Ein Gast erreicht diese Sidebar nicht: sie wird nur im Mitgliedskontext gerendert, und jeder ihrer
@@ -52,7 +52,7 @@ const ROLE_LABELS: Readonly<Record<BoardRoleView, string>> = {
   viewer: 'Viewer',
 }
 
-/** Der einzige Bereich dieser Leiste - Versionsverlauf und Freigaben sind eigene Dialoge. */
+/** The only section of this panel; version history and shares are their own dialogs. */
 export type SidebarPanelView = Exclude<BoardPanelView, 'versionen' | 'freigaben'>
 
 /** Uebersetzt eine Serverantwort in einen Satz. 404 und 403 bekommen bewusst eigene Texte. */
@@ -283,10 +283,10 @@ export type BoardSessionDetails = {
 }
 
 /**
- * Kurze Zusammenfassung der Freigaben mit dem Weg in den Dialog. Die Verwaltung selbst liegt dort.
+ * Short summary of the shares with the way into the dialog. The management itself lives there.
  *
- * Gastlinks lesen darf nur, wer verwalten darf (wie in `board-share.tsx`): wer es nicht darf, bekommt keine
- * Anfrage und keine Zahl.
+ * Only whoever may manage may read guest links (as in `board-share.tsx`): anyone else gets no request and
+ * no count.
  */
 function ShareSummary({
   board,
@@ -524,7 +524,7 @@ export function BoardPanel({
   readonly boardId: string
   /** Zaehler des Editors: er steigt, wenn dort etwas am Board geaendert wurde (etwa der Titel). */
   readonly revision: number
-  /** Oeffnet den Freigabedialog. */
+  /** Opens the share dialog. */
   readonly onShares: () => void
   /** Meldet der Huelle, dass sich an den Boards etwas geaendert hat. */
   readonly onChanged: () => void

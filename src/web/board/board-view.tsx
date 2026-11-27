@@ -35,12 +35,12 @@
  * zurueck; sonst ist die Freigabe die Hauptaktion. Der Versionsverlauf ist nie hervorgehoben.
  * Ihre Hoehe halten die Bedienelemente der Zeichenflaeche frei; die Zeichnung selbst laeuft darunter weiter.
  *
- * Der Versionsverlauf oeffnet sein eigenes, breiteres Overlay (`board-versions.tsx`) und keinen Bereich der
- * Informationsleiste: die kompakte Liste braucht mehr Platz, als dort neben der Zeichenflaeche stuende, und
- * das Overlay bleibt der einzige Ort dafuer. Ebenso die Freigabeverwaltung (`board-shares-overlay.tsx`), die
- * das Symbol "Freigeben" und die Zusammenfassung der Informationsleiste oeffnen. Alles andere Umfangreichere - Ablage, Arbeitsbereichswechsel,
- * Archiv und Papierkorb, dazu Speicher- und Verbindungsdetails - steht weiterhin in der
- * Informationsleiste (`board-panel.tsx`, sichtbar benannt "Informationen") neben der Zeichenflaeche. Sie ist
+ * Version history opens its own wider overlay (`board-versions.tsx`), not a section of the info panel: the
+ * compact list needs more room than it would have next to the canvas, and the overlay stays the only place
+ * for it. The same holds for share management (`board-shares-overlay.tsx`), which the "Freigeben" icon and
+ * the info panel summary open. Everything else more extensive (filing, workspace switch, archive and trash,
+ * plus saving and connection details) still sits in the info panel (`board-panel.tsx`, visibly named
+ * "Informationen") next to the canvas. Sie ist
  * auf jeder Breite derselbe Knoten: breit eine angedockte Spalte, schmal ein modales Sheet mit Fokusfang,
  * Escape und Fokusrueckgabe von der Plattform. Welcher Bereich offen ist, steht in der Adresse; `Zurueck`
  * schliesst.
@@ -893,8 +893,8 @@ export function BoardEditor({
     shareable,
   })
   /**
-   * Der offene Bereich der Informationsleiste - Versionsverlauf und Freigaben gehoeren nicht dazu, sie sind
-   * eigene Dialoge (`versionsOpen`, `sharesOpen`).
+   * The open section of the info panel. Version history and shares are not part of it, they are their own
+   * dialogs (`versionsOpen`, `sharesOpen`).
    */
   const sidebarPanel: SidebarPanelView | null =
     member !== null && member.panel === 'uebersicht' ? member.panel : null
@@ -929,7 +929,7 @@ export function BoardEditor({
     member?.onPanel(null)
   }
 
-  /** Schliesst den Freigabedialog; wie beim Versionsoverlay gibt die Plattform den Fokus zurueck. */
+  /** Closes the share dialog; as with the version overlay, the platform returns focus. */
   function closeShares(): void {
     member?.onPanel(null)
     if (sharesFromPanelRef.current) {
@@ -1273,7 +1273,7 @@ export function BoardEditor({
         />
       )}
 
-      {/* Die Freigabeverwaltung: derselbe Dialogweg wie der Versionsverlauf, ausserhalb der Informationsleiste. */}
+      {/* Share management: same dialog route as the version history, outside the info panel. */}
       {member !== null && (
         <BoardSharesOverlay
           me={member.me}

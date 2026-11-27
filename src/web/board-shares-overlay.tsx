@@ -1,10 +1,10 @@
 /**
- * Freigabeverwaltung eines Boards als eigener breiter Dialog.
+ * Share management of a board as its own wide dialog.
  *
- * Die Tabellen von Freigaben und Gastlinks scrollen in der schmalen Informationsleiste weit horizontal; der
- * Dialog nach dem Muster des Versionsverlaufs (`board-versions.tsx`) gibt ihnen Platz. Er haengt nur an
- * Props und nicht am Editorzustand und laesst sich damit fuer jedes Board oeffnen, auch ohne geoeffneten
- * Editor. Fokusfang, Escape und Fokusrueckgabe kommen von `showModal()`.
+ * The share and guest link tables scroll far horizontally in the narrow info panel; the dialog, modelled
+ * on the version history (`board-versions.tsx`), gives them room. It depends only on props, not on editor
+ * state, so it can open for any board, even without an open editor. Focus trap, Escape and focus return
+ * come from `showModal()`.
  */
 
 import type { MeResponse } from '../contracts/api.js'

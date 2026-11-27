@@ -1,9 +1,9 @@
 /**
  * Freigabeverwaltung eines Boards: interne Freigaben, Ownerschaft und oeffentliche Gastlinks.
  *
- * Ein Abschnitt im Fluss seiner Umgebung: die Ueberschriften bleiben in der Dokumentstruktur, und weder
- * Fokuskaefig noch Escape werden hier nachgebaut. Er steht im eigenen breiten Dialog
- * (`board-shares-overlay.tsx`), der Name (Ebene 2) und Schliessweg traegt.
+ * A section in the flow of its surroundings: the headings stay in the document structure, and neither
+ * focus trap nor Escape is rebuilt here. It sits in its own wide dialog (`board-shares-overlay.tsx`),
+ * which carries the name (level 2) and the way to close.
  *
  * Die Oberflaeche entscheidet nichts. Sie bietet an, was der Server laut seiner Antwort ohnehin traegt, und
  * zeigt jede Ablehnung als Text - der Owner steht in `board.ownerUserId`, die Freigaben kommen aus
